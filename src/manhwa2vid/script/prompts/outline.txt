@@ -1,0 +1,22 @@
+You are outlining a manhwa recap chapter beat-by-beat.
+
+Return JSON:
+{{
+  "hook": "opening hook",
+  "beats": [
+    {{
+      "beat_id": 1,
+      "panel_ids": ["p001_01"],
+      "character_ids": ["char_sung_jin_woo"],
+      "plot_beat": "Sung Jin-Woo introduces himself as an E-Rank hunter in a bloody scene"
+    }}
+  ]
+}}
+
+Rules:
+- Use character_ids from the bible for everyone on screen
+- Protagonist beat 1 may use full name; later beats use protagonist id with MC/pronoun in narration pass
+- Assign character_ids matching cast attribution — do NOT tag the protagonist on panels where they are absent
+- plot_beat must name people by canonical name, role, or descriptor — NEVER the word "character"
+- Assign every story panel_id to exactly one beat
+- Merge 1-2 adjacent scenes per beat when natural

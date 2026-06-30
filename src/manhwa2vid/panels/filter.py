@@ -1,0 +1,189 @@
+"""Exclude non-story panels (ads, credits, posters, scanlation pages)."""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+from rich.console import Console
+
+from manhwa2vid.config import get_nested
+from manhwa2vid.models import Panel, SceneCard, save_json
+
+console = Console()
+
+_FILENAME_EXCLUDE_RE = re.compile(
+    r"(thanks|credit|credits|poster|cover|advert|promo|patreon|discord|"
+    r"donate|support|banner|meraki|jaimini|raw|preview|extra|omake|"
+    r"notice|announcement|info|faq|help)",
+    re.IGNORECASE,
+)
+
+
+def _source_path_for_panel(panel: Panel, sources: list[dict[str, Any]]) -> str:
+    for row in sources:
+        if int(row.get("page_num", -1)) == panel.page_num:
+            return str(row.get("source_path", ""))
+    return ""
+
+
+_CREDIT_TERMS_RE = re.compile(
+    r"(meraki|jaimini|scan\s*group|scanlation|discord\.gg|patreon|"
+    r"join\s+our\s+discord|visit\s+our\s+site|thank\s+you\s+for\s+reading)",
+    re.IGNORECASE,
+)
+
+_NON_STORY_ACTION_RE = re.compile(
+    r"^(none|no specific action|no action|n/?a\.?|informative|promotional).*$",
+    re.IGNORECASE,
+)
+
+_TITLE_SPLASH_RE = re.compile(
+    r"(title\s*splash|chapter\s*title|title\s*page|cover\s*page|"
+    r"large\s*(korean|stylized)\s*text|decorative\s*title|splash\s*page)",
+    re.IGNORECASE,
+)
+
+_EXCLUDED_PANEL_TYPES = frozenset({"title_splash", "credit", "ad", "other"})
+
+
+def exclude_by_scene_content(card: SceneCard, panel: Panel | None = None) -> str | None:
+    if card.panel_type in _EXCLUDED_PANEL_TYPES:
+        label = card.panel_type.replace("_", " ")
+        return card.exclude_reason or f"{label} panel"
+
+    if not card.is_story:
+        return card.exclude_reason or "non-story panel (vision)"
+
+    blob = " ".join(
+        [
+            card.dialogue_summary,
+            card.action,
+            card.mood,
+            " ".join(card.speakers),
+            " ".join(card.key_terms),
+        ]
+    )
+    if not _CREDIT_TERMS_RE.search(blob):
+        return None
+    if _NON_STORY_ACTION_RE.match(card.action.strip()) or not card.dialogue_summary.strip():
+        return "scanlation credits or promo page"
+
+    if panel and not card.speakers:
+        blob_lower = blob.lower()
+        if _TITLE_SPLASH_RE.search(blob_lower) and card.panel_type == "title_splash":
+            return "chapter title splash"
+
+    return None
+
+
+def exclude_by_filename(source_path: str) -> str | None:
+    name = Path(source_path).name
+    if _FILENAME_EXCLUDE_RE.search(name):
+        return f"filename match: {name}"
+    return None
+
+
+def build_exclusion_map(
+    panels: list[Panel],
+    scene_cards: list[SceneCard],
+    sources: list[dict[str, Any]],
+    config: dict[str, Any],
+) -> dict[str, str]:
+    """Return panel_id -> exclude reason for panels that should not appear in the video."""
+    excluded: dict[str, str] = {}
+    use_vision = bool(get_nested(config, "panels", "filter_non_story", default=True))
+    use_filename = bool(get_nested(config, "panels", "filter_by_filename", default=True))
+
+    scene_by_panel: dict[str, SceneCard] = {}
+    for card in scene_cards:
+        for pid in card.panel_ids:
+            scene_by_panel[pid] = card
+
+    manual = get_nested(config, "panels", "exclude_panel_ids", default=[]) or []
+    for pid in manual:
+        excluded[str(pid)] = "manual exclude list"
+
+    for panel in panels:
+        if panel.id in excluded:
+            continue
+
+        if use_filename:
+            source_path = _source_path_for_panel(panel, sources)
+            reason = exclude_by_filename(source_path) if source_path else None
+            if reason:
+                excluded[panel.id] = reason
+                continue
+
+        if use_vision:
+            card = scene_by_panel.get(panel.id)
+            if card:
+                reason = exclude_by_scene_content(card, panel)
+                if reason:
+                    excluded[panel.id] = reason
+
+    return excluded
+
+
+def apply_panel_filter(
+    paths: dict[str, Path],
+    panels: list[Panel],
+    scene_cards: list[SceneCard],
+    config: dict[str, Any],
+) -> list[Panel]:
+    sources: list[dict[str, Any]] = []
+    sources_path = paths["pages"] / "sources.json"
+    if sources_path.exists():
+        sources = json.loads(sources_path.read_text(encoding="utf-8"))
+
+    excluded = build_exclusion_map(panels, scene_cards, sources, config)
+    save_json(paths["excluded_panels_json"], excluded)
+
+    active = [p for p in panels if p.id not in excluded]
+    if excluded:
+        console.print(
+            f"[yellow]Excluded {len(excluded)} non-story panel(s):[/] "
+            + ", ".join(sorted(excluded.keys()))
+        )
+    else:
+        console.print("[dim]No panels excluded[/]")
+
+    save_json(paths["panels_story_json"], active)
+    return active
+
+
+def load_story_panels(paths: dict[str, Path]) -> list[Panel]:
+    if paths["panels_story_json"].exists():
+        return [Panel.model_validate(p) for p in json.loads(paths["panels_story_json"].read_text())]
+    return [Panel.model_validate(p) for p in json.loads(paths["panels_json"].read_text())]
+
+
+def load_story_scene_cards(paths: dict[str, Path]) -> list[SceneCard]:
+    source = paths["scene_enriched_json"] if paths["scene_enriched_json"].exists() else paths["scene_json"]
+    cards = [SceneCard.model_validate(s) for s in json.loads(source.read_text(encoding="utf-8"))]
+    if not paths["excluded_panels_json"].exists():
+        return cards
+    excluded = set(json.loads(paths["excluded_panels_json"].read_text()).keys())
+    filtered: list[SceneCard] = []
+    for card in cards:
+        story_ids = [pid for pid in card.panel_ids if pid not in excluded]
+        if not story_ids:
+            continue
+        filtered.append(
+            SceneCard(
+                panel_ids=story_ids,
+                speakers=card.speakers,
+                dialogue_summary=card.dialogue_summary,
+                action=card.action,
+                mood=card.mood,
+                key_terms=card.key_terms,
+                source_text=card.source_text,
+                is_story=card.is_story,
+                exclude_reason=card.exclude_reason,
+                panel_type=card.panel_type,
+                people=card.people,
+            )
+        )
+    return filtered

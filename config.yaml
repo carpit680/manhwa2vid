@@ -1,0 +1,81 @@
+# Default pipeline configuration
+
+ingest:
+  page_width: 1080
+  dpi_scale: 2.0
+
+panels:
+  min_panel_height: 120
+  whitespace_threshold: 0.92
+  fallback_chunk_height: 800
+  fallback_overlap: 80
+  split_image_files: hybrid  # one_to_one | always_split | hybrid
+  strip_scroll_aspect: 2.0
+  filter_non_story: true
+  filter_by_filename: true
+  exclude_panel_ids: []
+
+ocr:
+  enabled: false  # set true if PaddleOCR works on your system
+  languages: ["ko", "en"]
+  confidence_threshold: 0.5
+
+llm:
+  provider: groq  # openai | groq | ollama | mock
+  groq:
+    text_model: llama-3.3-70b-versatile
+    vision_model: meta-llama/llama-4-scout-17b-16e-instruct
+
+scene:
+  model: meta-llama/llama-4-scout-17b-16e-instruct
+  batch_size: 1
+  vision_max_side: 768
+
+characters:
+  wiki_lookup: true
+  lookahead_chapters: 3
+  scout_panels_per_chapter: 20
+  quest_max_iterations: 4
+  max_main: 1
+  mc_labels: ["MC", "the protagonist", "our guy"]
+  ban_words: ["character", "unnamed character", "a person", "the character", "two characters"]
+
+script:
+  model: llama-3.3-70b-versatile
+  commentary_level: light
+  target_wpm: 130
+  genz_level: medium
+  max_narrator_asides: 2
+
+tts:
+  provider: chatterbox  # chatterbox | openai | mock
+  device: cuda          # cuda | cpu | mps — auto-detects if omitted
+  model: standard       # standard | turbo | multilingual
+  voice_prompt:         # optional ~5-10s WAV for voice cloning (deeper voice works well)
+  exaggeration: 0.5     # calm delivery; pair with voice_prompt for tone
+  cfg_weight: 0.6       # slightly steadier, more grounded voice
+  pace_multiplier: 0.85 # speech speed (<1 = slower; bumped up from 0.75)
+  pitch_shift: 0.88     # deepen voice (<1 = lower pitch, uses source sample rate)
+  language_id: en       # for multilingual model only
+  # OpenAI-only settings:
+  openai_model: tts-1
+  voice: onyx
+  speed: 0.85
+
+video:
+  width: 1920
+  height: 1080
+  fps: 30
+  min_panel_seconds: 2.5
+  max_panel_seconds: 10.0
+  transition_seconds: 0.3
+  bgm_volume: 0.18
+  visual_mode: panels
+  motion_supersample: 2
+  scroll_easing: cosine
+  ken_burns_pan_amount: 0.02
+  strip_scroll_aspect: 2.0
+
+export:
+  preview_scale: 0.5
+  loudness_target: -14
