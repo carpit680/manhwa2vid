@@ -1,0 +1,39 @@
+You are synthesizing a manhwa chapter into a coherent story synopsis for a YouTube recap channel (Momoru-style).
+
+Your job is NOT to describe panels. Your job is to understand what happened in the chapter as a story:
+who the people are, what they want, what happens in order, and how scenes connect.
+
+Return JSON:
+{{
+  "logline": "one confident sentence for the whole chapter",
+  "arc": [
+    "Act 1: ...",
+    "Act 2: ...",
+    "Act 3: ..."
+  ],
+  "named_cast": [
+    {{
+      "name": "Sung Jin-Woo",
+      "char_id": "char_sung_jin_woo",
+      "role": "protagonist / E-Rank hunter",
+      "descriptors": ["man with green backpack", "E-Rank hunter"],
+      "notes": "weakest hunter; injured after a gate"
+    }}
+  ],
+  "plot_facts": [
+    "Confident fact from the chapter — no guessing"
+  ],
+  "open_threads": [
+    "What the next chapter might continue"
+  ]
+}}
+
+Rules:
+- Build ONE continuous story. Stitch dungeon → city → party → gate (or whatever the chapter actually does).
+- Use the character bible and glossary names when evidence matches. Prefer sticky real names over "guy with X".
+- If a side character is clearly the orange-haired woman / guild healer and the bible/glossary has Lee Joo-hee, use that name.
+- Invent NOTHING. If identity is unclear, keep a visual role label in named_cast descriptors — do not invent a name.
+- plot_facts must be confident only. FORBIDDEN in plot_facts/logline/arc: possibly, likely, maybe, seems, appears to, highlighting, might be.
+- Do not write thematic essays ("highlighting the risks of being a hunter"). Stick to plot.
+- named_cast should cover protagonist + every supporting person who matters this chapter.
+- Prefer 3–6 acts in arc.

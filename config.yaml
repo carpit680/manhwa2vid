@@ -23,7 +23,7 @@ ocr:
 llm:
   provider: groq  # openai | groq | ollama | mock
   groq:
-    text_model: llama-3.3-70b-versatile
+    text_model: openai/gpt-oss-120b
     vision_model: meta-llama/llama-4-scout-17b-16e-instruct
 
 scene:
@@ -41,11 +41,13 @@ characters:
   ban_words: ["character", "unnamed character", "a person", "the character", "two characters"]
 
 script:
-  model: llama-3.3-70b-versatile
+  model: openai/gpt-oss-120b
   commentary_level: light
   target_wpm: 130
   genz_level: medium
-  max_narrator_asides: 2
+  max_narrator_asides: 1
+  max_beats: 18
+  max_mc_full_name_after_hook: 2
 
 tts:
   provider: chatterbox  # chatterbox | openai | mock

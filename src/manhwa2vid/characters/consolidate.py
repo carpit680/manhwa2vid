@@ -7,7 +7,8 @@ from typing import Any
 from rich.console import Console
 
 from manhwa2vid.characters.bible import merge_profile
-from manhwa2vid.characters.resolve import descriptor_overlap_score, normalize_name, score_character_match
+from manhwa2vid.characters.bible import is_junk_alias, merge_profile, normalize_name
+from manhwa2vid.characters.resolve import profiles_are_same_person
 from manhwa2vid.config import get_nested
 from manhwa2vid.models import CharacterProfile, CharacterRef, CharacterTier, SceneCard, SeriesBible, VisualProfile
 
@@ -44,13 +45,17 @@ def merge_profiles_into(bible: SeriesBible, keep_id: str, drop_id: str) -> None:
     merged_aliases = list(
         dict.fromkeys(
             [
-                *keep.aliases,
-                *drop.aliases,
+                *[a for a in keep.aliases if not is_junk_alias(a)],
+                *[a for a in drop.aliases if not is_junk_alias(a)],
                 drop.canonical_name,
             ]
         )
     )
-    merged_aliases = [a for a in merged_aliases if normalize_name(a) != normalize_name(keep.canonical_name)]
+    merged_aliases = [
+        a
+        for a in merged_aliases
+        if normalize_name(a) != normalize_name(keep.canonical_name) and not is_junk_alias(a)
+    ]
 
     merge_profile(
         bible,
@@ -79,29 +84,20 @@ def merge_profiles_into(bible: SeriesBible, keep_id: str, drop_id: str) -> None:
 
 
 def find_duplicate_pairs(bible: SeriesBible, *, min_score: float = 0.72) -> list[tuple[str, str]]:
+    del min_score  # strict name/alias matching only
     ids = [cid for cid, p in bible.characters.items() if not p.merged_into]
     pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
     for i, id_a in enumerate(ids):
         profile_a = bible.characters[id_a]
         for id_b in ids[i + 1 :]:
             profile_b = bible.characters[id_b]
-            if normalize_name(profile_a.canonical_name) == normalize_name(profile_b.canonical_name):
-                pairs.append((id_a, id_b))
+            if not profiles_are_same_person(profile_a, profile_b):
                 continue
-            for alias in profile_a.aliases:
-                if _name_match_alias(alias, profile_b):
-                    pairs.append((id_a, id_b))
-                    break
-            else:
-                score = score_character_match(profile_a.canonical_name, " ".join(profile_b.descriptors), profile_a)
-                rev = score_character_match(profile_b.canonical_name, " ".join(profile_a.descriptors), profile_b)
-                desc_score = max(
-                    descriptor_overlap_score(" ".join(profile_a.descriptors), " ".join(profile_b.descriptors)),
-                    score,
-                    rev,
-                )
-                if desc_score >= min_score:
-                    pairs.append((id_a, id_b))
+            pair = (id_a, id_b) if id_a < id_b else (id_b, id_a)
+            if pair not in seen:
+                seen.add(pair)
+                pairs.append(pair)
     return pairs
 
 
@@ -109,7 +105,7 @@ def _name_match_alias(alias: str, profile: CharacterProfile) -> bool:
     key = normalize_name(alias)
     if key == normalize_name(profile.canonical_name):
         return True
-    return any(normalize_name(a) == key for a in profile.aliases)
+    return any(normalize_name(a) == key for a in profile.aliases if not is_junk_alias(a))
 
 
 def consolidate_profiles(bible: SeriesBible, config: dict[str, Any]) -> int:

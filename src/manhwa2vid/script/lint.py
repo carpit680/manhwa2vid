@@ -10,19 +10,45 @@ from typing import Any
 
 from rich.console import Console
 
+from manhwa2vid.characters.bible import format_bible_for_prompt, naming_priority_rules
 from manhwa2vid.config import get_nested
 from manhwa2vid.llm.provider import get_llm_provider
 from manhwa2vid.models import PanelCast, ScriptBeat, SeriesBible
-from manhwa2vid.characters.bible import format_bible_for_prompt, naming_priority_rules
 
 console = Console()
+
+_HEDGE_PATTERNS = [
+    r"\bpossibly\b",
+    r"\blikely\b",
+    r"\bmaybe\b",
+    r"\bmight be\b",
+    r"\bmay be\b",
+    r"\bseems to\b",
+    r"\bappears to\b",
+    r"\bhighlighting\b",
+    r"\bis seen\b",
+    r"\bis shown\b",
+    r"\bpossibly showing\b",
+]
+_HEDGE_RE = re.compile("|".join(_HEDGE_PATTERNS), re.I)
+
+# Soft first-person narrator aside signals
+_ASIDE_RE = re.compile(
+    r"\b(ngl|no cap|lowkey|i mean|wait|bro|honestly)\b"
+    r"|\band look\b"
+    r"|\b(i'm|i am|i just)\b",
+    re.I,
+)
 
 _REWRITE_PROMPT = """Rewrite this recap beat narration.
 
 Rules:
-- Keep the same plot meaning and Gen Z tone
-- NEVER use these words: {ban_words}
+- Keep the same plot meaning; confident Momoru-style story voice
+- NEVER use these words/phrases: {ban_words}
+- NEVER use hedging: possibly, likely, maybe, seems to, appears to, may be, highlighting, is seen, is shown
 - Use names/pronouns/role descriptors from the cast list
+- Prefer MC / the protagonist / he/him over repeating the full protagonist name after beat 1
+- No narrator diary asides unless this is the single allowed aside
 - Return JSON: {{"narration": "rewritten text"}}
 """
 
@@ -43,6 +69,10 @@ def find_violations(text: str, words: list[str]) -> list[str]:
     return hits
 
 
+def find_hedge_violations(text: str) -> list[str]:
+    return sorted({m.group(0).lower() for m in _HEDGE_RE.finditer(text)})
+
+
 def local_sanitize_narration(text: str) -> str:
     """Fast regex cleanup before optional LLM rewrite."""
     cleaned = text
@@ -53,6 +83,12 @@ def local_sanitize_narration(text: str) -> str:
     cleaned = re.sub(r"\bthe character\b", "they", cleaned, flags=re.I)
     cleaned = re.sub(r"\bcharacters\b", "people", cleaned, flags=re.I)
     cleaned = re.sub(r"\ba person\b", "someone", cleaned, flags=re.I)
+    # Soft local hedge strip for common patterns
+    cleaned = re.sub(r",?\s*possibly\s+", " ", cleaned, flags=re.I)
+    cleaned = re.sub(r",?\s*likely\s+", " ", cleaned, flags=re.I)
+    cleaned = re.sub(r"\bhighlighting\b[^.]*", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"\bis seen\b", "is", cleaned, flags=re.I)
+    cleaned = re.sub(r"\bis shown\b", "is", cleaned, flags=re.I)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
 
@@ -104,13 +140,80 @@ def lint_mc_attribution(
     return report
 
 
-def lint_beats(beats: list[ScriptBeat], config: dict[str, Any], *, bible: SeriesBible | None = None, attribution: list[PanelCast] | None = None) -> dict[int, list[str]]:
+def lint_hedging(beats: list[ScriptBeat]) -> dict[int, list[str]]:
+    report: dict[int, list[str]] = {}
+    for beat in beats:
+        hits = find_hedge_violations(beat.narration)
+        if hits:
+            report[beat.beat_id] = hits
+    return report
+
+
+def lint_mc_name_spam(
+    beats: list[ScriptBeat],
+    bible: SeriesBible,
+    config: dict[str, Any],
+) -> dict[int, list[str]]:
+    """After beat 1, flag excess full canonical-name uses for the protagonist."""
+    if not bible.protagonist_id or bible.protagonist_id not in bible.characters:
+        return {}
+    mc = bible.characters[bible.protagonist_id]
+    name = mc.canonical_name.strip()
+    if not name:
+        return {}
+    max_after = int(get_nested(config, "script", "max_mc_full_name_after_hook", default=2))
+    name_re = re.compile(re.escape(name), re.I)
+    after_hook_hits = 0
+    report: dict[int, list[str]] = {}
+    for beat in beats:
+        count = len(name_re.findall(beat.narration))
+        if beat.beat_id <= 1:
+            continue
+        if count:
+            after_hook_hits += count
+            if after_hook_hits > max_after:
+                report[beat.beat_id] = ["mc_full_name_spam"]
+    return report
+
+
+def lint_aside_overuse(
+    beats: list[ScriptBeat],
+    config: dict[str, Any],
+) -> dict[int, list[str]]:
+    max_asides = int(get_nested(config, "script", "max_narrator_asides", default=1))
+    aside_beats: list[int] = []
+    for beat in beats:
+        if _ASIDE_RE.search(beat.narration):
+            aside_beats.append(beat.beat_id)
+    if len(aside_beats) <= max_asides:
+        return {}
+    # Flag extras beyond the first allowed aside
+    report: dict[int, list[str]] = {}
+    for beat_id in aside_beats[max_asides:]:
+        report[beat_id] = ["aside_overuse"]
+    return report
+
+
+def lint_beats(
+    beats: list[ScriptBeat],
+    config: dict[str, Any],
+    *,
+    bible: SeriesBible | None = None,
+    attribution: list[PanelCast] | None = None,
+) -> dict[int, list[str]]:
     words = banned_words(config)
     report: dict[int, list[str]] = {}
     for beat in beats:
         hits = find_violations(beat.narration, words)
         if hits:
             report[beat.beat_id] = hits
+    for beat_id, issues in lint_hedging(beats).items():
+        report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
+    if bible:
+        for beat_id, issues in lint_mc_name_spam(beats, bible, config).items():
+            report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
+    for beat_id, issues in lint_aside_overuse(beats, config).items():
+        report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     if bible and attribution is not None:
         for beat_id, issues in lint_mc_attribution(beats, bible, attribution, config).items():
             report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
@@ -136,9 +239,17 @@ def rewrite_beat(
     bible: SeriesBible,
     attribution: list[PanelCast],
     config: dict[str, Any],
+    *,
+    issues: list[str] | None = None,
 ) -> str:
     sanitized = local_sanitize_narration(beat.narration)
-    if not find_violations(sanitized, banned_words(config)):
+    remaining = lint_beats(
+        [ScriptBeat(beat_id=beat.beat_id, panel_ids=beat.panel_ids, narration=sanitized, character_ids=beat.character_ids)],
+        config,
+        bible=bible,
+        attribution=attribution,
+    )
+    if beat.beat_id not in remaining:
         return sanitized
 
     llm = get_llm_provider(config=config)
@@ -148,10 +259,13 @@ def rewrite_beat(
 
     ban = ", ".join(banned_words(config))
     cast = _cast_for_panels(attribution, beat.panel_ids)
+    issue_text = ", ".join(issues or remaining.get(beat.beat_id, []))
     user = (
         f"{naming_priority_rules(bible, config)}\n\n"
         f"Bible:\n{format_bible_for_prompt(bible)}\n\n"
         f"On-screen cast:\n{cast}\n\n"
+        f"Issues to fix: {issue_text}\n"
+        f"Beat id: {beat.beat_id}\n\n"
         f"Original narration:\n{beat.narration}"
     )
     for attempt in range(4):
@@ -191,19 +305,23 @@ def lint_and_rewrite_script(
     ]
 
     report = lint_beats(pre_sanitized, config, bible=bible, attribution=attribution)
-    mc_report = lint_mc_attribution(pre_sanitized, bible, attribution, config)
-    all_flagged = set(report.keys()) | set(mc_report.keys())
-    if not all_flagged:
+    if not report:
         return pre_sanitized
 
-    if report:
-        console.print(f"[yellow]Script lint:[/] {len(report)} beat(s) with banned wording — rewriting")
-    if mc_report:
-        console.print(f"[yellow]Script lint:[/] {len(mc_report)} beat(s) with MC attribution issues — rewriting")
+    hedge = sum(1 for issues in report.values() if any(i in ("possibly", "likely", "highlighting") or "hedge" in i for i in issues))
+    name_spam = sum(1 for issues in report.values() if "mc_full_name_spam" in issues)
+    asides = sum(1 for issues in report.values() if "aside_overuse" in issues)
+    console.print(
+        f"[yellow]Script lint:[/] {len(report)} beat(s) flagged "
+        f"(hedges/name-spam/asides/banned/mc) — rewriting"
+        + (f" [name-spam={name_spam}]" if name_spam else "")
+        + (f" [asides={asides}]" if asides else "")
+    )
+
     fixed: list[ScriptBeat] = []
     for beat in pre_sanitized:
-        if beat.beat_id in all_flagged:
-            new_text = rewrite_beat(beat, bible, attribution, config)
+        if beat.beat_id in report:
+            new_text = rewrite_beat(beat, bible, attribution, config, issues=report[beat.beat_id])
             fixed.append(
                 ScriptBeat(
                     beat_id=beat.beat_id,

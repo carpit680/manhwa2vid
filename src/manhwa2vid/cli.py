@@ -17,6 +17,7 @@ from manhwa2vid.pipeline import init_glossary, load_project, run_all_until_revie
 from manhwa2vid.models import PipelineStage
 from manhwa2vid.review.checkpoints import approve_preview, approve_script, open_for_review
 from manhwa2vid.script.lint import lint_beats
+from manhwa2vid.video.render import latest_preview_path
 
 app = typer.Typer(help="Manhwa recap video pipeline")
 console = Console()
@@ -193,9 +194,9 @@ def review_preview_cmd(
     approve: bool = typer.Option(False, "--approve"),
 ) -> None:
     _, paths, _, checkpoint = load_project(project.resolve())
-    preview_path = paths["output"] / "preview.mp4"
-    if not preview_path.exists():
-        raise typer.BadParameter("No preview.mp4 — run render --preview first.")
+    preview_path = latest_preview_path(paths["output"])
+    if preview_path is None:
+        raise typer.BadParameter("No preview found — run render --preview first.")
     console.print(f"Preview: {preview_path}")
     if approve:
         approve_preview(checkpoint, paths)

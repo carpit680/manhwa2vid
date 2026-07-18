@@ -5,14 +5,76 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 from manhwa2vid.config import find_repo_root
 from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible, VisualProfile, save_json, series_paths
+
+_DESCRIPTOR_PREFIXES = ("guy ", "man ", "woman ", "girl ", "boy ", "person ", "blonde ", "bald ", "crowd ")
+_JUNK_ALIAS_RE = re.compile(r"(?i)^(template:|user:|category:)|infobox")
+
+
+def normalize_name(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip().lower())
+
+
+def is_junk_alias(text: str) -> bool:
+    return bool(_JUNK_ALIAS_RE.search(text.strip()))
 
 
 def slugify_char_id(name: str) -> str:
     base = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
     return f"char_{base}" if base else "char_unknown"
+
+
+def is_descriptor_label(text: str) -> bool:
+    t = normalize_name(text)
+    if not t:
+        return False
+    if any(t.startswith(prefix) for prefix in _DESCRIPTOR_PREFIXES):
+        return True
+    if " with " in t and not any(ch.isupper() for ch in text):
+        return True
+    return False
+
+
+def clean_profile_aliases(profile: CharacterProfile, *, protagonist_id: str = "") -> CharacterProfile:
+    aliases = [a for a in profile.aliases if a.strip() and not is_junk_alias(a)]
+    descriptors = list(profile.descriptors)
+    if profile.id == protagonist_id:
+        real_aliases: list[str] = []
+        for alias in aliases:
+            if is_descriptor_label(alias):
+                if alias not in descriptors:
+                    descriptors.append(alias)
+            else:
+                real_aliases.append(alias)
+        aliases = real_aliases
+    return CharacterProfile(
+        id=profile.id,
+        canonical_name=profile.canonical_name,
+        tier=profile.tier,
+        aliases=aliases,
+        descriptors=descriptors,
+        pronoun=profile.pronoun,
+        role=profile.role,
+        first_seen_panel=profile.first_seen_panel,
+        appearances=profile.appearances,
+        visual=profile.visual,
+        narration_labels=profile.narration_labels,
+        sufficiency=profile.sufficiency,
+        confidence=profile.confidence,
+        merged_into=profile.merged_into,
+        source_chapters=profile.source_chapters,
+    )
+
+
+def clean_bible_aliases(bible: SeriesBible) -> None:
+    for char_id in list(bible.characters):
+        bible.characters[char_id] = clean_profile_aliases(
+            bible.characters[char_id],
+            protagonist_id=bible.protagonist_id,
+        )
 
 
 def load_series_bible(series_slug: str, title: str) -> SeriesBible:
@@ -37,6 +99,7 @@ def merge_profile(bible: SeriesBible, profile: CharacterProfile) -> None:
         return
     merged_appearances = list(dict.fromkeys([*existing.appearances, *profile.appearances]))
     merged_aliases = list(dict.fromkeys([*existing.aliases, *profile.aliases]))
+    merged_aliases = [a for a in merged_aliases if not is_junk_alias(a)]
     merged_descriptors = list(dict.fromkeys([*existing.descriptors, *profile.descriptors]))
     merged_labels = list(dict.fromkeys([*existing.narration_labels, *profile.narration_labels]))
     merged_chapters = list(dict.fromkeys([*existing.source_chapters, *profile.source_chapters]))
@@ -134,3 +197,38 @@ def naming_priority_rules(bible: SeriesBible | None = None, config: dict | None 
         "Background: some hunters, a bystander — NEVER 'character'\n"
         "Never attribute an action to the protagonist unless they are on screen in that beat's panels.\n"
     )
+
+
+def rebuild_bible_from_glossary(
+    meta: Any,
+    glossary: dict[str, Any],
+    *,
+    chapter_summaries: dict[str, str] | None = None,
+) -> SeriesBible:
+    """Reset polluted bible to glossary-backed cast hints."""
+    from manhwa2vid.characters.seed import profiles_from_glossary
+
+    bible = SeriesBible(series_slug=meta.series_slug, title=meta.title)
+    if chapter_summaries:
+        bible.chapter_summaries = chapter_summaries
+
+    for profile in profiles_from_glossary(glossary):
+        if normalize_name(profile.canonical_name) == normalize_name("Sung Jin-Woo"):
+            profile.tier = CharacterTier.MAIN
+            profile.role = "protagonist"
+            profile.pronoun = "he"
+            profile.descriptors = [
+                "man with green backpack",
+                "E-Rank hunter",
+                "guy with green backpack",
+            ]
+            profile.visual = VisualProfile(
+                hair="black",
+                outfit="green backpack / green hood",
+                accessories=["green backpack"],
+            )
+            bible.protagonist_id = profile.id
+        merge_profile(bible, profile)
+
+    clean_bible_aliases(bible)
+    return bible

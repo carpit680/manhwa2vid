@@ -93,6 +93,8 @@ def update_bible_from_scene(
     if not card.is_story or card.panel_type != "story":
         return
 
+    card_speaker = card.speakers[0] if card.speakers else ""
+
     for person in card.people:
         name = person.name_used.strip()
         descriptor = person.descriptor.strip()
@@ -100,7 +102,7 @@ def update_bible_from_scene(
         if person.ref != "new" and person.ref in bible.characters:
             char_id = person.ref
         else:
-            resolved = resolve_character_ref(name, descriptor, bible)
+            resolved = resolve_character_ref(name, descriptor, bible, speaker=card_speaker)
             if resolved:
                 char_id = resolved
             elif person.ref != "new" and person.ref in bible.characters:
@@ -120,7 +122,7 @@ def update_bible_from_scene(
     for speaker in card.speakers:
         if not speaker or speaker.lower() in ("unknown", "unnamed", "unnamed character"):
             continue
-        char_id = resolve_character_ref(speaker, "", bible)
+        char_id = resolve_character_ref(speaker, "", bible, speaker=speaker)
         if not char_id:
             from manhwa2vid.characters.bible import slugify_char_id
 

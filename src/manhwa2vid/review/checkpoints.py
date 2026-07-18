@@ -59,8 +59,10 @@ def approve_script(paths: dict[str, Path], checkpoint: CheckpointState) -> None:
 
 
 def approve_preview(checkpoint: CheckpointState, paths: dict[str, Path]) -> None:
-    preview = paths["output"] / "preview.mp4"
-    if not preview.exists():
-        raise FileNotFoundError(f"Missing preview: {preview}")
+    from manhwa2vid.video.render import latest_preview_path
+
+    preview = latest_preview_path(paths["output"])
+    if preview is None:
+        raise FileNotFoundError("Missing preview — run render --preview first.")
     checkpoint.preview_approved = True
     save_json(paths["checkpoint"], checkpoint)

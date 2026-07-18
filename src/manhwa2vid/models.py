@@ -202,6 +202,22 @@ class ScriptOutlineBeat(BaseModel):
     plot_beat: str = ""
 
 
+class NamedCastEntry(BaseModel):
+    name: str
+    char_id: str = ""
+    role: str = ""
+    descriptors: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+
+class ChapterSynopsis(BaseModel):
+    logline: str = ""
+    arc: list[str] = Field(default_factory=list)
+    named_cast: list[NamedCastEntry] = Field(default_factory=list)
+    plot_facts: list[str] = Field(default_factory=list)
+    open_threads: list[str] = Field(default_factory=list)
+
+
 class ScriptDraft(BaseModel):
     title: str
     chapters: str
@@ -275,6 +291,7 @@ def project_paths(project_dir: Path) -> dict[str, Path]:
         "scene_enriched_json": project_dir / "scene_cards.enriched.json",
         "scene_normalized_json": project_dir / "scene_cards.normalized.json",
         "cast_attribution_json": project_dir / "cast_attribution.json",
+        "script_synopsis_json": project_dir / "script.synopsis.json",
         "script_outline_json": project_dir / "script.outline.json",
         "script_draft": project_dir / "script.draft.md",
         "script_final": project_dir / "script.final.md",

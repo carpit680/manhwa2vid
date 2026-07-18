@@ -6,6 +6,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from rich.console import Console
@@ -21,6 +22,22 @@ console = Console()
 
 def _ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
+
+
+def preview_output_path(output_dir: Path, *, when: datetime | None = None) -> Path:
+    stamp = (when or datetime.now()).strftime("%Y-%m-%d_%H%M%S")
+    return output_dir / f"preview_{stamp}.mp4"
+
+
+def latest_preview_path(output_dir: Path) -> Path | None:
+    """Most recent preview clip in output dir (dated name or legacy preview.mp4)."""
+    if not output_dir.exists():
+        return None
+    dated = sorted(output_dir.glob("preview_*.mp4"), reverse=True)
+    if dated:
+        return dated[0]
+    legacy = output_dir / "preview.mp4"
+    return legacy if legacy.exists() else None
 
 
 def _run_ffmpeg(args: list[str]) -> None:
@@ -225,11 +242,17 @@ def render_video(
         width = int(width * preview_scale)
         height = int(height * preview_scale)
 
-    out_name = "final.mp4" if final else "preview.mp4"
-    output = paths["output"] / out_name
-    if output.exists() and not force:
-        console.print(f"[dim]Using existing render[/] → {output}")
-        return output
+    if final:
+        output = paths["output"] / "final.mp4"
+        if output.exists() and not force:
+            console.print(f"[dim]Using existing render[/] → {output}")
+            return output
+    else:
+        latest_preview = paths["output"] / "preview.mp4"
+        if latest_preview.exists() and not force:
+            console.print(f"[dim]Using existing render[/] → {latest_preview}")
+            return latest_preview
+        output = preview_output_path(paths["output"])
 
     paths["output"].mkdir(parents=True, exist_ok=True)
     panels = {p.id: p for p in load_story_panels(paths)}
@@ -274,6 +297,9 @@ def render_video(
 
         target_lufs = float(get_nested(config, "export", "loudness_target", default=-14))
         _normalize_loudness(mixed, output, target_lufs)
+
+    if not final:
+        shutil.copy2(output, paths["output"] / "preview.mp4")
 
     console.print(f"[green]Rendered[/] → {output}")
     return output
