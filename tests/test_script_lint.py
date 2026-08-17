@@ -551,3 +551,40 @@ def test_malformed_opening_repaired_by_dropping_the_fragment() -> None:
     assert out[1].narration == "He walks the morning streets."
     assert out[2].narration == "is headed, but it starts.", "nothing to salvage"
     assert set(lint_malformed_opening(out)) == {4}, "residue still reaches the gate"
+
+
+def test_intra_beat_repetition_removed() -> None:
+    """Beat 8 had Kim waving in two consecutive sentences; cross-beat linting compares
+    whole beats, so within-beat echoes were invisible."""
+    from manhwa2vid.script.lint import dedupe_intra_beat_sentences
+
+    beats = [
+        ScriptBeat(beat_id=8, panel_ids=["p1"],
+                   narration="He spots Kim Sangshik waving enthusiastically from the "
+                             "distance. Kim Sangshik waves enthusiastically and asks if "
+                             "he has eaten. Bak wonders if he is powerful."),
+    ]
+    out = dedupe_intra_beat_sentences(beats)
+    assert out[0].narration.count("waving") + out[0].narration.count("waves") == 1
+    assert "Bak wonders" in out[0].narration, "distinct content survives"
+
+
+def test_overlong_beat_trimmed_to_its_word_cap() -> None:
+    """The cap has been in the prompt and the lint for days; the rewrite ignores it
+    (4 flagged -> 3 still flagged). Padding accumulates in trailing sentences."""
+    from manhwa2vid.script.lint import trim_overlong_beats
+
+    long_beat = ScriptBeat(
+        beat_id=10, panel_ids=["p1", "p2"],   # cap = 2 * 14 = 28 words
+        narration=("Jin-Woo walks past the machinery ignoring the gossip. "
+                   "Bak asks if he is truly the weakest. "
+                   "Kim laughs and replies that he absolutely is. "
+                   "Kim adds the dungeon will be weak because of him. "
+                   "Bak looks back in surprise at the claim."),
+    )
+    short_beat = ScriptBeat(beat_id=11, panel_ids=["p3"], narration="He asks for coffee.")
+    out = trim_overlong_beats([long_beat, short_beat], {})
+    assert len(out[0].narration.split()) <= 38, out[0].narration
+    assert out[0].narration.startswith("Jin-Woo walks past"), "the beat's point is kept"
+    assert len(out[0].narration.split(".")) >= 3, "never gutted below two sentences"
+    assert out[1].narration == "He asks for coffee.", "short beats untouched"

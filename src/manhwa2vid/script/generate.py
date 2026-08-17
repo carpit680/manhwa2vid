@@ -878,15 +878,19 @@ def generate_script(
         enforce_mc_name_budget,
         fix_pronoun_case as _fix_case,
         strip_caption_sentences,
+        dedupe_intra_beat_sentences,
         repair_malformed_openings,
         strip_duplicate_transitions,
         strip_repeated_appositives,
+        trim_overlong_beats,
     )
 
     beats = strip_repeated_appositives(beats, bible)
     beats = strip_caption_sentences(beats, bible)
     beats = strip_duplicate_transitions(beats)
     beats = repair_malformed_openings(beats)
+    beats = dedupe_intra_beat_sentences(beats)
+    beats = trim_overlong_beats(beats, config)
     beats = enforce_mc_name_budget(beats, bible, config)
 
     from manhwa2vid.script.lint import lint_malformed_opening

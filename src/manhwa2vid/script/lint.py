@@ -536,6 +536,85 @@ def lint_reintroduction(
     return report
 
 
+def _stemmed_words(text: str) -> set[str]:
+    """Content words with light suffix stripping.
+
+    Restatements vary morphology: "he spots Kim WAVING" vs "Kim WAVES and asks". Exact
+    tokens score those as different (0.4 overlap) and the echo survives; stemmed they
+    match, which is what a listener hears.
+    """
+    out: set[str] = set()
+    for word in re.findall(r"[a-z0-9]+", (text or "").lower()):
+        if len(word) <= 3:
+            continue
+        for suffix in ("ingly", "edly", "ing", "ies", "ied", "es", "ed", "ly", "s"):
+            if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+                word = word[: -len(suffix)]
+                break
+        out.add(word)
+    return out
+
+
+def dedupe_intra_beat_sentences(beats: list[ScriptBeat]) -> list[ScriptBeat]:
+    """Remove a sentence that restates an earlier sentence of the SAME beat.
+
+    Beat 8 had Kim waving in two consecutive sentences ("he spots Kim Sangshik waving
+    enthusiastically" / "Kim waves warmly and asks if he has eaten"); beat 10 stated the
+    weakest-hunter gossip three ways. Cross-beat repetition linting only compares whole
+    beats, so within-beat echoes were invisible. Never drops the first sentence, never
+    empties a beat.
+    """
+    out: list[ScriptBeat] = []
+    for beat in beats:
+        sentences = [s for s in _SENTENCE_SPLIT_RE.split(beat.narration.strip()) if s.strip()]
+        if len(sentences) < 2:
+            out.append(beat)
+            continue
+        kept: list[str] = []
+        seen: list[set[str]] = []
+        for sentence in sentences:
+            tokens = _stemmed_words(sentence)
+            if kept and tokens and any(
+                len(tokens & prev) / len(tokens) >= 0.6 for prev in seen
+            ):
+                continue
+            kept.append(sentence)
+            seen.append(tokens)
+        if len(kept) < len(sentences):
+            out.append(beat.model_copy(update={"narration": " ".join(kept).strip()}))
+        else:
+            out.append(beat)
+    return out
+
+
+def trim_overlong_beats(
+    beats: list[ScriptBeat],
+    config: dict[str, Any],
+) -> list[ScriptBeat]:
+    """Enforce the per-beat word cap by dropping trailing sentences.
+
+    Every word over budget stretches this beat's panels on screen, because audio locks
+    the visuals. The cap has been in the prompt and the lint for days and the rewrite
+    ignores it (4 flagged -> 3 still flagged). Trailing sentences are where the padding
+    accumulates — the beat's own point is made first. Always keeps at least two
+    sentences so a beat is never gutted.
+    """
+    per_panel = int(get_nested(config, "script", "words_per_panel_target", default=14))
+    out: list[ScriptBeat] = []
+    for beat in beats:
+        limit = max(16, len(beat.panel_ids) * per_panel)
+        hard = int(limit * 1.35)
+        sentences = [s for s in _SENTENCE_SPLIT_RE.split(beat.narration.strip()) if s.strip()]
+        if len(beat.narration.split()) <= hard or len(sentences) <= 2:
+            out.append(beat)
+            continue
+        kept = list(sentences)
+        while len(kept) > 2 and len(" ".join(kept).split()) > limit:
+            kept.pop()
+        out.append(beat.model_copy(update={"narration": " ".join(kept).strip()}))
+    return out
+
+
 def repair_malformed_openings(beats: list[ScriptBeat]) -> list[ScriptBeat]:
     """Drop a leading broken fragment when the rest of the beat is sound.
 
