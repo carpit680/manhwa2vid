@@ -663,6 +663,28 @@ def run_cast_linking(
 
     consolidate_profiles(bible, config)
     clean_bible_aliases(bible)
+
+    # Elect a protagonist if the bible has none. Election normally happens in the quest
+    # stage, so re-running scene/cast alone (or rebuilding a polluted bible) can leave
+    # protagonist_id empty — and everything downstream that anchors on the MC silently
+    # degrades: naming priority, the MC name budget, MC-off-screen linting, and the
+    # verifier's [PROTAGONIST] tag. Cheap to redo here, and it keeps the cast stage's own
+    # protagonist-exists gate meaningful rather than merely observational.
+    if not bible.protagonist_id and bible.characters:
+        from manhwa2vid.characters.quest import detect_protagonist, set_protagonist_labels
+
+        elected = detect_protagonist(bible, config)
+        if elected:
+            bible.protagonist_id = elected
+            profile = bible.characters.get(elected)
+            if profile is not None and profile.tier != CharacterTier.MAIN:
+                profile.tier = CharacterTier.MAIN
+            set_protagonist_labels(bible, elected, config)
+            console.print(
+                f"[dim]Protagonist elected from appearances:[/] "
+                f"{bible.characters[elected].canonical_name} ({elected})"
+            )
+
     enriched = apply_id_redirects(enriched, bible)
     enriched = _normalize_mc_attribution(enriched, bible)
     enriched = _dedupe_card_people(enriched, bible)

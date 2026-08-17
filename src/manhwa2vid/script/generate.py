@@ -512,6 +512,60 @@ def _narration_chunk_user(
     )
 
 
+def _sighted_complete_json(
+    llm: Any,
+    system: str,
+    user: str,
+    beats: list[ScriptOutlineBeat],
+    paths: dict[str, Path] | None,
+    config: dict[str, Any],
+    max_images: int = 12,
+) -> dict[str, Any]:
+    """Narration call with the beats' own panels attached.
+
+    The writer used to compose from TEXT scene cards while the alignment audit checked its
+    output against IMAGES — an image-blind author judged by a sighted critic. Everything
+    the cards omitted was invisible to the writer and then flagged as invention. Showing
+    the writer the panels it is narrating removes that asymmetry; the audit becomes a
+    safety net rather than the primary quality mechanism.
+
+    Falls back to the text-only path when panels are unavailable or the provider has no
+    labeled-vision support, so nothing depends on this succeeding.
+    """
+    if paths is None or not get_nested(config, "script", "sighted_narration", default=True):
+        return _complete_json(llm, system, user)
+    try:
+        from manhwa2vid.panels.filter import load_story_panels
+
+        panel_map = {p.id: p for p in load_story_panels(paths)}
+        labeled: list[tuple[str, Path]] = []
+        for ob in beats:
+            for pid in ob.panel_ids:
+                panel = panel_map.get(pid)
+                if panel is None:
+                    continue
+                path = paths["root"] / panel.image_path
+                if path.exists():
+                    labeled.append((f"BEAT {ob.beat_id} / PANEL {pid}:", path))
+        if not labeled:
+            return _complete_json(llm, system, user)
+        # A chunk can carry more panels than is useful to attach; the text evidence still
+        # covers every panel, so cap the images rather than the beats.
+        labeled = labeled[:max_images]
+        prompt = (
+            f"{system}\n\n"
+            "The images below are the ACTUAL PANELS for these beats, each labeled with its "
+            "beat and panel id. Narrate what you can see in them. Where the evidence text "
+            "and an image disagree, trust the image.\n\n"
+            f"{user}"
+        )
+        raw = llm.describe_labeled_panels(labeled, prompt)
+        return json.loads(raw)
+    except Exception as exc:
+        console.print(f"[yellow]Sighted narration unavailable ({type(exc).__name__}) — using text evidence[/]")
+        return _complete_json(llm, system, user)
+
+
 def _run_narration_pass(
     meta: ProjectMeta,
     outline_beats: list[ScriptOutlineBeat],
@@ -521,6 +575,7 @@ def _run_narration_pass(
     synopsis: ChapterSynopsis,
     config: dict[str, Any],
     cards: list[SceneCard] | None = None,
+    paths: dict[str, Path] | None = None,
 ) -> tuple[list[ScriptBeat], list[int]]:
     """Chunked narration: outline beat_ids/panel_ids are authoritative; the LLM only
     supplies narration text. Returns (beats, beat_ids_missing_after_retry)."""
@@ -553,7 +608,7 @@ def _run_narration_pass(
         )
         got: dict[int, str] = {}
         try:
-            data = _complete_json(llm, system, user)
+            data = _sighted_complete_json(llm, system, user, chunk, paths, config)
             for item in data.get("beats", []):
                 if isinstance(item, dict) and str(item.get("narration", "")).strip():
                     got[int(item.get("beat_id", -1))] = str(item["narration"]).strip()
@@ -565,7 +620,7 @@ def _run_narration_pass(
             if not narration:
                 narration = _retry_single_beat(
                     llm, system, meta, ob, hook, bible, attribution, synopsis, config, cards,
-                    introduced=introduced, running_summary=running_summary,
+                    introduced=introduced, running_summary=running_summary, paths=paths,
                 )
             if not narration:
                 missing.append(ob.beat_id)
@@ -599,6 +654,7 @@ def _retry_single_beat(
     *,
     introduced: list[str],
     running_summary: list[str],
+    paths: dict[str, Path] | None = None,
 ) -> str:
     """Regenerate exactly one beat. Two attempts; '' if both fail (caller gates on it)."""
     for attempt in range(2):
@@ -607,7 +663,7 @@ def _retry_single_beat(
                 meta, [beat], hook, bible, attribution, synopsis, config, cards,
                 introduced=introduced, running_summary=running_summary,
             )
-            data = _complete_json(llm, system, user)
+            data = _sighted_complete_json(llm, system, user, [beat], paths, config)
             for item in data.get("beats", []):
                 if isinstance(item, dict) and str(item.get("narration", "")).strip():
                     return str(item["narration"]).strip()
@@ -667,7 +723,7 @@ def generate_script(
     )
 
     beats, missing_beats = _run_narration_pass(
-        meta, outline_beats, hook, bible, attribution, synopsis, config, cards
+        meta, outline_beats, hook, bible, attribution, synopsis, config, cards, paths=paths
     )
 
     from manhwa2vid.qa import QAReport, enforce, qa_forced

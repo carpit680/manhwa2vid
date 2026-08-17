@@ -549,6 +549,31 @@ class MockLLMProvider(LLMProvider):
             )
         return json.dumps(self._mock_panel_dict(ids))
 
+    def describe_labeled_panels(self, labeled: list[tuple[str, Path]], prompt: str) -> str:
+        """Sighted narration sends BEAT/PANEL labels — answer in the narration shape.
+
+        Without this the mock replies with a scene card and every beat comes back empty,
+        so beat-conservation fails on a pipeline that is actually fine.
+        """
+        beat_ids: list[int] = []
+        for label, _path in labeled:
+            match = re.search(r"BEAT (\d+)", label)
+            if match:
+                bid = int(match.group(1))
+                if bid not in beat_ids:
+                    beat_ids.append(bid)
+        if beat_ids:
+            return json.dumps(
+                {
+                    "beats": [
+                        {"beat_id": bid,
+                         "narration": f"Beat {bid}: the hunter moves through the scene."}
+                        for bid in beat_ids
+                    ]
+                }
+            )
+        return self.describe_panels([path for _label, path in labeled], prompt)
+
     def _mock_panel_dict(self, ids: list[str]) -> dict[str, Any]:
         # Vary per panel. A mock that returns one identical card for every panel is not a
         # faithful stand-in: it is exactly the degenerate output the card-diversity gate

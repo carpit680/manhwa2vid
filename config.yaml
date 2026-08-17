@@ -105,6 +105,10 @@ script:
   max_beats: 18
   max_mc_full_name_after_hook: 2
   narration_chunk_size: 5   # beats per narration LLM call — small outputs can't drop beats
+  # Attach each chunk's actual panels to the narration call. The writer used to compose
+  # from text cards while the alignment audit judged it against images — an image-blind
+  # author checked by a sighted critic. Requires a multimodal script model.
+  sighted_narration: true
   words_per_panel_target: 14 # per-beat word ceiling = panels x this; enforced by lint rewrite
   verify_alignment: true    # adversarial VLM pass: flag narration claims unsupported by panels
   verify_max_beats: 24      # sample cap for the alignment audit on long chapters

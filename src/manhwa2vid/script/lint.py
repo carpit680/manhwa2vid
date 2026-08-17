@@ -400,6 +400,61 @@ def rotate_protagonist_name(
     return out
 
 
+# Words that mark a following pronoun as the SUBJECT of its own clause. Reported speech is
+# the dominant construction in this register ("says he is the weakest"), so the decisive
+# signal is what comes AFTER the pronoun, not before: a finite verb means subject.
+_FINITE_AUX = frozenset(
+    """is was are were has have had will would can could should does did do
+    might must may isn't wasn't hasn't won't can't didn't doesn't""".split()
+)
+
+
+def _looks_like_verb(word: str) -> bool:
+    w = word.strip(".,!?;:'\"").lower()
+    if not w:
+        return False
+    if w in _FINITE_AUX:
+        return True
+    # Present-tense third person and participles carry the clause in this style.
+    return len(w) > 3 and (w.endswith("s") or w.endswith("ed") or w.endswith("ing"))
+
+
+def fix_pronoun_case(text: str, bible: SeriesBible) -> str:
+    """Repair subject pronouns sitting in object position.
+
+    Name rotation substitutes the subject form, so "Kim pats Jin-Woo on the shoulder"
+    became "pats HE on the shoulder" — ungrammatical, and this text is SPOKEN, so the
+    error is audible rather than cosmetic. A verb whitelist could not keep up (the miss
+    was 'pats'); deciding on the word AFTER the pronoun does: a finite verb means the
+    pronoun is a subject, anything else in mid-sentence means it is an object.
+    """
+    if not bible.protagonist_id or bible.protagonist_id not in bible.characters:
+        return text
+    pronoun = (bible.characters[bible.protagonist_id].pronoun or "he").lower()
+    objective = {"he": "him", "she": "her", "they": "them"}.get(pronoun, "them")
+    if objective == pronoun:
+        return text
+
+    # Word boundaries matter: without them "he" matches inside "the" and "shoulder".
+    pattern = re.compile(
+        r"(\S+\s+)\b" + re.escape(pronoun) + r"\b(?=(\s*)(\S*))",
+        re.I,
+    )
+
+    def _sub(m: re.Match) -> str:
+        before, after = m.group(1), m.group(3)
+        # Clause-initial position stays nominative whatever preceded the break.
+        if not before.strip() or before.strip().endswith((".", "!", "?", ",", ";", ":")):
+            return m.group(0)
+        # A finite verb after the pronoun means it is the subject of its own clause —
+        # "says he is the weakest", "and he laughs".
+        if _looks_like_verb(after):
+            return m.group(0)
+        return f"{before}{objective}"
+
+    return pattern.sub(_sub, text)
+
+
 def enforce_mc_name_budget(
     beats: list[ScriptBeat],
     bible: SeriesBible,
@@ -421,7 +476,7 @@ def enforce_mc_name_budget(
             text = rotate_protagonist_name(beat.narration, bible, keep=1)
         else:
             text = rotate_protagonist_name(beat.narration, bible, keep=max_after, state=state)
-        out.append(beat.model_copy(update={"narration": text}))
+        out.append(beat.model_copy(update={"narration": fix_pronoun_case(text, bible)}))
     return out
 
 

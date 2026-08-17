@@ -175,3 +175,34 @@ def test_rotation_uses_object_case_where_required(text, expected) -> None:
 
     assert expected in out, out
     assert "tells he " not in out and "with he." not in out
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        # The miss that shipped: 'pats' was not in any verb whitelist.
+        ("A hunter pats he on the shoulder.", "pats him on"),
+        ("Kim tells he about a nickname.", "tells him about"),
+        ("She stands with he near the gate.", "with him near"),
+        # Reported speech is the dominant construction — must stay nominative.
+        ("They say he is the weakest hunter.", "say he is"),
+        ("Kim smiles and he laughs.", "and he laughs"),
+        # Clause-initial stays nominative whatever preceded the break.
+        ("The gate opens. He steps through.", "He steps"),
+        ("Nearby, he waves.", "he waves"),
+    ],
+)
+def test_pronoun_case_decided_by_following_word(text, expected) -> None:
+    """Object-vs-subject is decided by what FOLLOWS the pronoun, not a verb whitelist.
+
+    Name rotation emits the subject form, so "Kim pats Jin-Woo" became "pats he" —
+    ungrammatical in narration that gets spoken aloud. A whitelist could not keep up.
+    """
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import fix_pronoun_case
+
+    bible = SeriesBible(series_slug="s", title="S", protagonist_id="char_mc")
+    bible.characters["char_mc"] = CharacterProfile(
+        id="char_mc", canonical_name="Hero", tier=CharacterTier.MAIN, pronoun="he"
+    )
+    assert expected in fix_pronoun_case(text, bible)

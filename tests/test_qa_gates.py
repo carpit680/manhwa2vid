@@ -1172,3 +1172,25 @@ def test_chapter_pass_normalizes_through_the_same_guards(tmp_path, monkeypatch) 
     assert cards[0].people[0].name_used == "", "nullish name must not survive"
     assert cards[1].people[0].ref == "new", "unbacked identification must be demoted"
     assert counters["demoted"] >= 1
+
+
+def test_cast_stage_elects_protagonist_when_bible_has_none() -> None:
+    """Re-running scene/cast alone must not leave the bible headless.
+
+    Election normally happens in the quest stage, so a scene-only re-run left
+    protagonist_id empty — and naming priority, the MC name budget, MC-off-screen linting
+    and the verifier's [PROTAGONIST] tag all silently degraded while every gate passed.
+    """
+    from manhwa2vid.characters.quest import detect_protagonist
+
+    bible = SeriesBible(series_slug="s", title="S", protagonist_id="")
+    bible.characters["char_hero"] = CharacterProfile(
+        id="char_hero", canonical_name="Hero", tier=CharacterTier.SUPPORTING,
+        appearances=[f"p{i:04d}_01" for i in range(40)], confidence=0.9,
+    )
+    bible.characters["char_extra"] = CharacterProfile(
+        id="char_extra", canonical_name="Extra", tier=CharacterTier.MINOR,
+        appearances=["p0001_01"], confidence=0.5,
+    )
+
+    assert detect_protagonist(bible, {}) == "char_hero"

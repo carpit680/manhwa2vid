@@ -337,3 +337,39 @@ def test_alignment_audit_caps_pathological_beat(tmp_path: Path, monkeypatch) -> 
     verify_mod.audit_frame_alignment([beat], panels, tmp_path, {})
 
     assert seen == [verify_mod._MAX_AUDIT_PANELS]
+
+
+def test_single_beat_retry_path_is_callable(tmp_path) -> None:
+    """The per-beat retry only runs when a chunk fails, so tests never reach it.
+
+    A NameError there ('chunk' is not defined) silently lost beats 11-18 of a real run —
+    the chunk failed, every retry then failed too, and only the beat-conservation gate
+    caught it. Exercise the fallback directly.
+    """
+    from manhwa2vid.models import ChapterSynopsis, ScriptOutlineBeat
+    from manhwa2vid.script.generate import _retry_single_beat
+
+    class _LLM:
+        def complete(self, system, user, *, json_mode=False):
+            return '{"beats": [{"beat_id": 7, "narration": "He steps through the gate."}]}'
+
+        def describe_panels(self, image_paths, prompt):
+            return "{}"
+
+    bible = SeriesBible(series_slug="s", title="S", protagonist_id="char_mc")
+    bible.characters["char_mc"] = CharacterProfile(
+        id="char_mc", canonical_name="Hero", tier=CharacterTier.MAIN
+    )
+    beat = ScriptOutlineBeat(beat_id=7, panel_ids=["p0007_01"], plot_beat="He enters.")
+
+    out = _retry_single_beat(
+        _LLM(), "system", _meta_stub(), beat, "hook", bible, [], ChapterSynopsis(), {}, None,
+        introduced=[], running_summary=[], paths=None,
+    )
+    assert "gate" in out
+
+
+def _meta_stub():
+    from manhwa2vid.models import ProjectMeta, SourceLanguage
+
+    return ProjectMeta(slug="s", title="S", chapters="1", source_lang=SourceLanguage.EN)
