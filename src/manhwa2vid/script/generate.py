@@ -739,6 +739,14 @@ def generate_script(
     report = QAReport(stage="script")
     outline_ids = [b.beat_id for b in outline_beats]
     script_ids = [b.beat_id for b in beats]
+    empty_beats = [b.beat_id for b in beats if not b.narration.strip()]
+    report.add(
+        "beats-nonempty",
+        not empty_beats,
+        f"beat(s) with EMPTY narration: {empty_beats} — these would render as silent "
+        "dead air" if empty_beats else "",
+        empty=empty_beats,
+    )
     report.add(
         "beat-conservation",
         not missing_beats and script_ids == outline_ids,
@@ -843,7 +851,13 @@ def generate_script(
                     if beat.beat_id in still_major and beat.beat_id in plot_by_id:
                         grounded = plot_by_id[beat.beat_id].split("/ CLOSER")[0].strip()
                         grounded = rotate_protagonist_name(local_sanitize_narration(grounded), bible)
-                        fallbacks.append(beat.model_copy(update={"narration": grounded}))
+                        # A continuity beat can carry an EMPTY plot_beat; replacing real
+                        # narration with '' shipped a silent beat once. Unverified prose
+                        # beats dead air — keep the rewrite when the fallback is empty.
+                        if grounded:
+                            fallbacks.append(beat.model_copy(update={"narration": grounded}))
+                        else:
+                            fallbacks.append(beat)
                     else:
                         fallbacks.append(beat)
                 beats = fallbacks
@@ -854,6 +868,22 @@ def generate_script(
                 beats=sorted(still_major),
             )
         enforce(audit, paths["root"], force=qa_forced(config))
+
+    # FINAL deterministic polish — after every LLM pass. Audit rewrites run after the
+    # lint pipeline and happily reintroduce appearance appositives and stray name forms
+    # (beat 7 kept "a man with short grey hair and a blue jacket" through one whole
+    # iteration because the strip ran before the rewrite that re-added it). Nothing that
+    # generates text may run after this block.
+    from manhwa2vid.script.lint import (
+        enforce_mc_name_budget,
+        fix_pronoun_case as _fix_case,
+        strip_caption_sentences,
+        strip_repeated_appositives,
+    )
+
+    beats = strip_repeated_appositives(beats, bible)
+    beats = strip_caption_sentences(beats, bible)
+    beats = enforce_mc_name_budget(beats, bible, config)
 
     from manhwa2vid.script.scorecard import score_script
 

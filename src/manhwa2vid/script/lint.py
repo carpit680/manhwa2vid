@@ -95,6 +95,8 @@ _OBJECT_CUE_WORDS = frozenset(
     leads led drags dragged pushes pushed shoves shoved hits hit gives gave hands handed
     shows showed offers offered passes passed reminds reminded orders ordered sends sent
     leaves left meets met knows knew likes liked wants wanted needs needed lets let
+    scolds scolded mocks mocked teases teased praises praised blames blamed
+    engulfs engulfed swallows swallowed surrounds surrounded carries carried
     """.split()
 )
 
@@ -347,6 +349,86 @@ def lint_captioning(beats: list[ScriptBeat]) -> dict[int, list[str]]:
     return report
 
 
+def strip_repeated_appositives(
+    beats: list[ScriptBeat],
+    bible: SeriesBible | None,
+) -> list[ScriptBeat]:
+    """Deterministically remove appearance appositives after each character's first.
+
+    Two iterations asked the LLM rewrite to do this and it complied ZERO times (11
+    flagged, 11 still flagged) — so it stops being a request. Removing an appositive is
+    grammatically safe: "Kim Sangshik, a veteran with short grey hair, waves" -> "Kim
+    Sangshik waves". The first occurrence per character keeps its intro clause.
+    """
+    if bible is None:
+        return beats
+    patterns: list[tuple[str, re.Pattern[str]]] = []
+    for profile in bible.characters.values():
+        if profile.merged_into:
+            continue
+        name = profile.canonical_name.strip()
+        if not name or is_descriptor_label(name):
+            continue
+        patterns.append(
+            (name, re.compile(
+                rf"(\b{re.escape(name)}),\s+(?:a|an|the)\s+(?:[\w''-]+\s+){{0,8}}[\w''-]+,",
+                re.I,
+            ))
+        )
+    seen: set[str] = set()
+    out: list[ScriptBeat] = []
+    for beat in beats:
+        text = beat.narration
+        for name, rx in patterns:
+            def _sub(m: re.Match, _name: str = name) -> str:
+                if _name in seen:
+                    return m.group(1)  # bare name, appositive dropped
+                seen.add(_name)
+                return m.group(0)      # first one keeps the intro clause
+            text = rx.sub(_sub, text)
+            # A bare mention (no appositive) also counts as introduced.
+            if re.search(rf"\b{re.escape(name)}\b", text, re.I):
+                seen.add(name)
+        out.append(beat.model_copy(update={"narration": text}) if text != beat.narration else beat)
+    return out
+
+
+def strip_caption_sentences(
+    beats: list[ScriptBeat],
+    bible: SeriesBible | None,
+) -> list[ScriptBeat]:
+    """Delete sentences that are pure scenery captions.
+
+    "An empty plate and chopsticks rest on the counter of the food stand." survived two
+    LLM rewrite requests. A sentence is deletable only when it BOTH matches a caption
+    pattern AND contains no person — no cast name, no personal pronoun. Sentences about
+    people are never touched, and a beat is never emptied.
+    """
+    names: list[str] = []
+    if bible is not None:
+        for profile in bible.characters.values():
+            if not profile.merged_into and profile.canonical_name.strip():
+                names.extend(t for t in re.split(r"[\s\-‑]+", profile.canonical_name) if len(t) > 2)
+    person_re = re.compile(
+        r"\b(?:he|she|they|him|her|them|his|their"
+        + ("|" + "|".join(re.escape(n) for n in set(names)) if names else "")
+        + r")\b",
+        re.I,
+    )
+    out: list[ScriptBeat] = []
+    for beat in beats:
+        sentences = _SENTENCE_SPLIT_RE.split(beat.narration)
+        kept = [
+            s for s in sentences
+            if not (_CAPTION_RE.search(s) and not person_re.search(s))
+        ]
+        if kept and len(kept) < len(sentences):
+            out.append(beat.model_copy(update={"narration": " ".join(kept).strip()}))
+        else:
+            out.append(beat)
+    return out
+
+
 def lint_reintroduction(
     beats: list[ScriptBeat],
     bible: SeriesBible | None,
@@ -501,14 +583,21 @@ def rotate_protagonist_name(
             # sentence, so reading it as an object slot yields "Her asks").
             replacement = pronoun
         else:
-            # "Kim Sangshik tells Jin-Woo to stay" must rotate to "tells HIM", not
-            # "tells he" — narration is spoken aloud, so the case error is audible.
+            # Mid-sentence: only rotate when the slot's case is CERTAIN. Prior word in
+            # the object-cue list -> objective ("tells him"). Next word verb-ish ->
+            # subject ("and Jin-Woo laughs" -> "and he laughs"). Anything else keeps the
+            # NAME: "the gate engulfs Jin-Woo" once became "engulfs he" because 'engulfs'
+            # was not on the cue list — an extra name mention costs style points; a wrong
+            # pronoun case is gibberish out loud.
             last_word = re.search(r"([A-Za-z']+)\W*$", prior)
-            replacement = (
-                objective
-                if last_word and last_word.group(1).lower() in _OBJECT_CUE_WORDS
-                else pronoun
-            )
+            after = text[m.end():].lstrip()
+            next_word = after.split(None, 1)[0].strip(".,!?;:'\"") if after else ""
+            if last_word and last_word.group(1).lower() in _OBJECT_CUE_WORDS:
+                replacement = objective
+            elif _looks_like_verb(next_word):
+                replacement = pronoun
+            else:
+                return m.group(0)  # uncertain slot: the name stays, grammar guaranteed
         return replacement.capitalize() if sentence_initial else replacement
 
     out = pattern.sub(_sub, text)
@@ -572,10 +661,17 @@ def fix_pronoun_case(text: str, bible: SeriesBible) -> str:
     if objective == pronoun:
         return text
 
-    pattern = re.compile(r"([A-Za-z']+)(\s+)\b" + re.escape(pronoun) + r"\b(?![-'’])", re.I)
+    pattern = re.compile(
+        r"([A-Za-z']+)(\s+)\b" + re.escape(pronoun) + r"\b(?![-'’])(?=(\s*)(\S*))", re.I
+    )
 
     def _sub(m: re.Match) -> str:
-        if m.group(1).lower() in _OBJECT_PREV_WORDS:
+        # Prior word must be an object cue AND the next word must not be a verb:
+        # "after" is a preposition in "runs after him" but a conjunction in "After he
+        # dismisses the concern" — the verb after the pronoun is what tells them apart
+        # ("After him dismisses" shipped once).
+        next_word = (m.group(4) or "").strip(".,!?;:'\"")
+        if m.group(1).lower() in _OBJECT_PREV_WORDS and not _looks_like_verb(next_word):
             return f"{m.group(1)}{m.group(2)}{objective}"
         return m.group(0)
 
@@ -694,7 +790,15 @@ def lint_descriptor_quarantine(
     report: dict[int, list[str]] = {}
     for beat in beats:
         low = beat.narration.lower()
-        hits = [f"descriptor_for_named:{name}" for d, name in named_descriptors if d in low]
+        # Only a REFERRING noun phrase counts — "the man with the green backpack" uses
+        # the descriptor AS the person's identity. A possessive or action mention ("he
+        # carries his green backpack") is legitimate narration; bare substring matching
+        # flooded the rewrite loop with unfixable flags on 10 of 13 beats.
+        hits = [
+            f"descriptor_for_named:{name}"
+            for d, name in named_descriptors
+            if re.search(rf"\b(?:a|an|the)\s+{re.escape(d)}", low)
+        ]
         if hits:
             report[beat.beat_id] = sorted(set(hits))
     return report
@@ -929,6 +1033,7 @@ def lint_and_rewrite_script(
     # Script-wide name rotation must run BEFORE measuring: the per-beat rotation above
     # leaves one anchor per beat, which the script-wide spam rule then flags everywhere.
     pre_sanitized = enforce_mc_name_budget(pre_sanitized, bible, config)
+    pre_sanitized = strip_repeated_appositives(pre_sanitized, bible)
 
     report = lint_beats(
         pre_sanitized, config, bible=bible, attribution=attribution, scene_cards=scene_cards
@@ -972,6 +1077,7 @@ def lint_and_rewrite_script(
     # A rewrite re-introduces the full name freely (it sees only its own beat), so the
     # budget sweep runs again over the final text.
     fixed = enforce_mc_name_budget(fixed, bible, config)
+    fixed = strip_repeated_appositives(fixed, bible)
     remaining = lint_beats(
         fixed, config, bible=bible, attribution=attribution, scene_cards=scene_cards
     )

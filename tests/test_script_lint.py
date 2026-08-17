@@ -339,3 +339,117 @@ def test_reintroduction_appositives_flagged_after_first() -> None:
     assert 1 not in report, "the first intro is legitimate"
     assert report.get(2) == ["reintro:Kim Sangshik"]
     assert 3 not in report, "bare name is always fine"
+
+
+def test_strip_repeated_appositives_is_deterministic() -> None:
+    """The LLM rewrite complied ZERO times in two iterations (11 flagged -> 11 flagged),
+    so appositive removal stops being a request. First intro survives; later ones become
+    the bare name."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import strip_repeated_appositives
+
+    bible = SeriesBible(series_slug="s", title="S")
+    bible.characters["char_kim"] = CharacterProfile(
+        id="char_kim", canonical_name="Kim Sangshik", tier=CharacterTier.SUPPORTING
+    )
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p1"],
+                   narration="Kim Sangshik, a veteran hunter with short grey hair, waves."),
+        ScriptBeat(beat_id=2, panel_ids=["p2"],
+                   narration="Kim Sangshik, the man with short grey hair and a blue jacket, drinks."),
+        ScriptBeat(beat_id=3, panel_ids=["p3"], narration="Kim Sangshik laughs."),
+    ]
+    out = strip_repeated_appositives(beats, bible)
+    assert "short grey hair" in out[0].narration, "first intro keeps its clause"
+    assert out[1].narration == "Kim Sangshik drinks."
+    assert out[2].narration == "Kim Sangshik laughs."
+
+
+def test_uncertain_rotation_slot_keeps_the_name() -> None:
+    """"the gate completely engulfs he" shipped because 'engulfs' was not on any cue
+    list. When neither the prior word nor the next word settles the case, the name stays
+    — style cost, never gibberish."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import rotate_protagonist_name
+
+    bible = SeriesBible(series_slug="s", title="S", protagonist_id="char_mc")
+    bible.characters["char_mc"] = CharacterProfile(
+        id="char_mc", canonical_name="Sung Jin-Woo", tier=CharacterTier.MAIN, pronoun="he"
+    )
+    text = "Sung Jin-Woo hesitates. The blue energy completely engulfs Sung Jin-Woo."
+    out = rotate_protagonist_name(text, bible)
+    assert "engulfs he" not in out and "engulfs He" not in out
+    assert "engulfs Sung Jin-Woo" in out or "engulfs him" in out
+
+
+def test_pure_scenery_caption_sentences_are_deleted() -> None:
+    """"An empty plate and chopsticks rest on the counter" survived two LLM rewrites —
+    deletion is deterministic. Sentences containing people are never touched."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import strip_caption_sentences
+
+    bible = SeriesBible(series_slug="s", title="S")
+    bible.characters["char_kim"] = CharacterProfile(
+        id="char_kim", canonical_name="Kim Sangshik", tier=CharacterTier.SUPPORTING
+    )
+    beats = [
+        ScriptBeat(
+            beat_id=5, panel_ids=["p1"],
+            narration="An empty plate and chopsticks rest on the counter of the food "
+                      "stand. Kim Sangshik holds his coffee cup and turns when a voice "
+                      "calls his name.",
+        ),
+        # Person-bearing caption-ish sentence must survive; never empty a beat.
+        ScriptBeat(
+            beat_id=6, panel_ids=["p2"],
+            narration="His hands rest on the cold railing.",
+        ),
+    ]
+    out = strip_caption_sentences(beats, bible)
+    assert out[0].narration == (
+        "Kim Sangshik holds his coffee cup and turns when a voice calls his name."
+    )
+    assert out[1].narration == "His hands rest on the cold railing."
+
+
+def test_descriptor_quarantine_ignores_possessive_mentions() -> None:
+    """"He carries his green backpack" is narration; "the man with green backpack" is
+    identity-by-descriptor. Bare substring matching flagged 10 of 13 beats with
+    unfixable violations, drowning the rewrite loop."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import lint_descriptor_quarantine
+
+    bible = SeriesBible(series_slug="s", title="S")
+    bible.characters["char_mc"] = CharacterProfile(
+        id="char_mc", canonical_name="Sung Jin-Woo", tier=CharacterTier.MAIN,
+        descriptors=["man with green backpack", "green backpack"],
+    )
+    ok = ScriptBeat(beat_id=1, panel_ids=["p1"],
+                    narration="He carries his green backpack through the crowd.")
+    bad = ScriptBeat(beat_id=2, panel_ids=["p2"],
+                     narration="The man with green backpack declines the offer.")
+    report = lint_descriptor_quarantine([ok, bad], bible)
+    assert 1 not in report
+    assert 2 in report
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        # 'after' as conjunction: the verb after the pronoun marks a subject clause.
+        ("After he dismisses the guard's concern, a voice shouts.",
+         "After he dismisses the guard's concern, a voice shouts."),
+        # 'after' as preposition: genuine object slot still converts.
+        ("The guard runs after he into the site.", "The guard runs after him into the site."),
+    ],
+)
+def test_prepositions_that_double_as_conjunctions(text, expected) -> None:
+    """"After him dismisses a gate guard's concern" shipped — same word, two roles."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import fix_pronoun_case
+
+    bible = SeriesBible(series_slug="s", title="S", protagonist_id="char_mc")
+    bible.characters["char_mc"] = CharacterProfile(
+        id="char_mc", canonical_name="Hero", tier=CharacterTier.MAIN, pronoun="he"
+    )
+    assert fix_pronoun_case(text, bible) == expected
