@@ -495,12 +495,36 @@ class MockLLMProvider(LLMProvider):
                     "key_terms": ["hunter"],
                 }
             )
+        # Vary per panel. A mock that returns one identical card for every panel is not a
+        # faithful stand-in: it is exactly the degenerate output the card-diversity gate
+        # exists to catch, so a constant mock would make the suite assert that a real bug
+        # is acceptable. List lengths are coprime so the phrasing cycle is long (7*11*13).
+        tag = ids[0] if ids else "p0000_00"
+        seed = sum(ord(c) * (i + 1) for i, c in enumerate(tag))
+        places = ["a rain-slicked street", "a lamplit corridor", "a crowded platform",
+                  "a quiet rooftop", "a flooded stairwell", "a shuttered market",
+                  "a humming server room"]
+        actors = ["a courier", "the guild clerk", "two students", "a night nurse",
+                  "an off-duty guard", "a busker", "the shop owner", "a lost tourist",
+                  "a taxi driver", "a window cleaner", "a paramedic"]
+        beats = ["braces against the wall", "counts something under their breath",
+                 "turns toward a distant sound", "checks a cracked phone screen",
+                 "shoulders a heavy bag", "steps back from the kerb",
+                 "wipes rain from their eyes", "waves someone through",
+                 "stops mid-sentence", "reaches for a door handle",
+                 "glances at the darkening sky", "shakes out a numb hand",
+                 "pockets a folded note"]
+        place = places[seed % 7]
+        actor = actors[seed % 11]
+        beat = beats[seed % 13]
         return json.dumps(
             {
                 "speakers": ["Hero"],
-                "people": [{"ref": "new", "name_used": "Hero", "descriptor": "", "visibility": "face"}],
-                "dialogue_summary": "People discuss the situation.",
-                "action": "A tense scene unfolds.",
+                "people": [
+                    {"ref": "new", "name_used": "Hero", "descriptor": "", "visibility": "face"}
+                ],
+                "dialogue_summary": f"{actor} mentions {place} while {beat}.",
+                "action": f"Near {place}, {actor} {beat} as the light shifts ({tag}).",
                 "mood": "dramatic",
                 "key_terms": [],
                 "panel_ids": ids,

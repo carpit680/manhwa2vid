@@ -158,6 +158,42 @@ def _as_str_list(value: Any) -> list[str]:
     return []
 
 
+# Cross-card self-similarity. Healthy chapters score 0% by this measure (ch1 and ch2 both);
+# a chapter whose vision pass collapsed into one repeated description scored ~85%. Every
+# other scene gate checks a card against its own panel — none asks whether the cards are
+# distinguishable FROM EACH OTHER, so a whole chapter of near-identical cards passed all
+# seven gates while being unusable.
+_DIVERSITY_SIMILARITY = 0.6   # Jaccard over >3-char tokens: near-duplicate wording
+_DIVERSITY_WARN_FRAC = 0.15
+_DIVERSITY_FAIL_FRAC = 0.30
+
+
+def _content_tokens(text: str) -> set[str]:
+    import re
+
+    return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(w) > 3}
+
+
+def _duplicate_card_ratio(cards: list[SceneCard]) -> tuple[float, list[str]]:
+    """Fraction of story cards that have a near-duplicate sibling, plus example panel ids."""
+    story = [c for c in cards if c.is_story]
+    sigs = [
+        (c, _content_tokens(c.action) | _content_tokens(c.dialogue_summary)) for c in story
+    ]
+    dupes: list[str] = []
+    for i, (card, a) in enumerate(sigs):
+        if not a:
+            continue
+        for j, (_other, b) in enumerate(sigs):
+            if i == j or not b:
+                continue
+            overlap = len(a & b) / len(a | b)
+            if overlap >= _DIVERSITY_SIMILARITY:
+                dupes.append(card.panel_ids[0] if card.panel_ids else "?")
+                break
+    return (len(dupes) / len(story) if story else 0.0), dupes
+
+
 def _coerce_confidence(value: Any) -> float:
     """Parse the model's self-reported certainty into 0.0-1.0.
 
@@ -674,6 +710,16 @@ def run_ocr_and_scenes(
         f"demoted {demoted_ids_total} named identification(s) with no visual basis"
         if demoted_ids_total else "",
         demoted=demoted_ids_total,
+    )
+    dup_frac, dup_panels = _duplicate_card_ratio(scene_cards)
+    report.add(
+        "card-diversity",
+        True if dup_frac < _DIVERSITY_WARN_FRAC
+        else ("warn" if dup_frac < _DIVERSITY_FAIL_FRAC else False),
+        f"{dup_frac:.0%} of story cards duplicate another card's wording "
+        f"(e.g. {dup_panels[:6]}) — the vision pass likely described one thing repeatedly"
+        if dup_frac >= _DIVERSITY_WARN_FRAC else "",
+        duplicate_fraction=round(dup_frac, 3), examples=dup_panels[:20],
     )
     story = sum(1 for c in scene_cards if c.is_story)
     report.add("story-cards", story > 0, f"{story}/{len(scene_cards)} story cards")

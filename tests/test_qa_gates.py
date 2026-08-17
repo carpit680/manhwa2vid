@@ -968,3 +968,79 @@ def test_nullish_ref_is_forced_to_new() -> None:
           "basis": "visible outline", "confidence": 0.9}]
     )
     assert people[0].ref == "new"
+
+
+def _degenerate_cards(n: int = 20) -> list:
+    """The ch2-with-references corpus: one description repeated with cosmetic variation."""
+    from manhwa2vid.models import SceneCard
+
+    variants = [
+        "Sung Jin-Woo introduces himself as an E-rank hunter from the Hunter Guild",
+        "Sung Jin-Woo introduces himself through narration as an E-Rank hunter of the Guild",
+        "Sung Jin-Woo identifies himself by name and rank as an E-Rank Hunter Guild member",
+    ]
+    return [
+        SceneCard(panel_ids=[f"p{i:04d}_01"], action=variants[i % len(variants)],
+                  dialogue_summary=variants[i % len(variants)])
+        for i in range(n)
+    ]
+
+
+def _varied_cards(n: int = 20) -> list:
+    from manhwa2vid.models import SceneCard
+
+    subjects = ["commuters", "an excavator", "a healer", "two hunters", "a blue gate",
+                "a guild clerk", "a stray cat", "a vending machine", "a rooftop antenna",
+                "a bus driver", "a paramedic", "a security guard", "a food vendor",
+                "a schoolgirl", "a delivery rider", "a window cleaner", "a busker",
+                "a taxi queue", "a fire escape", "a subway turnstile"]
+    verbs = ["crowds", "swings", "scolds", "toasts", "crackles", "counts", "slips",
+             "hums", "sways", "waits", "kneels", "salutes", "shouts", "stumbles",
+             "weaves", "polishes", "strums", "shuffles", "rattles", "clicks"]
+    places = ["crosswalk", "site fence", "hospital ward", "food truck", "scaffolding",
+              "muster point", "alley", "platform", "rooftop", "depot", "clinic",
+              "lobby", "market", "classroom", "junction", "atrium", "underpass",
+              "kerbside", "stairwell", "gateline"]
+    return [
+        SceneCard(
+            panel_ids=[f"p{i:04d}_01"],
+            action=f"{subjects[i % len(subjects)]} {verbs[i % len(verbs)]} near the "
+                   f"{places[i % len(places)]} while distant sirens fade",
+        )
+        for i in range(n)
+    ]
+
+
+def test_card_diversity_gate_fails_on_degenerate_chapter() -> None:
+    """A chapter of near-identical cards passed all seven scene gates while being unusable.
+
+    Every other scene gate checks a card against its own panel; none asked whether the
+    cards were distinguishable from EACH OTHER.
+    """
+    from manhwa2vid.ocr.extract import _duplicate_card_ratio
+
+    frac, examples = _duplicate_card_ratio(_degenerate_cards())
+    assert frac > 0.30, f"degenerate corpus should trip the fail band, got {frac:.0%}"
+    assert examples
+
+
+def test_card_diversity_gate_passes_healthy_chapter() -> None:
+    """Real ch1 and ch2 corpora both score 0% — the gate must not fire on them."""
+    from manhwa2vid.ocr.extract import _duplicate_card_ratio
+
+    frac, _ = _duplicate_card_ratio(_varied_cards())
+    assert frac < 0.15, f"healthy corpus must stay under the warn band, got {frac:.0%}"
+
+
+def test_card_diversity_ignores_non_story_cards() -> None:
+    """Title splashes and credits legitimately repeat — they are not story content."""
+    from manhwa2vid.models import SceneCard
+    from manhwa2vid.ocr.extract import _duplicate_card_ratio
+
+    cards = _varied_cards(10) + [
+        SceneCard(panel_ids=[f"c{i}"], action="chapter title splash", is_story=False,
+                  panel_type="title_splash")
+        for i in range(8)
+    ]
+    frac, _ = _duplicate_card_ratio(cards)
+    assert frac < 0.15
