@@ -878,12 +878,28 @@ def generate_script(
         enforce_mc_name_budget,
         fix_pronoun_case as _fix_case,
         strip_caption_sentences,
+        repair_malformed_openings,
+        strip_duplicate_transitions,
         strip_repeated_appositives,
     )
 
     beats = strip_repeated_appositives(beats, bible)
     beats = strip_caption_sentences(beats, bible)
+    beats = strip_duplicate_transitions(beats)
+    beats = repair_malformed_openings(beats)
     beats = enforce_mc_name_budget(beats, bible, config)
+
+    from manhwa2vid.script.lint import lint_malformed_opening
+
+    final_report = QAReport(stage="script-final")
+    malformed = sorted(lint_malformed_opening(beats))
+    final_report.add(
+        "beats-wellformed",
+        not malformed,
+        f"beat(s) starting mid-sentence after repair: {malformed}" if malformed else "",
+        malformed=malformed,
+    )
+    enforce(final_report, paths["root"], force=qa_forced(config))
 
     from manhwa2vid.script.scorecard import score_script
 

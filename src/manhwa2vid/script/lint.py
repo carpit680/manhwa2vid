@@ -116,6 +116,8 @@ Rules:
 - If an issue says caption:..., the beat reads like an image description. Delete visual
   inventory (objects, clothing, expressions-as-phrases) and retell the beat as EVENTS with
   consequence — what happens, who says what, why it matters.
+- If an issue says malformed_opening, the beat starts mid-sentence — rewrite it as a
+  complete sentence with its subject restored.
 - If an issue says repeats_beat_N, this beat re-tells what beat N already said —
   keep only what is NEW here and carry the moment forward.
 - If an issue says reintro:Name, that person was already introduced — remove the
@@ -395,6 +397,65 @@ def strip_repeated_appositives(
     return out
 
 
+# Temporal-transition markers. A chapter rewinds from its flashforward exactly ONCE; the
+# prompt rule fires per beat, so beats 1, 2 AND 3 each announced "but it starts hours
+# earlier". Whole-beat repetition linting cannot see this — those beats differ everywhere
+# except the one repeated clause.
+_TRANSITION_RE = re.compile(
+    r"\b(?:hours?|days?|weeks?|months?|years?|moments?) earlier\b"
+    r"|\bwhere this day is headed\b"
+    r"|\bback in the present\b"
+    r"|\bin the present day\b"
+    r"|\bthis nightmare (?:starts|begins)\b",
+    re.I,
+)
+
+
+# Verbs that make the CLAUSE itself about time — the signature of a rewind restatement
+# rather than a scene that happens to be set earlier.
+_REWIND_CLAUSE_RE = re.compile(
+    r"\b(?:starts?|started|begins?|began|is headed|was headed|heads?|goes? back|"
+    r"takes? us back|rewinds?|picks? up)\b",
+    re.I,
+)
+
+
+def strip_duplicate_transitions(beats: list[ScriptBeat]) -> list[ScriptBeat]:
+    """Keep the FIRST temporal rewind in a script; delete later restatements.
+
+    A sentence is removed only if it is transition-only — it carries a marker and no
+    other event. A sentence that both transitions AND advances the story is kept, and a
+    beat is never emptied.
+    """
+    seen_transition = False
+    out: list[ScriptBeat] = []
+    for beat in beats:
+        sentences = _SENTENCE_SPLIT_RE.split(beat.narration)
+        kept: list[str] = []
+        for sentence in sentences:
+            if not _TRANSITION_RE.search(sentence):
+                kept.append(sentence)
+                continue
+            if not seen_transition:
+                seen_transition = True
+                kept.append(sentence)
+                continue
+            # Distinguish a RESTATEMENT from a scene that merely happens earlier. If the
+            # sentence's main clause is about time itself ("the path BEGINS hours
+            # earlier", "that is where this day IS HEADED"), it re-announces the rewind
+            # and goes. If the time phrase only frames a real event ("Hours earlier,
+            # Joo-hee had begged him to stay home"), the event is new and stays.
+            # A word-count threshold cannot tell these apart — the restatements were the
+            # wordier ones.
+            if not _REWIND_CLAUSE_RE.search(sentence):
+                kept.append(sentence)
+        if kept and len(kept) < len(sentences):
+            out.append(beat.model_copy(update={"narration": " ".join(kept).strip()}))
+        else:
+            out.append(beat)
+    return out
+
+
 def strip_caption_sentences(
     beats: list[ScriptBeat],
     bible: SeriesBible | None,
@@ -472,6 +533,48 @@ def lint_reintroduction(
             seen_intro.add(name)
         if issues:
             report[beat.beat_id] = issues
+    return report
+
+
+def repair_malformed_openings(beats: list[ScriptBeat]) -> list[ScriptBeat]:
+    """Drop a leading broken fragment when the rest of the beat is sound.
+
+    Chunked generation can emit a dangling clause as a beat's first sentence ("is headed,
+    but it starts hours earlier."). The missing subject cannot be invented, but the
+    fragment itself is disposable — every following sentence is complete prose, so
+    deleting it yields a clean beat. Only ever removes the FIRST sentence, never empties
+    a beat, and leaves well-formed beats untouched.
+    """
+    out: list[ScriptBeat] = []
+    for beat in beats:
+        text = beat.narration.strip()
+        sentences = _SENTENCE_SPLIT_RE.split(text) if text else []
+        if len(sentences) >= 2 and sentences[0][:1].islower():
+            rest = " ".join(sentences[1:]).strip()
+            if rest and rest[:1].isupper():
+                out.append(beat.model_copy(update={"narration": rest}))
+                continue
+        out.append(beat)
+    return out
+
+
+def lint_malformed_opening(beats: list[ScriptBeat]) -> dict[int, list[str]]:
+    """Flag a beat that begins mid-sentence.
+
+    Chunked generation occasionally emits a dangling clause as a beat's first words —
+    one run opened beat 2 with "is headed, but it starts hours earlier." Spoken aloud
+    that is simply broken, and no existing gate looked at how a beat STARTS.
+    """
+    report: dict[int, list[str]] = {}
+    for beat in beats:
+        text = beat.narration.strip()
+        if not text:
+            continue
+        first = text.split()[0]
+        # A real sentence opens with a capital (or a number/quote); a lowercase verb or
+        # conjunction means the subject was lost upstream.
+        if first[0].islower():
+            report[beat.beat_id] = [f"malformed_opening:{' '.join(text.split()[:4])}"]
     return report
 
 
@@ -947,6 +1050,8 @@ def lint_beats(
     if bible is not None:
         for beat_id, issues in lint_reintroduction(beats, bible).items():
             report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
+    for beat_id, issues in lint_malformed_opening(beats).items():
+        report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_cross_beat_repetition(beats).items():
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_captioning(beats).items():

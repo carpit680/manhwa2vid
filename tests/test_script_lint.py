@@ -473,3 +473,81 @@ def test_cross_beat_repetition_flagged() -> None:
     report = lint_cross_beat_repetition(beats)
     assert 13 in report and report[13][0].startswith("repeats_beat_12")
     assert 14 not in report
+
+
+def test_duplicate_temporal_transitions_stripped() -> None:
+    """A chapter rewinds from its flashforward ONCE.
+
+    The prompt rule fires per beat, so beats 1, 2 and 3 each announced "but it starts
+    hours earlier". Whole-beat repetition linting cannot catch this — those beats differ
+    everywhere except the one repeated clause.
+    """
+    from manhwa2vid.script.lint import strip_duplicate_transitions
+
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p1"],
+                   narration="Jin-Woo lies in his own blood. Stone sentinels loom over "
+                             "him, but this nightmare starts hours earlier."),
+        ScriptBeat(beat_id=2, panel_ids=["p2"],
+                   narration="The spear swings down. But the path to this nightmare for "
+                             "him begins hours earlier over a quiet Seoul."),
+        ScriptBeat(beat_id=3, panel_ids=["p3"],
+                   narration="That is where this day is headed, but it starts hours "
+                             "earlier on a Seoul street. He walks among commuters."),
+    ]
+    out = strip_duplicate_transitions(beats)
+    assert "starts hours earlier" in out[0].narration, "first rewind is kept"
+    assert "hours earlier" not in out[1].narration
+    assert "hours earlier" not in out[2].narration
+    assert "He walks among commuters." in out[2].narration, "story content survives"
+    assert all(b.narration.strip() for b in out), "no beat may be emptied"
+
+
+def test_transition_with_its_own_action_survives() -> None:
+    """A sentence that both transitions AND advances the story is not a restatement."""
+    from manhwa2vid.script.lint import strip_duplicate_transitions
+
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p1"], narration="It starts hours earlier."),
+        ScriptBeat(beat_id=2, panel_ids=["p2"],
+                   narration="Hours earlier, Lee Joo-hee had begged him to stay home "
+                             "and rest his broken ribs."),
+    ]
+    out = strip_duplicate_transitions(beats)
+    assert "Joo-hee" in out[1].narration
+
+
+def test_malformed_opening_detected() -> None:
+    """One run opened a beat with "is headed, but it starts hours earlier." — a dangling
+    clause from chunked generation. Spoken aloud it is simply broken, and no gate looked
+    at how a beat STARTS."""
+    from manhwa2vid.script.lint import lint_malformed_opening
+
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p1"], narration="He lies bleeding on the floor."),
+        ScriptBeat(beat_id=2, panel_ids=["p2"],
+                   narration="is headed, but it starts hours earlier. He gasps."),
+    ]
+    report = lint_malformed_opening(beats)
+    assert 1 not in report
+    assert 2 in report and report[2][0].startswith("malformed_opening:")
+
+
+def test_malformed_opening_repaired_by_dropping_the_fragment() -> None:
+    """The missing subject cannot be invented, but the fragment is disposable — the
+    sentences after it are complete prose."""
+    from manhwa2vid.script.lint import lint_malformed_opening, repair_malformed_openings
+
+    beats = [
+        ScriptBeat(beat_id=2, panel_ids=["p2"],
+                   narration="is headed, but it starts hours earlier. He gasps as the "
+                             "sentinel raises its spear. He curses his luck."),
+        ScriptBeat(beat_id=3, panel_ids=["p3"], narration="He walks the morning streets."),
+        # A single broken sentence has nothing to fall back to — leave it for the gate.
+        ScriptBeat(beat_id=4, panel_ids=["p4"], narration="is headed, but it starts."),
+    ]
+    out = repair_malformed_openings(beats)
+    assert out[0].narration.startswith("He gasps as the sentinel")
+    assert out[1].narration == "He walks the morning streets."
+    assert out[2].narration == "is headed, but it starts.", "nothing to salvage"
+    assert set(lint_malformed_opening(out)) == {4}, "residue still reaches the gate"
