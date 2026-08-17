@@ -38,6 +38,7 @@ def sample_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.setenv("GROQ_API_KEY", "")
     monkeypatch.setenv("TTS_PROVIDER", "mock")
+    monkeypatch.setenv("MANHWA2VID_OCR", "0")  # no Paddle model downloads in tests
 
     pdf = tmp_path / "sample.pdf"
     _make_sample_pdf(pdf)
@@ -115,5 +116,7 @@ def test_timeline_alignment(sample_project: Path) -> None:
     ]
     timeline = build_timeline(beats, panels, audio_dir, {"video": {"min_panel_seconds": 2, "max_panel_seconds": 8, "fps": 30}})
     assert len(timeline.entries) == 2
-    assert timeline.total_duration >= 4.0
+    # Visual duration must lock to audio — no min-clamp stretch past the WAV
+    assert timeline.total_duration == pytest.approx(audio_duration(wav), abs=0.05)
     assert audio_duration(wav) == pytest.approx(2.0, rel=0.1)
+    assert abs(sum(e.duration for e in timeline.entries) - timeline.total_duration) < 1e-6

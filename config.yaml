@@ -13,26 +13,58 @@ panels:
   strip_scroll_aspect: 2.0
   filter_non_story: true
   filter_by_filename: true
-  exclude_panel_ids: []
+  exclude_panel_ids: ["p0010_02"]  # ch1: diagonal page-transition sliver just above the blank threshold
+  # Blank page-transition slivers: exclude panels with almost no pixel content before they
+  # reach OCR/vision or the render. Thresholds measured on ch1 — the three blank slivers
+  # scored ink<=0.25/dark<=0.06; the sparsest real panel scored ink 0.32/dark 0.25.
+  exclude_blank_panels: true
+  blank_max_ink_ratio: 0.30
+  blank_max_dark_ratio: 0.10
 
 ocr:
-  enabled: false  # set true if PaddleOCR works on your system
+  enabled: true   # PaddleOCR (CPU) — ground truth for dialogue; VLM claims must overlap it
   languages: ["ko", "en"]
   confidence_threshold: 0.5
 
 llm:
-  provider: groq  # openai | groq | ollama | mock
+  provider: groq  # groq | gemini | mistral | openai | ollama | mock
   groq:
+    # Free tier caps TOKENS per day (200k) — images exhaust it in ~60 panels.
     text_model: openai/gpt-oss-120b
-    vision_model: meta-llama/llama-4-scout-17b-16e-instruct
+    vision_model: qwen/qwen3.6-27b  # llama-4-scout no longer on this key
+  gemini:
+    # Paid tier (added 2026-08-17) — no more free-tier RPD walls. gemini-2.5-flash and
+    # gemini-2.5-pro both now 404 "no longer available to new users" on this key, ahead
+    # of the announced Oct 16 retirement — do not pin back to any 2.5 model.
+    text_model: gemini-3.5-flash
+    vision_model: gemini-3-flash-preview  # bakeoff 2026-08-17: only 3.x candidate with
+    # 3/3 speaker-grounded on the back-turned-MC trap panel; 3.5-flash lost that one
+  mistral:
+    # Free tier: large monthly token allowance, low requests-per-minute ceiling.
+    text_model: mistral-large-latest
+    vision_model: mistral-medium-latest  # pixtral retired; medium 3+ is multimodal
 
 scene:
-  model: meta-llama/llama-4-scout-17b-16e-instruct
+  # Paid tier (2026-08-17): gemini-2.5-flash is dead on this key (404 "no longer
+  # available to new users"). gemini-3-flash-preview bakeoff'd clean on all 3 ground-truth
+  # trap panels (0 hallucinated/missed MC, 3/3 speaker-grounded) — see tools/vision_bakeoff.py.
+  # Mistral (medium) remains the fallback: SCENE_LLM_PROVIDER=mistral to switch back.
+  provider: gemini
+  model: gemini-3-flash-preview
   batch_size: 1
-  vision_max_side: 768
+  # Lead each vision request with cached reference images of the main cast so identity
+  # is matched against pixels, not text descriptions two similar men both satisfy.
+  # Built from prior runs' best-evidenced identifications (characters/reference.py).
+  use_reference_images: true
+  # Only identifications the vision model itself rates this confident may become
+  # reference images. A shaky anchor propagates one wrong face through the series.
+  reference_min_confidence: 0.75
+  vision_max_side: 512  # image tokens scale with area; 512px ≈ 0.44x the spend of 768px
 
 characters:
-  wiki_lookup: true
+  # Wiki scraping seeds junk profiles (Template:Infobox..., User:...) into the bible;
+  # the glossary carries the sticky cast and scout/quest fill the rest.
+  wiki_lookup: false
   lookahead_chapters: 3
   scout_panels_per_chapter: 20
   quest_max_iterations: 4
@@ -41,23 +73,44 @@ characters:
   ban_words: ["character", "unnamed character", "a person", "the character", "two characters"]
 
 script:
-  model: openai/gpt-oss-120b
+  # Text tier upgraded alongside vision 2026-08-16 (Groq unusable: 8k/request cap;
+  # mistral-large misattributed enough to trip the grounded fallback on 12/18 beats).
+  # Paid tier (2026-08-17) removed the 20 req/day free-tier wall that forced the
+  # gemini-2.5-flash fallback (also now dead on this key — see llm.gemini above).
+  provider: gemini
+  model: gemini-3.5-flash
   commentary_level: light
-  target_wpm: 130
-  genz_level: medium
-  max_narrator_asides: 1
+  # Values below are measured from the Mamoru Manhwa reference — see reference/style_profile.md
+  target_wpm: 235       # reference speaks 237 WPM, stable across the whole 5h video
+  genz_level: none      # reference uses ~0 slang (0.07 per 1k words)
+  max_narrator_asides: 0  # reference has 18 first-person tokens in 75k words
   max_beats: 18
   max_mc_full_name_after_hook: 2
+  narration_chunk_size: 5   # beats per narration LLM call — small outputs can't drop beats
+  words_per_panel_target: 14 # per-beat word ceiling = panels x this; enforced by lint rewrite
+  verify_alignment: true    # adversarial VLM pass: flag narration claims unsupported by panels
+  verify_max_beats: 24      # sample cap for the alignment audit on long chapters
+
+qa:
+  enforce: true             # failed gates block the next stage (--force-past-qa overrides)
 
 tts:
-  provider: chatterbox  # chatterbox | openai | mock
+  provider: kokoro      # kokoro | chatterbox | openai | mock
+  # Kokoro (Apache-2.0, 82M, preset voices — cannot clone a reference voice):
+  kokoro_voice: am_adam # see hexgrad/Kokoro-82M VOICES.md (am_* = American male)
+  kokoro_speed: 1.0     # synthesis-time rate, NOT a time-stretch — no atempo artifacts
+  kokoro_lang: a        # 'a' = American English
+  # Chatterbox-only settings below:
   device: cuda          # cuda | cpu | mps — auto-detects if omitted
   model: standard       # standard | turbo | multilingual
   voice_prompt:         # optional ~5-10s WAV for voice cloning (deeper voice works well)
   exaggeration: 0.5     # calm delivery; pair with voice_prompt for tone
   cfg_weight: 0.6       # slightly steadier, more grounded voice
-  pace_multiplier: 0.85 # speech speed (<1 = slower; bumped up from 0.75)
-  pitch_shift: 0.88     # deepen voice (<1 = lower pitch, uses source sample rate)
+  # pace/pitch of 1.0 = NO ffmpeg post-processing at all (apply_tts_postprocess early-returns).
+  # Any other value runs a resample-based pitch shift and/or atempo time-stretch, which is the
+  # main source of the "artificial" sound. Leave both at 1.0 unless you accept that trade.
+  pace_multiplier: 1.0
+  pitch_shift: 1.0
   language_id: en       # for multilingual model only
   # OpenAI-only settings:
   openai_model: tts-1
@@ -68,13 +121,22 @@ video:
   width: 1920
   height: 1080
   fps: 30
-  min_panel_seconds: 2.5
-  max_panel_seconds: 10.0
+  min_panel_seconds: 2.0   # reference averages 3.2s of airtime per sentence
+  max_panel_seconds: 5.0   # was 10.0 — long dwells read as slideshow next to the reference
+  # Panels are dropped (not flashed) when a beat's narration cannot show them this long.
+  # Lower than min_panel_seconds on purpose: mild compression is fine, 0.4s strobing is not.
+  panel_drop_floor_seconds: 1.0
+  # Timeline QA warns when a single panel dwells longer than this multiple of
+  # max_panel_seconds — the signature of a beat whose narration outruns its panel count.
+  dwell_warn_multiplier: 1.5
   transition_seconds: 0.3
   bgm_volume: 0.18
   visual_mode: panels
   motion_supersample: 2
   scroll_easing: cosine
+  # Hard ceiling on vertical scroll speed in output pixels/sec. Comfortable reading is
+  # 200-400; above ~1000 a tall strip becomes an unreadable smear. 0 disables the cap.
+  max_scroll_px_per_sec: 600
   ken_burns_pan_amount: 0.02
   strip_scroll_aspect: 2.0
 

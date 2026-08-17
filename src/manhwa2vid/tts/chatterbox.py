@@ -111,6 +111,13 @@ class ChatterboxTTSProvider(TTSProvider):
         audio = wav.detach().cpu().numpy() if torch.is_tensor(wav) else wav
         if audio.ndim > 1:
             audio = audio.squeeze()
+
+        # Chatterbox can emit samples at full scale; leave ~1 dB of headroom so the
+        # render's loudnorm pass has room to work instead of clipping.
+        peak = float(abs(audio).max()) if audio.size else 0.0
+        if peak > 0.89:
+            audio = audio * (0.89 / peak)
+
         sf.write(str(out_wav), audio, model.sr)
 
         from manhwa2vid.tts.postprocess import apply_tts_postprocess

@@ -12,7 +12,7 @@ from rich.console import Console
 from manhwa2vid.characters.bible import format_bible_for_prompt, load_series_bible, naming_priority_rules
 from manhwa2vid.characters.link import run_cast_linking
 from manhwa2vid.config import get_nested
-from manhwa2vid.llm.provider import get_llm_provider
+from manhwa2vid.llm.provider import apply_stage_model, get_stage_llm
 from manhwa2vid.models import (
     ChapterSynopsis,
     PanelCast,
@@ -25,9 +25,14 @@ from manhwa2vid.models import (
     save_json,
 )
 from manhwa2vid.panels.filter import load_story_scene_cards
+from manhwa2vid.script.grounding import (
+    compact_panel_evidence,
+    evidence_for_panels,
+    format_seeded_outline_for_prompt,
+    preassign_outline_from_facts,
+)
 from manhwa2vid.script.lint import banned_words, lint_and_rewrite_script
 from manhwa2vid.script.synopsis import (
-    compact_scene_evidence,
     format_synopsis_for_prompt,
     generate_chapter_synopsis,
 )
@@ -50,7 +55,7 @@ def _panel_sort_key(panel_id: str) -> tuple[int, int, str]:
 
 
 def _scene_cards_to_context(cards: list[SceneCard], bible: SeriesBible) -> str:
-    return compact_scene_evidence(cards, bible)
+    return compact_panel_evidence(cards, bible)
 
 
 def _sticky_label(person: Any, bible: SeriesBible) -> str:
@@ -67,6 +72,9 @@ def _cast_context_for_beats(
     outline_beats: list[ScriptOutlineBeat],
     attribution: list[PanelCast],
     bible: SeriesBible,
+    cards: list[SceneCard] | None = None,
+    *,
+    words_per_panel: int = 14,
 ) -> str:
     attr_map = {row.panel_id: row for row in attribution}
     lines: list[str] = []
@@ -83,10 +91,16 @@ def _cast_context_for_beats(
                 if entry not in people:
                     people.append(entry)
         char_ids = ", ".join(beat.character_ids) if beat.character_ids else "(from cast below)"
+        evid = evidence_for_panels(beat.panel_ids, cards or []) if cards else ""
+        # A concrete per-beat word ceiling: every word over budget stretches this beat's
+        # panels on screen (audio locks the visuals), so vague "be brief" doesn't cut it.
+        max_words = max(12, len(beat.panel_ids) * words_per_panel)
         lines.append(
             f"Beat {beat.beat_id} [{', '.join(beat.panel_ids)}]: "
             f"char_ids={char_ids}; on_screen={'; '.join(people) or '(none)'}; plot={beat.plot_beat}\n"
-            f"  Tell the story event; panels illustrate — protagonist id={bible.protagonist_id or '?'}"
+            f"  MAX {max_words} words for this beat — hard limit, cut the weakest detail first.\n"
+            f"  EVIDENCE (narrate ONLY this):\n{evid or '(none)'}\n"
+            f"  Do not preview later locations — protagonist id={bible.protagonist_id or '?'}"
         )
     return "\n".join(lines)
 
@@ -154,8 +168,12 @@ def _parse_markdown_beats(path: Path) -> list[ScriptBeat]:
             beat_id += 1
             current_lines = []
         elif line.startswith("#") or line.startswith("**Hook:") or line == "---":
+            if line == "---":
+                break
             continue
         elif beat_id > 0 and line.strip():
+            if line.strip().lower().startswith("edit freely"):
+                break
             current_lines.append(line.strip())
 
     if current_lines and beat_id:
@@ -228,21 +246,7 @@ def _attach_missing_panels_to_beats(
 
 def _panel_cast_index(cards: list[SceneCard], bible: SeriesBible) -> str:
     """Compact panel → cast map for outline coverage (no frame captions)."""
-    lines: list[str] = []
-    for card in cards:
-        if not card.is_story:
-            continue
-        cast_parts: list[str] = []
-        for person in card.people:
-            mc_tag = " [MC]" if person.ref == bible.protagonist_id else ""
-            label = person.name_used or person.descriptor or person.ref
-            if person.ref in bible.characters:
-                profile = bible.characters[person.ref]
-                if not profile.canonical_name.lower().startswith(("guy ", "man ", "woman ", "blonde ")):
-                    label = profile.canonical_name
-            cast_parts.append(f"{label}{mc_tag}")
-        lines.append(f"{','.join(card.panel_ids)}: {'; '.join(cast_parts) or '(none)'}")
-    return "\n".join(lines)
+    return compact_panel_evidence(cards, bible)
 
 
 def _complete_json(llm: Any, system: str, user: str, *, fallback_model: str = "llama-3.3-70b-versatile") -> dict[str, Any]:
@@ -280,27 +284,232 @@ def _run_outline_pass(
     max_beats = int(get_nested(config, "script", "max_beats", default=18))
     system = template.format(max_beats=max_beats)
 
-    llm = get_llm_provider(config=config)
-    model_name = get_nested(config, "script", "model", default="gpt-4o-mini")
-    if hasattr(llm, "model"):
-        llm.model = model_name
+    seeded = preassign_outline_from_facts(synopsis, cards, bible, max_beats=max_beats)
+    console.print(f"[dim]Seeded outline from plot_facts → {len(seeded)} panel-grounded beats[/]")
+
+    llm = apply_stage_model(get_stage_llm("script", config), "script", config)
 
     all_panel_ids = sorted({pid for card in cards for pid in card.panel_ids}, key=_panel_sort_key)
     user = (
         f"Title: {meta.title}\nChapters: {meta.chapters}\n\n"
         f"Protagonist id: {bible.protagonist_id or '(detect from bible)'}\n"
-        f"Soft max beats: {max_beats}\n"
+        f"Return EXACTLY {len(seeded)} beats, beat_id 1..{len(seeded)}, panel_ids unchanged.\n"
         f"All story panel_ids to cover ({len(all_panel_ids)}): {', '.join(all_panel_ids)}\n\n"
         f"{naming_priority_rules(bible, config)}\n\n"
-        f"Chapter synopsis (SOURCE OF TRUTH):\n{format_synopsis_for_prompt(synopsis)}\n\n"
+        f"Chapter synopsis (arc + sticky cast; facts are a checklist, not free reassignment):\n"
+        f"{format_synopsis_for_prompt(synopsis)}\n\n"
         f"Story so far:\n{_story_so_far(bible, meta)}\n\n"
         f"Character bible:\n{format_bible_for_prompt(bible)}\n\n"
-        f"Panel cast index (assign every panel_id to a beat; do NOT caption frames):\n"
-        f"{_panel_cast_index(cards, bible)}"
+        f"SEEDED beats (KEEP panel_ids; smooth plot_beat wording only):\n"
+        f"{format_seeded_outline_for_prompt(seeded, cards)}\n\n"
+        f"Full panel evidence:\n{_scene_cards_to_context(cards, bible)}"
     )
-    data = _complete_json(llm, system, user)
-    outline = [ScriptOutlineBeat.model_validate(b) for b in data.get("beats", [])]
-    return str(data.get("hook", synopsis.logline)), outline
+    # The model reliably ignores the beat count on the first ask, so verify and re-ask
+    # once with the shortfall named. _reconcile_outline_panels is the backstop, but a
+    # collapsed outline throws away the LLM's wording for every merged beat — retrying
+    # is what actually keeps that wording.
+    attempt_user = user
+    for attempt in range(2):
+        try:
+            data = _complete_json(llm, system, attempt_user)
+            outline = [ScriptOutlineBeat.model_validate(b) for b in data.get("beats", [])]
+            if len(outline) < len(seeded) and attempt == 0:
+                console.print(
+                    f"[yellow]Outline returned {len(outline)}/{len(seeded)} beats — re-asking[/]"
+                )
+                attempt_user = (
+                    f"{user}\n\nYour previous reply returned {len(outline)} beats. "
+                    f"That is WRONG. Return all {len(seeded)} seeded beats, beat_id "
+                    f"1..{len(seeded)}, each with its seeded panel_ids unchanged. "
+                    "Rewrite only the plot_beat wording."
+                )
+                continue
+            # Prefer LLM wording but restore panel bindings from seed if LLM drifted
+            outline = _reconcile_outline_panels(seeded, outline)
+            if outline:
+                return str(data.get("hook", synopsis.logline)), outline
+        except Exception as exc:
+            console.print(f"[yellow]Outline LLM failed — using seeded outline:[/] {exc}")
+            break
+
+    return synopsis.logline or "Chapter recap", seeded
+
+
+def _reconcile_outline_panels(
+    seeded: list[ScriptOutlineBeat],
+    llm_beats: list[ScriptOutlineBeat],
+) -> list[ScriptOutlineBeat]:
+    """Keep LLM plot wording when possible, but never lose seed panel bindings."""
+    if not llm_beats:
+        return seeded
+    # The seed is the deterministic, panel-grounded structure; the LLM pass is only
+    # allowed to smooth wording. A materially shorter beat list means it merged scenes,
+    # and reconciling would dump every orphaned panel onto the survivors (one ch1 run
+    # produced a single 32-panel beat spanning half the chapter). Keep the seed's
+    # structure and graft on whatever wording we can match by beat_id.
+    if len(llm_beats) < max(2, int(len(seeded) * 0.75)):
+        console.print(
+            f"[yellow]Outline pass collapsed {len(seeded)} seeded beats to {len(llm_beats)}[/] — "
+            "keeping seeded structure, grafting LLM wording only"
+        )
+        llm_plot = {b.beat_id: b.plot_beat.strip() for b in llm_beats if b.plot_beat.strip()}
+        return [
+            b.model_copy(update={"plot_beat": llm_plot.get(b.beat_id, b.plot_beat)})
+            for b in seeded
+        ]
+    seed_by_id = {b.beat_id: b for b in seeded}
+    # If LLM kept same beat count and mostly same panels, accept with seed fallback per beat
+    reconciled: list[ScriptOutlineBeat] = []
+    used_panels: set[str] = set()
+    for beat in llm_beats:
+        seed = seed_by_id.get(beat.beat_id)
+        panels = [pid for pid in beat.panel_ids if pid]
+        if seed and (not panels or set(panels) != set(seed.panel_ids)):
+            # If overlap is weak, force seed panels
+            overlap = set(panels) & set(seed.panel_ids)
+            if len(overlap) < max(1, len(seed.panel_ids) // 2):
+                panels = list(seed.panel_ids)
+                plot = beat.plot_beat.strip() or seed.plot_beat
+                char_ids = beat.character_ids or seed.character_ids
+            else:
+                plot = beat.plot_beat.strip() or seed.plot_beat
+                char_ids = beat.character_ids or seed.character_ids
+        else:
+            plot = beat.plot_beat
+            char_ids = beat.character_ids
+            if seed and not panels:
+                panels = list(seed.panel_ids)
+        panels = [pid for pid in panels if pid not in used_panels]
+        if not panels and seed:
+            panels = [pid for pid in seed.panel_ids if pid not in used_panels]
+        if not panels:
+            continue
+        used_panels.update(panels)
+        reconciled.append(
+            ScriptOutlineBeat(
+                beat_id=len(reconciled) + 1,
+                panel_ids=sorted(panels, key=_panel_sort_key),
+                character_ids=char_ids,
+                plot_beat=plot,
+            )
+        )
+    # Attach any seed panels the LLM dropped
+    missing = [pid for b in seeded for pid in b.panel_ids if pid not in used_panels]
+    if missing and reconciled:
+        shims = [
+            ScriptBeat(
+                beat_id=b.beat_id,
+                panel_ids=b.panel_ids,
+                narration=b.plot_beat,
+                character_ids=b.character_ids,
+            )
+            for b in reconciled
+        ]
+        all_ids = sorted({pid for b in seeded for pid in b.panel_ids}, key=_panel_sort_key)
+        shims = _attach_missing_panels_to_beats(all_ids, shims)
+        plot_by_id = {r.beat_id: r.plot_beat for r in reconciled}
+        reconciled = [
+            ScriptOutlineBeat(
+                beat_id=s.beat_id,
+                panel_ids=s.panel_ids,
+                character_ids=s.character_ids,
+                plot_beat=plot_by_id.get(s.beat_id, s.narration),
+            )
+            for s in shims
+        ]
+    return reconciled or seeded
+
+
+def _token_overlap(a: str, b: str) -> float:
+    """Share of a's content tokens that also appear in b (hook-vs-beat-1 dedup)."""
+    ta = {t for t in re.findall(r"[a-z0-9]+", a.lower()) if len(t) > 3}
+    tb = {t for t in re.findall(r"[a-z0-9]+", b.lower()) if len(t) > 3}
+    if not ta:
+        return 0.0
+    return len(ta & tb) / len(ta)
+
+
+def _mark_closer_beat(
+    outline_beats: list[ScriptOutlineBeat],
+    synopsis: ChapterSynopsis,
+) -> list[ScriptOutlineBeat]:
+    """Flag the final outline beat as the chapter closer and fold the open thread into
+    its plot so the narration ends on a forward hook instead of trailing off."""
+    if not outline_beats:
+        return outline_beats
+    last = outline_beats[-1]
+    thread = next((t.strip() for t in synopsis.open_threads if t.strip()), "")
+    plot = last.plot_beat
+    if thread and thread.lower() not in plot.lower():
+        plot = f"{plot} / CLOSER — end on this open thread: {thread}"[:400]
+    outline_beats[-1] = last.model_copy(update={"is_closer": True, "plot_beat": plot})
+    return outline_beats
+
+
+def _bible_names_in_text(text: str, bible: SeriesBible) -> list[str]:
+    """Canonical main/supporting names present in a narration string."""
+    low = text.lower()
+    hits: list[str] = []
+    for profile in bible.characters.values():
+        if profile.merged_into or not profile.canonical_name.strip():
+            continue
+        if profile.tier.value not in ("main", "supporting"):
+            continue
+        name = profile.canonical_name.strip()
+        # tolerate hyphen/space and unicode-hyphen variants
+        variants = {name.lower(), name.lower().replace("-", " "), name.lower().replace("‑", "-")}
+        if any(v in low for v in variants):
+            hits.append(name)
+    return hits
+
+
+def _chunked(seq: list[Any], size: int) -> list[list[Any]]:
+    return [seq[i : i + size] for i in range(0, len(seq), size)]
+
+
+def _narration_chunk_user(
+    meta: ProjectMeta,
+    chunk: list[ScriptOutlineBeat],
+    hook: str,
+    bible: SeriesBible,
+    attribution: list[PanelCast],
+    synopsis: ChapterSynopsis,
+    config: dict[str, Any],
+    cards: list[SceneCard] | None,
+    *,
+    introduced: list[str],
+    running_summary: list[str],
+) -> str:
+    closer_note = ""
+    if any(b.is_closer for b in chunk):
+        closer_ids = [b.beat_id for b in chunk if b.is_closer]
+        thread = next((t.strip() for t in synopsis.open_threads if t.strip()), "")
+        closer_note = (
+            f"\nBeat(s) {closer_ids} are the CLOSER — this is the chapter's ending. "
+            f"Tie back to the core tension ({synopsis.logline or 'the chapter logline'}) in one clause, "
+            f"then land on this open thread as a concrete forward hook: {thread or '(derive from the arc)'}. "
+            f"Do not trail off mid-moment.\n"
+        )
+    return (
+        f"Title: {meta.title}\nChapters: {meta.chapters}\nHook: {hook}\n"
+        f"{closer_note}\n"
+        f"Already introduced (never repeat their intro clause): "
+        f"{', '.join(introduced) or '(nobody yet — this chunk contains the first beats)'}\n\n"
+        f"{naming_priority_rules(bible, config)}\n\n"
+        f"Chapter synopsis (naming/continuity only — do NOT preview later acts):\n"
+        f"{format_synopsis_for_prompt(synopsis)}\n\n"
+        f"Story so far:\n{_story_so_far(bible, meta)}\n"
+        + (
+            "Narration already written this chapter (continue seamlessly, do not repeat):\n"
+            + "\n".join(running_summary[-12:])
+            + "\n"
+            if running_summary
+            else ""
+        )
+        + f"\nCharacter bible:\n{format_bible_for_prompt(bible)}\n\n"
+        f"Outline beats to narrate now + EVIDENCE (one narration per beat_id):\n"
+        f"{_cast_context_for_beats(chunk, attribution, bible, cards, words_per_panel=int(get_nested(config, 'script', 'words_per_panel_target', default=14)))}"
+    )
 
 
 def _run_narration_pass(
@@ -311,40 +520,100 @@ def _run_narration_pass(
     attribution: list[PanelCast],
     synopsis: ChapterSynopsis,
     config: dict[str, Any],
-) -> list[ScriptBeat]:
+    cards: list[SceneCard] | None = None,
+) -> tuple[list[ScriptBeat], list[int]]:
+    """Chunked narration: outline beat_ids/panel_ids are authoritative; the LLM only
+    supplies narration text. Returns (beats, beat_ids_missing_after_retry)."""
     template = _load_prompt_template("recap.txt")
     target_wpm = get_nested(config, "script", "target_wpm", default=150)
     commentary = meta.commentary_level or get_nested(config, "script", "commentary_level", default="light")
     genz_level = get_nested(config, "script", "genz_level", default="medium")
-    max_asides = int(get_nested(config, "script", "max_narrator_asides", default=1))
     ban = ", ".join(banned_words(config))
+    chunk_size = max(1, int(get_nested(config, "script", "narration_chunk_size", default=5)))
 
     system = template.format(
         target_wpm=target_wpm,
         commentary_level=commentary,
         genz_level=genz_level,
-        max_narrator_asides=max_asides,
         ban_words=ban,
         naming_priority_rules=naming_priority_rules(bible, config),
     )
 
-    llm = get_llm_provider(config=config)
-    model_name = get_nested(config, "script", "model", default="gpt-4o-mini")
-    if hasattr(llm, "model"):
-        llm.model = model_name
+    llm = apply_stage_model(get_stage_llm("script", config), "script", config)
 
-    user = (
-        f"Title: {meta.title}\nChapters: {meta.chapters}\nHook: {hook}\n\n"
-        f"Protagonist id: {bible.protagonist_id} — full name only in beat 1; then MC/protagonist/he\n\n"
-        f"{naming_priority_rules(bible, config)}\n\n"
-        f"Chapter synopsis (SOURCE OF TRUTH):\n{format_synopsis_for_prompt(synopsis)}\n\n"
-        f"Story so far:\n{_story_so_far(bible, meta)}\n\n"
-        f"Character bible:\n{format_bible_for_prompt(bible)}\n\n"
-        f"Beat outline (convert plot_beat to narration; keep beat_id and panel_ids):\n"
-        f"{_cast_context_for_beats(outline_beats, attribution, bible)}"
-    )
-    data = _complete_json(llm, system, user)
-    return [ScriptBeat.model_validate(b) for b in data.get("beats", [])]
+    introduced: list[str] = []
+    running_summary: list[str] = []
+    beats_out: list[ScriptBeat] = []
+    missing: list[int] = []
+
+    for chunk in _chunked(outline_beats, chunk_size):
+        user = _narration_chunk_user(
+            meta, chunk, hook, bible, attribution, synopsis, config, cards,
+            introduced=introduced, running_summary=running_summary,
+        )
+        got: dict[int, str] = {}
+        try:
+            data = _complete_json(llm, system, user)
+            for item in data.get("beats", []):
+                if isinstance(item, dict) and str(item.get("narration", "")).strip():
+                    got[int(item.get("beat_id", -1))] = str(item["narration"]).strip()
+        except Exception as exc:
+            console.print(f"[yellow]Narration chunk failed, retrying per beat:[/] {exc}")
+
+        for ob in chunk:
+            narration = got.get(ob.beat_id, "")
+            if not narration:
+                narration = _retry_single_beat(
+                    llm, system, meta, ob, hook, bible, attribution, synopsis, config, cards,
+                    introduced=introduced, running_summary=running_summary,
+                )
+            if not narration:
+                missing.append(ob.beat_id)
+                continue
+            beat = ScriptBeat(
+                beat_id=ob.beat_id,
+                panel_ids=list(ob.panel_ids),  # authoritative — the LLM cannot drift panels
+                narration=narration,
+                character_ids=list(ob.character_ids),
+            )
+            beats_out.append(beat)
+            running_summary.append(f"Beat {ob.beat_id}: {narration[:180]}")
+            for name in _bible_names_in_text(narration, bible):
+                if name not in introduced:
+                    introduced.append(name)
+
+    return beats_out, missing
+
+
+def _retry_single_beat(
+    llm: Any,
+    system: str,
+    meta: ProjectMeta,
+    beat: ScriptOutlineBeat,
+    hook: str,
+    bible: SeriesBible,
+    attribution: list[PanelCast],
+    synopsis: ChapterSynopsis,
+    config: dict[str, Any],
+    cards: list[SceneCard] | None,
+    *,
+    introduced: list[str],
+    running_summary: list[str],
+) -> str:
+    """Regenerate exactly one beat. Two attempts; '' if both fail (caller gates on it)."""
+    for attempt in range(2):
+        try:
+            user = _narration_chunk_user(
+                meta, [beat], hook, bible, attribution, synopsis, config, cards,
+                introduced=introduced, running_summary=running_summary,
+            )
+            data = _complete_json(llm, system, user)
+            for item in data.get("beats", []):
+                if isinstance(item, dict) and str(item.get("narration", "")).strip():
+                    return str(item["narration"]).strip()
+        except Exception as exc:
+            console.print(f"[yellow]Single-beat retry {attempt + 1} failed for beat {beat.beat_id}:[/] {exc}")
+    return ""
 
 
 def generate_script(
@@ -357,6 +626,10 @@ def generate_script(
     if paths["script_draft"].exists() and not force:
         console.print(f"[dim]Using existing script draft[/] → {paths['script_draft']}")
         return load_script_beats(paths)
+
+    from manhwa2vid.script.grounding import configure_grounding_keywords
+
+    configure_grounding_keywords(config)
 
     if not paths["scene_enriched_json"].exists() or force:
         run_cast_linking(meta, paths, config, force=force)
@@ -387,19 +660,140 @@ def generate_script(
     bible = load_series_bible(meta.series_slug, meta.title)
 
     hook, outline_beats = _run_outline_pass(meta, cards, bible, synopsis, config)
+    outline_beats = _mark_closer_beat(outline_beats, synopsis)
     save_json(
         paths["script_outline_json"],
         {"hook": hook, "beats": [b.model_dump(mode="json") for b in outline_beats]},
     )
 
-    beats = _run_narration_pass(meta, outline_beats, hook, bible, attribution, synopsis, config)
+    beats, missing_beats = _run_narration_pass(
+        meta, outline_beats, hook, bible, attribution, synopsis, config, cards
+    )
 
-    all_panels = sorted({pid for card in cards for pid in card.panel_ids}, key=_panel_sort_key)
+    from manhwa2vid.qa import QAReport, enforce, qa_forced
+
+    report = QAReport(stage="script")
+    outline_ids = [b.beat_id for b in outline_beats]
+    script_ids = [b.beat_id for b in beats]
+    report.add(
+        "beat-conservation",
+        not missing_beats and script_ids == outline_ids,
+        f"outline={len(outline_ids)} script={len(script_ids)} missing={missing_beats}"
+        if missing_beats or script_ids != outline_ids else "",
+        outline_ids=outline_ids, script_ids=script_ids, missing=missing_beats,
+    )
+
+    # A beat carrying far more panels than its peers is the signature of a collapsed
+    # outline: the reconciler re-homes every orphaned panel onto the survivors, and the
+    # result is one beat narrating half the chapter (its panels then dwell for seconds
+    # each with nothing said about them). beat-conservation cannot see this — it compares
+    # outline to script AFTER the collapse already happened.
+    panel_counts = {b.beat_id: len(b.panel_ids) for b in beats}
+    if panel_counts:
+        median = sorted(panel_counts.values())[len(panel_counts) // 2]
+        bloated = {bid: n for bid, n in panel_counts.items() if n > max(8, median * 3)}
+    else:
+        bloated = {}
+    report.add(
+        "beat-panel-balance",
+        not bloated,
+        f"beat(s) carry far more panels than the median ({median if panel_counts else 0}): "
+        f"{bloated}" if bloated else "",
+        bloated={str(k): v for k, v in bloated.items()},
+    )
+
+    # Universe = the story panel INVENTORY (panels.story.json), never the scene cards:
+    # a panel the scene stage dropped must count as uncovered here, not vanish silently.
+    from manhwa2vid.panels.filter import load_story_panels
+
+    all_panels = sorted({p.id for p in load_story_panels(paths)}, key=_panel_sort_key)
     covered = _covered_panel_ids(beats)
-    if len(covered) < len(all_panels):
+    rehomed = len(all_panels) - len(covered & set(all_panels))
+    if covered != set(all_panels) and rehomed:
         beats = _attach_missing_panels_to_beats(all_panels, beats)
+    report.add(
+        "panel-conservation",
+        True if rehomed == 0 else ("warn" if rehomed <= max(1, len(all_panels) // 10) else False),
+        f"{rehomed} of {len(all_panels)} story-inventory panel(s) re-homed to nearest beat "
+        "(includes any the scene stage dropped)" if rehomed else "",
+        rehomed=rehomed, total=len(all_panels),
+    )
 
-    beats = lint_and_rewrite_script(beats, bible, paths["cast_attribution_json"], config)
+    hook_overlap = _token_overlap(hook, beats[0].narration if beats else "")
+    report.add(
+        "hook-dedup",
+        True if hook_overlap <= 0.6 else "warn",
+        f"beat 1 repeats {hook_overlap:.0%} of the hook" if hook_overlap > 0.6 else "",
+        overlap=round(hook_overlap, 2),
+    )
+    closer = next((b for b in outline_beats if b.is_closer), None)
+    report.add("closer-present", closer is not None and bool(beats) and beats[-1].beat_id == (closer.beat_id if closer else -1),
+               "" if closer else "no closer beat in outline")
+    enforce(report, paths["root"], force=qa_forced(config))
+
+    beats = lint_and_rewrite_script(
+        beats,
+        bible,
+        paths["cast_attribution_json"],
+        config,
+        scene_cards=cards,
+    )
+
+    if get_nested(config, "script", "verify_alignment", default=True):
+        from manhwa2vid.panels.filter import load_story_panels
+        from manhwa2vid.script.lint import rewrite_beat
+        from manhwa2vid.script.verify import audit_frame_alignment
+
+        panel_map = {p.id: p for p in load_story_panels(paths)}
+        audit, major = audit_frame_alignment(beats, panel_map, paths["root"], config, bible=bible)
+        if major:
+            console.print(f"[yellow]Alignment audit:[/] rewriting {len(major)} beat(s) with major unsupported claims")
+            fixed: list[ScriptBeat] = []
+            for beat in beats:
+                if beat.beat_id in major:
+                    issues = [f"unsupported claim: {c}" for c in major[beat.beat_id]]
+                    new_text = rewrite_beat(
+                        beat, bible, attribution, config, issues=issues, scene_cards=cards
+                    )
+                    fixed.append(beat.model_copy(update={"narration": new_text}))
+                else:
+                    fixed.append(beat)
+            beats = fixed
+
+            # Converge: re-audit only the rewritten beats. A beat whose major claims
+            # SURVIVE its rewrite falls back to the deterministic outline plot_beat —
+            # terse but panel-grounded always beats fluent but invented. Without this
+            # floor the audit's findings never reliably reached the shipped narration.
+            rewritten = [b for b in beats if b.beat_id in major]
+            _re_report, still_major = audit_frame_alignment(rewritten, panel_map, paths["root"], config, bible=bible)
+            if still_major:
+                from manhwa2vid.script.lint import local_sanitize_narration, rotate_protagonist_name
+
+                plot_by_id = {ob.beat_id: ob.plot_beat for ob in outline_beats}
+                console.print(
+                    f"[yellow]Alignment audit:[/] {len(still_major)} beat(s) still unsupported after "
+                    f"rewrite — falling back to grounded outline text: {sorted(still_major)}"
+                )
+                fallbacks: list[ScriptBeat] = []
+                for beat in beats:
+                    if beat.beat_id in still_major and beat.beat_id in plot_by_id:
+                        grounded = plot_by_id[beat.beat_id].split("/ CLOSER")[0].strip()
+                        grounded = rotate_protagonist_name(local_sanitize_narration(grounded), bible)
+                        fallbacks.append(beat.model_copy(update={"narration": grounded}))
+                    else:
+                        fallbacks.append(beat)
+                beats = fallbacks
+            audit.add(
+                "grounded-fallback",
+                "warn" if still_major else True,
+                f"beat(s) {sorted(still_major)} replaced with outline text" if still_major else "",
+                beats=sorted(still_major),
+            )
+        enforce(audit, paths["root"], force=qa_forced(config))
+
+    from manhwa2vid.script.scorecard import score_script
+
+    enforce(score_script(beats, bible, config), paths["root"], force=qa_forced(config))
 
     draft = ScriptDraft(
         title=meta.title,
@@ -411,4 +805,13 @@ def generate_script(
     save_json(paths["script_json"], draft)
     paths["script_draft"].write_text(_beats_to_markdown(draft), encoding="utf-8")
     console.print(f"[green]Script draft written[/] → {paths['script_draft']} ({len(beats)} beats)")
+
+    try:
+        from manhwa2vid.review.storyboard import write_storyboard
+
+        board = write_storyboard(paths, draft)
+        console.print(f"[dim]Storyboard for review →[/] {board}")
+    except Exception as exc:  # a review artifact must never block the stage
+        console.print(f"[yellow]Storyboard generation failed:[/] {type(exc).__name__}: {exc}")
+
     return draft

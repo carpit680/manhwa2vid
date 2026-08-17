@@ -19,13 +19,21 @@ class TTSProvider(ABC):
 
 
 def write_silent_wav(path: Path, duration: float = 3.0, rate: int = 24000) -> None:
-    nframes = int(duration * rate)
+    """Write a quiet sine tone (not true silence) so ffmpeg loudnorm stays valid."""
+    import math
+
+    nframes = max(1, int(duration * rate))
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Quiet 440 Hz tone — silent WAVs make loudnorm emit NaN.
+    frames = bytearray()
+    for i in range(nframes):
+        sample = int(800 * math.sin(2 * math.pi * 440 * i / rate))
+        frames += struct.pack("<h", sample)
     with wave.open(str(path), "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.setframerate(rate)
-        wf.writeframes(struct.pack("<h", 0) * nframes)
+        wf.writeframes(frames)
 
 
 class MockTTSProvider(TTSProvider):
@@ -50,6 +58,18 @@ def get_tts_provider(config: dict[str, Any] | None = None) -> TTSProvider:
 
     if name == "mock":
         return MockTTSProvider()
+
+    if name == "kokoro":
+        try:
+            from manhwa2vid.tts.kokoro import KokoroTTSProvider
+
+            return KokoroTTSProvider()
+        except ImportError as exc:
+            console.print(
+                "[yellow]kokoro not installed.[/] "
+                'Install with: pip install -e ".[tts-kokoro]"'
+            )
+            raise exc
 
     if name == "chatterbox":
         try:

@@ -25,7 +25,8 @@ Return JSON:
   ],
   "open_threads": [
     "What the next chapter might continue"
-  ]
+  ],
+  "narrative_structure": "Temporal devices the chapter uses and where the frame shifts, e.g. 'Opens with a flashforward to a later dungeon fight; the present day begins at the city skyline shot; strictly chronological after that.' Empty string if strictly chronological."
 }}
 
 Rules:
@@ -37,3 +38,6 @@ Rules:
 - Do not write thematic essays ("highlighting the risks of being a hunter"). Stick to plot.
 - named_cast should cover protagonist + every supporting person who matters this chapter.
 - Prefer 3–6 acts in arc.
+- Manhwa chapters often OPEN mid-crisis as a flashforward, then cut to the calm present.
+  If the opening scene's tone/location breaks hard from what follows (a bloody fight, then
+  a peaceful morning), say so in narrative_structure — do NOT force it into chronology.

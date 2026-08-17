@@ -53,6 +53,25 @@ def _find_gutter_rows(gray: np.ndarray, threshold_ratio: float, min_gap: int) ->
     return gutters
 
 
+def panel_ink_stats(img: np.ndarray) -> tuple[float, float]:
+    """(ink_ratio, dark_ratio) for a BGR or grayscale image array.
+
+    ink = fraction of pixels below near-white (gray < 245); dark = fraction below mid
+    (gray < 128). Blank page-transition slivers score low on both; every legitimate story
+    panel measured so far clears ink 0.32 / dark 0.24 comfortably.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    return float((gray < 245).mean()), float((gray < 128).mean())
+
+
+def panel_ink_stats_from_file(path: Path) -> tuple[float, float] | None:
+    """Lazy backfill for panels persisted before ink stats existed."""
+    img = cv2.imread(str(path))
+    if img is None:
+        return None
+    return panel_ink_stats(img)
+
+
 def _panel_metadata(width: int, height: int, config: dict[str, Any], *, split_method: str) -> dict[str, Any]:
     aspect = height / max(width, 1)
     scroll_threshold = float(get_nested(config, "panels", "strip_scroll_aspect", default=2.0))
@@ -82,6 +101,7 @@ def _make_panel(
     panel_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(panel_path), crop)
     meta = _panel_metadata(w, ph, config, split_method=split_method)
+    ink, dark = panel_ink_stats(crop)
     return Panel(
         id=panel_id,
         page_num=page_num,
@@ -91,6 +111,8 @@ def _make_panel(
         split_method=split_method,
         aspect_ratio=meta["aspect_ratio"],
         camera_hint=meta["camera_hint"],
+        ink_ratio=ink,
+        dark_ratio=dark,
     )
 
 
@@ -273,6 +295,7 @@ def _panels_one_to_one(
         panel_path.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(panel_path), img)
         meta = _panel_metadata(w, h, config, split_method="image_file")
+        ink, dark = panel_ink_stats(img)
         panels.append(
             Panel(
                 id=panel_id,
@@ -283,6 +306,8 @@ def _panels_one_to_one(
                 split_method="image_file",
                 aspect_ratio=meta["aspect_ratio"],
                 camera_hint=meta["camera_hint"],
+                ink_ratio=ink,
+                dark_ratio=dark,
             )
         )
     return panels
@@ -300,7 +325,7 @@ def split_panels(
         console.print(f"[dim]Using cached panels ({len(data)} panels)[/]")
         return [Panel.model_validate(p) for p in data]
 
-    for stale in ("panels_story_json", "excluded_panels_json", "scene_normalized_json"):
+    for stale in ("panels_story_json", "excluded_panels_json", "scene_normalized_json", "scene_partial_json"):
         paths[stale].unlink(missing_ok=True)
 
     page_infos = _load_manifest(paths["pages"])

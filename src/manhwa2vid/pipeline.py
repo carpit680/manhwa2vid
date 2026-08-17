@@ -56,8 +56,11 @@ def run_stage(
     force: bool = False,
     preview: bool = False,
     final: bool = False,
+    force_past_qa: bool = False,
 ) -> None:
     meta, paths, config, checkpoint = load_project(project_dir)
+    if force_past_qa:
+        config["_qa_force"] = True  # read by qa.qa_forced() inside stages
 
     if stage == PipelineStage.INGEST:
         ingest_source(meta, paths, config, force=force)
@@ -99,7 +102,7 @@ def run_stage(
         raise ValueError(f"Unknown stage: {stage}")
 
 
-def run_all_until_review(project_dir: Path, force: bool = False) -> None:
+def run_all_until_review(project_dir: Path, force: bool = False, force_past_qa: bool = False) -> None:
     """Run ingest through script generation, stopping before TTS."""
     stages = [
         PipelineStage.INGEST,
@@ -111,7 +114,7 @@ def run_all_until_review(project_dir: Path, force: bool = False) -> None:
     ]
     for stage in stages:
         console.print(f"[bold cyan]Running stage:[/] {stage.value}")
-        run_stage(project_dir, stage, force=force)
+        run_stage(project_dir, stage, force=force, force_past_qa=force_past_qa)
     console.print(
         "[yellow]Pipeline paused for script review.[/]\n"
         f"Edit: {project_paths(project_dir)['script_draft']}\n"

@@ -18,7 +18,7 @@ from manhwa2vid.characters.resolve import resolve_character_ref
 from manhwa2vid.characters.wiki import fetch_wiki_cast, wiki_protagonist_hint
 from manhwa2vid.config import find_repo_root, get_nested, load_config
 from manhwa2vid.ingest.images import discover_chapter_dirs, iter_image_files, parse_chapter_range
-from manhwa2vid.llm.provider import get_llm_provider
+from manhwa2vid.llm.provider import apply_stage_model, get_stage_llm
 from manhwa2vid.models import (
     CharacterProfile,
     CharacterTier,
@@ -193,10 +193,7 @@ def run_character_scout(
             console.print(f"[yellow]No lookahead chapters found for range {la_range}[/]")
             chapter_dirs = []
 
-        llm = get_llm_provider(config=config)
-        vision_model = get_nested(config, "scene", "model") or get_nested(config, "llm", "groq", "vision_model")
-        if vision_model and hasattr(llm, "vision_model"):
-            llm.vision_model = vision_model
+        llm = apply_stage_model(get_stage_llm("scene", config), "scene", config)
 
         for chapter_num, chapter_dir in chapter_dirs:
             scout_ch_dir = spaths["scout_dir"] / f"ch{chapter_num:02d}"

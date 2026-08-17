@@ -17,6 +17,24 @@ from manhwa2vid.config import env_or, get_nested, load_config
 from manhwa2vid.llm.vision_utils import encode_image_for_api
 
 
+# Longest single wait we'll honor for a daily-token (TPD) limit before giving up. The TPD
+# window is rolling, so short server-suggested waits are worth sleeping through on long
+# runs; anything beyond this means "come back much later" and should surface as an error
+# (incremental checkpoints make the re-run cheap).
+_TPD_MAX_WAIT_S = 20 * 60.0
+
+
+def _parse_retry_after(msg: str) -> float | None:
+    match = re.search(r"try again in (?:(\d+)m)?([\d.]+)(?:s|ms)", msg)
+    if not match:
+        return None
+    minutes = float(match.group(1) or 0)
+    seconds = float(match.group(2))
+    if "ms" in match.group(0):
+        seconds /= 1000.0
+    return minutes * 60.0 + seconds
+
+
 def _retry_on_rate_limit(call: Any, *, max_attempts: int = 8) -> Any:
     last_exc: Exception | None = None
     for attempt in range(max_attempts):
@@ -25,18 +43,104 @@ def _retry_on_rate_limit(call: Any, *, max_attempts: int = 8) -> Any:
         except Exception as exc:
             last_exc = exc
             msg = str(exc).lower()
-            if "tokens per day" in msg or "tpd" in msg:
+            if "request too large" in msg or "reduce your message size" in msg or "413" in msg:
+                # A per-request size cap: retrying the identical request can never succeed.
+                # Raise immediately so the caller's shrink-and-retry handler engages.
                 raise
             if "rate_limit" not in msg and "429" not in msg:
                 raise
+            suggested = _parse_retry_after(msg)
+            if "tokens per day" in msg or "tpd" in msg:
+                # Daily budget: wait only if the server names a bounded, rolling-window
+                # wait; otherwise fail fast so the caller's checkpoint can resume later.
+                if suggested is None or suggested > _TPD_MAX_WAIT_S:
+                    raise
+                from rich.console import Console
+
+                Console().print(
+                    f"[yellow]Daily token limit — waiting {suggested / 60:.1f} min for the window to roll[/]"
+                )
+                time.sleep(suggested + 1.0)
+                continue
             wait = min(60.0, 2 ** attempt)
-            match = re.search(r"try again in ([\d.]+)s", msg)
-            if match:
-                wait = max(wait, float(match.group(1)) + 0.5)
+            if suggested is not None:
+                wait = max(wait, suggested + 0.5)
             time.sleep(wait)
     if last_exc is not None:
         raise last_exc
     raise RuntimeError("rate limit retries exhausted")
+
+
+def _extract_json_object(text: str) -> str:
+    """Strip thinking blocks / prose and return the first top-level JSON object.
+
+    Must return exactly ONE complete object. Models emit trailing prose, markdown fences,
+    and sometimes a second object after the first — a naive first-brace-to-last-brace slice
+    yields 'Extra data' or 'Expecting , delimiter' at the caller's json.loads(). Decoding
+    incrementally from each candidate '{' is the only way to cut at the real object end.
+    """
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+    # ```json fences wrap the object often enough to be worth stripping outright.
+    cleaned = re.sub(r"```(?:json)?\s*(.*?)\s*```", r"\1", cleaned, flags=re.S).strip()
+
+    decoder = json.JSONDecoder()
+    start = cleaned.find("{")
+    while start != -1:
+        try:
+            _obj, end = decoder.raw_decode(cleaned, start)
+        except ValueError:
+            start = cleaned.find("{", start + 1)
+            continue
+        return cleaned[start:end]
+
+    # Nothing decoded cleanly. Real generations fail in ways no single heuristic covers:
+    # literal newlines inside strings, trailing commas, single-quoted keys, bad backslash
+    # escapes, and unescaped quotes in prose (which are genuinely ambiguous — a quote
+    # before a comma looks exactly like end-of-string). Hand-rolled repair loses that
+    # game, so delegate to a parser built for it.
+    try:
+        from json_repair import repair_json
+
+        repaired = repair_json(cleaned, return_objects=False)
+        if repaired and repaired not in ("{}", '""', "[]"):
+            parsed = json.loads(repaired)  # only hand back something that actually parses
+            # This function's contract is ONE OBJECT — every caller does data.get(...).
+            # Repair happily produces an array when the model emitted a bare list or a
+            # single object wrapped in brackets; returning that raised
+            # "AttributeError: 'list' object has no attribute 'get'" mid vision run.
+            if isinstance(parsed, dict):
+                return repaired
+            if isinstance(parsed, list):
+                first = next((item for item in parsed if isinstance(item, dict)), None)
+                if first is not None:
+                    return json.dumps(first)
+    except Exception:
+        pass
+
+    # Fall back to a brace-balanced slice so the caller sees a best-effort object
+    # rather than prose.
+    start = cleaned.find("{")
+    if start == -1:
+        return cleaned or "{}"
+    depth = 0
+    in_string = False
+    escaped = False
+    for i, ch in enumerate(cleaned[start:], start):
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+        elif ch == '"':
+            in_string = not in_string
+        elif not in_string:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return cleaned[start : i + 1]
+    return cleaned[start:] or "{}"
 
 
 class LLMProvider(ABC):
@@ -88,39 +192,106 @@ class OpenAIProvider(LLMProvider):
         return resp.choices[0].message.content or "{}"
 
 
-class GroqProvider(LLMProvider):
-    """Groq Cloud — OpenAI-compatible API for fast LLM + VLM inference."""
+def _is_request_too_large(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "request too large" in msg or "reduce your message size" in msg or "413" in msg
 
-    GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+
+def _shrink_middle(text: str, keep_ratio: float = 0.7) -> str:
+    """Drop the middle of an oversized prompt, keeping head (instructions/context) and
+    tail (the seed/outline being worked on). Free tiers cap tokens per REQUEST, so long
+    chapters must degrade gracefully instead of dying."""
+    n = len(text)
+    keep = max(500, int(n * keep_ratio / 2))
+    if keep * 2 >= n:
+        return text
+    return text[:keep] + "\n…[evidence trimmed to fit the request size limit]…\n" + text[n - keep:]
+
+
+def _is_json_mode_error(exc: Exception) -> bool:
+    """Did the request fail *because* of JSON mode, rather than for a real reason?"""
+    msg = str(exc).lower()
+    return any(
+        token in msg
+        for token in ("json_validate_failed", "response_format", "json mode", "json_object")
+    )
+
+
+class OpenAICompatProvider(LLMProvider):
+    """Shared implementation for OpenAI-compatible chat APIs (Groq, Gemini, Mistral).
+
+    Subclasses only declare their endpoint, key env vars, and default models. Rate-limit
+    retries, vision encoding, and the JSON-mode fallback are handled once here.
+    """
+
+    BASE_URL: str = ""
+    API_KEY_ENVS: tuple[str, ...] = ()
+    TEXT_MODEL_ENVS: tuple[str, ...] = ()
+    VISION_MODEL_ENVS: tuple[str, ...] = ()
+    DEFAULT_TEXT_MODEL: str = ""
+    DEFAULT_VISION_MODEL: str = ""
+    MAX_VISION_TOKENS: int = 4096
 
     def __init__(self, text_model: str | None = None, vision_model: str | None = None) -> None:
         from openai import OpenAI
 
-        self.client = OpenAI(
-            api_key=os.getenv("GROQ_API_KEY"),
-            base_url=self.GROQ_BASE_URL,
-        )
-        self.model = text_model or env_or(
-            "llama-3.3-70b-versatile",
-            "GROQ_TEXT_MODEL",
-        )
-        self.vision_model = vision_model or env_or(
-            "meta-llama/llama-4-scout-17b-16e-instruct",
-            "GROQ_VISION_MODEL",
-        )
+        api_key = next((os.getenv(env) for env in self.API_KEY_ENVS if os.getenv(env)), None)
+        self.client = OpenAI(api_key=api_key, base_url=self.BASE_URL)
+        self.model = text_model or env_or(self.DEFAULT_TEXT_MODEL, *self.TEXT_MODEL_ENVS)
+        self.vision_model = vision_model or env_or(self.DEFAULT_VISION_MODEL, *self.VISION_MODEL_ENVS)
+
+    def _extra_body(self, model: str) -> dict[str, Any] | None:
+        """Per-model request tweaks. Thinking models otherwise spend their whole token
+        budget on <think> and return an empty/truncated body."""
+        if "qwen" in model.lower():
+            return {"reasoning_effort": "none"}
+        return None
+
+    def available_models(self) -> list[str]:
+        """Model ids this key can actually reach — availability is key-dependent."""
+        try:
+            return sorted(m.id for m in self.client.models.list().data)
+        except Exception:
+            return []
 
     def complete(self, system: str, user: str, *, json_mode: bool = False) -> str:
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        }
-        if json_mode:
-            kwargs["response_format"] = {"type": "json_object"}
-        resp = _retry_on_rate_limit(lambda: self.client.chat.completions.create(**kwargs))
-        return resp.choices[0].message.content or ""
+        def call(use_json: bool, user_text: str) -> Any:
+            kwargs: dict[str, Any] = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_text},
+                ],
+            }
+            extra = self._extra_body(self.model)
+            if extra:
+                kwargs["extra_body"] = extra
+            if use_json:
+                kwargs["response_format"] = {"type": "json_object"}
+            return self.client.chat.completions.create(**kwargs)
+
+        resp = None
+        current = user
+        for shrink_attempt in range(4):
+            try:
+                resp = _retry_on_rate_limit(lambda: call(json_mode, current))
+                break
+            except Exception as exc:
+                if _is_request_too_large(exc) and shrink_attempt < 3:
+                    from rich.console import Console
+
+                    current = _shrink_middle(current)
+                    Console().print(
+                        f"[yellow]Prompt over the per-request cap — retrying at "
+                        f"{len(current)} chars[/]"
+                    )
+                    continue
+                if not (json_mode and _is_json_mode_error(exc)):
+                    raise
+                resp = _retry_on_rate_limit(lambda: call(False, current))
+                break
+        content = resp.choices[0].message.content or ""
+        return _extract_json_object(content) if json_mode else content
 
     def describe_panels(self, image_paths: list[Path], prompt: str) -> str:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
@@ -132,14 +303,67 @@ class GroqProvider(LLMProvider):
                     "image_url": {"url": f"data:{media_type};base64,{data}"},
                 }
             )
-        resp = _retry_on_rate_limit(
-            lambda: self.client.chat.completions.create(
-                model=self.vision_model,
-                messages=[{"role": "user", "content": content}],
-                response_format={"type": "json_object"},
-            )
-        )
-        return resp.choices[0].message.content or "{}"
+
+        def call(json_mode: bool) -> Any:
+            kwargs: dict[str, Any] = {
+                "model": self.vision_model,
+                "messages": [{"role": "user", "content": content}],
+                "max_completion_tokens": self.MAX_VISION_TOKENS,
+            }
+            extra = self._extra_body(self.vision_model)
+            if extra:
+                kwargs["extra_body"] = extra
+            if json_mode:
+                kwargs["response_format"] = {"type": "json_object"}
+            return self.client.chat.completions.create(**kwargs)
+
+        try:
+            resp = _retry_on_rate_limit(lambda: call(True))
+        except Exception as exc:
+            if not _is_json_mode_error(exc):
+                raise
+            # Fall back to free-form output and extract the JSON object locally.
+            resp = _retry_on_rate_limit(lambda: call(False))
+        return _extract_json_object(resp.choices[0].message.content or "{}")
+
+
+class GroqProvider(OpenAICompatProvider):
+    """Groq Cloud — fastest inference, but the free tier caps on tokens-per-day (200k),
+    which images exhaust quickly (~60 panels/day at 512px)."""
+
+    GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+    BASE_URL = GROQ_BASE_URL
+    API_KEY_ENVS = ("GROQ_API_KEY",)
+    TEXT_MODEL_ENVS = ("GROQ_TEXT_MODEL",)
+    VISION_MODEL_ENVS = ("GROQ_VISION_MODEL",)
+    DEFAULT_TEXT_MODEL = "llama-3.3-70b-versatile"
+    DEFAULT_VISION_MODEL = "qwen/qwen3.6-27b"
+
+
+class GeminiProvider(OpenAICompatProvider):
+    """Google Gemini via its OpenAI-compatible endpoint. The free tier limits requests
+    per day rather than tokens per day, which suits image-heavy workloads far better."""
+
+    BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    API_KEY_ENVS = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
+    TEXT_MODEL_ENVS = ("GEMINI_TEXT_MODEL",)
+    VISION_MODEL_ENVS = ("GEMINI_VISION_MODEL",)
+    DEFAULT_TEXT_MODEL = "gemini-2.5-flash"
+    DEFAULT_VISION_MODEL = "gemini-2.5-flash"
+
+
+class MistralProvider(OpenAICompatProvider):
+    """Mistral — very large monthly token allowance on the free tier, but a low
+    requests-per-minute ceiling, so it suits long unattended batches."""
+
+    BASE_URL = "https://api.mistral.ai/v1"
+    API_KEY_ENVS = ("MISTRAL_API_KEY",)
+    TEXT_MODEL_ENVS = ("MISTRAL_TEXT_MODEL",)
+    VISION_MODEL_ENVS = ("MISTRAL_VISION_MODEL",)
+    DEFAULT_TEXT_MODEL = "mistral-large-latest"
+    # Vision model naming has churned (Pixtral 12B retired). Verify against
+    # available_models() — tools/vision_bakeoff.py does this before running.
+    DEFAULT_VISION_MODEL = "mistral-medium-latest"
 
 
 class OllamaProvider(LLMProvider):
@@ -187,6 +411,21 @@ class MockLLMProvider(LLMProvider):
     def complete(self, system: str, user: str, *, json_mode: bool = False) -> str:
         if json_mode:
             system_lower = system.lower()
+            if "narration entry for every outline beat" in system_lower:
+                ids = sorted({int(m) for m in re.findall(r"Beat (\d+) \[", user)})
+                if not ids:
+                    ids = [1]
+                return json.dumps(
+                    {
+                        "beats": [
+                            {
+                                "beat_id": i,
+                                "narration": "Our hero presses forward as the story continues.",
+                            }
+                            for i in ids
+                        ]
+                    }
+                )
             if "beat-by-beat" in system_lower or "plot_beat" in system_lower:
                 return json.dumps(
                     {
@@ -219,7 +458,7 @@ class MockLLMProvider(LLMProvider):
                 if "Original narration:" in user:
                     text = user.split("Original narration:")[-1].strip()
                 text = re.sub(r"\bcharacter(s)?\b", "someone", text, flags=re.I)
-                return json.dumps({"narration": text})
+                return text  # rewrite_beat takes plain prose, not a JSON envelope
             if "character name registry" in system_lower:
                 return json.dumps({"characters": {"Hero": ["Narrator"]}})
             return json.dumps(
@@ -243,6 +482,8 @@ class MockLLMProvider(LLMProvider):
         for p in image_paths:
             stem = p.stem
             ids.append(stem if stem.startswith("p") else f"panel_{stem}")
+        if "fact-check" in prompt.lower():
+            return json.dumps({"unsupported": [], "severity": "none"})
         if "panel sample" in prompt.lower():
             return json.dumps(
                 {
@@ -267,6 +508,43 @@ class MockLLMProvider(LLMProvider):
                 "panel_type": "story",
             }
         )
+
+
+def get_stage_llm(stage: str, config: dict[str, Any] | None = None) -> LLMProvider:
+    """Provider for a pipeline stage, honoring a per-stage override before the global one.
+
+    `scene.provider` covers the vision-heavy stages (scene analysis, scout, alignment
+    audit); `script.provider` covers the text stages. Free tiers cap on different axes
+    (Groq: tokens/day; Gemini: requests/day; Mistral: tokens/month), so splitting vision
+    and text across providers is often the difference between one chapter per day and a
+    full run.
+    """
+    config = config or load_config()
+    # Precedence: per-stage env > global mock kill-switch > per-stage config > global.
+    # LLM_PROVIDER=mock must always win so tests/dev runs can never hit a real API just
+    # because config.yaml carries a stage override.
+    name = os.getenv(f"{stage.upper()}_LLM_PROVIDER") or None
+    if name is None and os.getenv("LLM_PROVIDER", "").lower() == "mock":
+        name = "mock"
+    if name is None:
+        name = get_nested(config, stage, "provider")
+    return get_llm_provider(name, config=config)
+
+
+def apply_stage_model(llm: LLMProvider, stage: str, config: dict[str, Any]) -> LLMProvider:
+    """Apply the stage's configured model pin — UNLESS an env override redirected the
+    stage to a different provider. Model ids are provider-specific: pinning
+    `script.model: gemini-2.5-flash` onto a Mistral client (reached via
+    SCRIPT_LLM_PROVIDER=mistral) is a guaranteed 400."""
+    if os.getenv(f"{stage.upper()}_LLM_PROVIDER"):
+        return llm  # provider overridden — its own default/config model applies
+    model = get_nested(config, stage, "model")
+    if model:
+        if stage == "scene" and hasattr(llm, "vision_model"):
+            llm.vision_model = model
+        elif hasattr(llm, "model"):
+            llm.model = model
+    return llm
 
 
 def _resolve_provider_name(provider: str | None, config: dict[str, Any]) -> str:
@@ -303,6 +581,30 @@ def get_llm_provider(provider: str | None = None, config: dict[str, Any] | None 
             or get_nested(config, "scene", "model")
         )
         return GroqProvider(text_model=text_model, vision_model=vision_model)
+
+    if name == "gemini":
+        if not any(os.getenv(env) for env in GeminiProvider.API_KEY_ENVS):
+            console.print(
+                "[yellow]Warning:[/] GEMINI_API_KEY is missing or empty in .env — "
+                "using mock LLM (placeholder script). Add your key and re-run with --force."
+            )
+            return MockLLMProvider()
+        return GeminiProvider(
+            text_model=get_nested(config, "llm", "gemini", "text_model"),
+            vision_model=get_nested(config, "llm", "gemini", "vision_model"),
+        )
+
+    if name == "mistral":
+        if not os.getenv("MISTRAL_API_KEY"):
+            console.print(
+                "[yellow]Warning:[/] MISTRAL_API_KEY is missing or empty in .env — "
+                "using mock LLM (placeholder script). Add your key and re-run with --force."
+            )
+            return MockLLMProvider()
+        return MistralProvider(
+            text_model=get_nested(config, "llm", "mistral", "text_model"),
+            vision_model=get_nested(config, "llm", "mistral", "vision_model"),
+        )
 
     if name == "ollama":
         return OllamaProvider()

@@ -27,7 +27,9 @@ def test_merge_profiles_into() -> None:
         protagonist_id="char_jin_woo",
     )
     merge_profiles_into(bible, "char_sung_jin_woo", "char_jin_woo")
-    assert "char_jin_woo" not in bible.characters
+    # Dropped profile stays as a tombstone so apply_id_redirects can map old refs;
+    # deleting it (the old behavior) orphaned every card ref to the consolidated id.
+    assert bible.characters["char_jin_woo"].merged_into == "char_sung_jin_woo"
     assert bible.protagonist_id == "char_sung_jin_woo"
     assert "p002" in bible.characters["char_sung_jin_woo"].appearances
 

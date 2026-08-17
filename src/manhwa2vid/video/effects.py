@@ -77,6 +77,17 @@ def render_vertical_scroll_frames(
     scaled = panel.resize((out_w, scaled_h), Image.Resampling.LANCZOS)
 
     max_y = max(0, scaled_h - out_h)
+
+    # Cap scroll speed. Travel is otherwise panel_height/dwell, which on a tall strip with a
+    # short beat reaches thousands of px/s — an unreadable vertical smear. When the full panel
+    # cannot be traversed at a readable speed, show the top portion instead of racing through it.
+    fps = int(get_nested(config, "video", "fps", default=30))
+    max_px_per_sec = float(get_nested(config, "video", "max_scroll_px_per_sec", default=600.0))
+    if max_px_per_sec > 0 and fps > 0:
+        duration = num_frames / fps
+        allowed_travel = max_px_per_sec * duration * supersample
+        max_y = min(max_y, int(allowed_travel))
+
     frames: list[Image.Image] = []
     for i in range(num_frames):
         t = i / max(num_frames - 1, 1)

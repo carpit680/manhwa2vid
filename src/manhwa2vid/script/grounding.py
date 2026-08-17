@@ -1,0 +1,304 @@
+"""Deterministic panel↔plot grounding for story-first outlines."""
+
+from __future__ import annotations
+
+import re
+
+from manhwa2vid.models import ChapterSynopsis, SceneCard, ScriptOutlineBeat, SeriesBible
+
+_STOP = frozenset(
+    {
+        "a", "an", "the", "and", "or", "to", "of", "in", "on", "at", "for", "with", "his", "her",
+        "he", "she", "they", "them", "is", "are", "was", "were", "be", "as", "by", "from", "that",
+        "this", "it", "into", "about", "after", "before", "while", "when", "who", "whom", "their",
+    }
+)
+
+# Location / event keywords used for grounding lint and fact matching.
+# These defaults are Solo Leveling ch.1 specifics; override per series/chapter via
+# config script.grounding_keywords: {key: [phrase, ...]} — the adversarial frame audit
+# (script/verify.py) is the general mechanism, this list is just a fast pre-filter.
+_DEFAULT_GROUNDING_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "coffee": ("coffee", "barista", "cafe", "café"),
+    "food_truck": ("food truck", "medical bill", "medical bills", "guild pay", "hunter's guild pay"),
+    "healer": ("healer", "healers"),
+    "portal": ("portal", "gate", "dungeon entrance", "blue-lit", "blue lit"),
+    "injured": ("injured", "bleeding", "blood", "wound", "wounds", "bandage"),
+    "eaten": ("eaten", "have you eaten", "food"),
+    "raid_lead": ("volunteer", "lead the raid", "lead a raid"),
+}
+
+GROUNDING_KEYWORDS: dict[str, tuple[str, ...]] = dict(_DEFAULT_GROUNDING_KEYWORDS)
+
+
+def configure_grounding_keywords(config: dict) -> None:
+    """Replace the keyword set from config (script.grounding_keywords); reset when absent."""
+    override = None
+    if isinstance(config, dict):
+        override = (config.get("script") or {}).get("grounding_keywords")
+    GROUNDING_KEYWORDS.clear()
+    if isinstance(override, dict) and override:
+        for key, phrases in override.items():
+            if isinstance(phrases, (list, tuple)) and phrases:
+                GROUNDING_KEYWORDS[str(key)] = tuple(str(p) for p in phrases)
+    if not GROUNDING_KEYWORDS:
+        GROUNDING_KEYWORDS.update(_DEFAULT_GROUNDING_KEYWORDS)
+
+
+def _tokenize(text: str) -> set[str]:
+    return {t for t in re.findall(r"[a-z0-9]+", text.lower()) if t not in _STOP and len(t) > 2}
+
+
+def panel_evidence_blob(card: SceneCard) -> str:
+    parts = [
+        " ".join(card.panel_ids),
+        " ".join(card.speakers),
+        card.action,
+        card.dialogue_summary,
+        " ".join(card.key_terms),
+        " ".join(p.name_used or p.descriptor or "" for p in card.people),
+    ]
+    return " ".join(p for p in parts if p)
+
+
+def card_by_panel(cards: list[SceneCard]) -> dict[str, SceneCard]:
+    mapping: dict[str, SceneCard] = {}
+    for card in cards:
+        for pid in card.panel_ids:
+            mapping[pid] = card
+    return mapping
+
+
+def evidence_for_panels(panel_ids: list[str], cards: list[SceneCard]) -> str:
+    by_panel = card_by_panel(cards)
+    lines: list[str] = []
+    seen: set[str] = set()
+    for pid in panel_ids:
+        card = by_panel.get(pid)
+        if not card:
+            continue
+        key = ",".join(card.panel_ids)
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(
+            f"{','.join(card.panel_ids)} | action={card.action} | "
+            f"dialogue={card.dialogue_summary} | terms={card.key_terms}"
+        )
+    return "\n".join(lines) or "(no scene evidence)"
+
+
+def compact_panel_evidence(cards: list[SceneCard], bible: SeriesBible) -> str:
+    """Per-panel evidence for outline: cast + action + dialogue."""
+    lines: list[str] = []
+    for card in cards:
+        if not card.is_story:
+            continue
+        cast_parts: list[str] = []
+        for person in card.people:
+            mc_tag = " [MC]" if person.ref == bible.protagonist_id else ""
+            label = person.name_used or person.descriptor or person.ref
+            if person.ref in bible.characters:
+                profile = bible.characters[person.ref]
+                if not profile.canonical_name.lower().startswith(("guy ", "man ", "woman ", "blonde ")):
+                    label = profile.canonical_name
+            cast_parts.append(f"{label}{mc_tag}")
+        lines.append(
+            f"{','.join(card.panel_ids)} | cast={'; '.join(cast_parts) or '(none)'} | "
+            f"action={card.action} | dialogue={card.dialogue_summary} | terms={card.key_terms}"
+        )
+    return "\n".join(lines)
+
+
+def score_fact_against_card(fact: str, card: SceneCard) -> float:
+    ft = _tokenize(fact)
+    if not ft:
+        return 0.0
+    blob = _tokenize(panel_evidence_blob(card))
+    if not blob:
+        return 0.0
+    overlap = len(ft & blob) / len(ft)
+    # Boost exact phrase hits for known locations
+    lower_blob = panel_evidence_blob(card).lower()
+    lower_fact = fact.lower()
+    bonus = 0.0
+    for _key, phrases in GROUNDING_KEYWORDS.items():
+        if any(p in lower_fact for p in phrases) and any(p in lower_blob for p in phrases):
+            bonus += 0.35
+    return overlap + bonus
+
+
+def preassign_outline_from_facts(
+    synopsis: ChapterSynopsis,
+    cards: list[SceneCard],
+    bible: SeriesBible,
+    *,
+    max_beats: int = 18,
+) -> list[ScriptOutlineBeat]:
+    """
+    Seed outline beats by matching plot_facts to best panel clusters, then fill gaps.
+    Preserves chronological panel order.
+    """
+    story_cards = [c for c in cards if c.is_story and c.panel_ids]
+    if not story_cards:
+        return []
+
+    all_panel_ids = sorted({pid for c in story_cards for pid in c.panel_ids}, key=_panel_sort_key_local)
+    assigned_panels: set[str] = set()
+    seeded: list[tuple[int, list[str], str, list[str]]] = []  # sort_key, panels, plot, char_ids
+
+    for fact in synopsis.plot_facts:
+        if not fact.strip():
+            continue
+        scored = [(score_fact_against_card(fact, card), card) for card in story_cards]
+        scored.sort(key=lambda x: x[0], reverse=True)
+        best_score, best_card = scored[0]
+        if best_score < 0.15:
+            continue
+        panels = [pid for pid in best_card.panel_ids if pid not in assigned_panels]
+        if not panels:
+            # Allow reuse of already-assigned only if fact uniquely needs them — skip
+            continue
+        # Optionally merge adjacent unused panels from neighboring cards with weak score
+        char_ids = [p.ref for p in best_card.people if p.ref and p.ref != "new"]
+        if bible.protagonist_id and any(
+            p.ref == bible.protagonist_id for p in best_card.people
+        ):
+            if bible.protagonist_id not in char_ids:
+                char_ids.insert(0, bible.protagonist_id)
+        sort_key = min(_panel_sort_key_local(pid) for pid in panels)
+        seeded.append((sort_key[0] * 1000 + sort_key[1], panels, fact.strip(), char_ids))
+        assigned_panels.update(panels)
+
+    seeded.sort(key=lambda x: x[0])
+
+    # Fill uncovered panels as continuity beats (adjacent groups)
+    uncovered = [pid for pid in all_panel_ids if pid not in assigned_panels]
+    fill_beats: list[tuple[int, list[str], str, list[str]]] = []
+    if uncovered:
+        by_panel = card_by_panel(story_cards)
+        chunk: list[str] = []
+        for pid in uncovered:
+            if not chunk:
+                chunk = [pid]
+                continue
+            prev = chunk[-1]
+            # same page or consecutive — keep grouping small
+            if _panel_sort_key_local(pid)[0] == _panel_sort_key_local(prev)[0] and len(chunk) < 3:
+                chunk.append(pid)
+            elif abs(_panel_sort_key_local(pid)[0] - _panel_sort_key_local(prev)[0]) <= 1 and len(chunk) < 2:
+                chunk.append(pid)
+            else:
+                fill_beats.append(_continuity_seed(chunk, by_panel, bible))
+                chunk = [pid]
+        if chunk:
+            fill_beats.append(_continuity_seed(chunk, by_panel, bible))
+
+    combined = sorted([*seeded, *fill_beats], key=lambda x: x[0])
+
+    # Soft-cap: merge adjacent tiny beats if over max_beats — but NEVER across a scene
+    # boundary. A beat spanning distant pages forces the narration model to invent a
+    # bridge between unrelated scenes; that invention was the dominant failure of the
+    # first automated runs. max_beats is soft, so when no same-scene merge exists we
+    # simply keep more beats.
+    def _beat_page_range(panels: list[str]) -> tuple[int, int]:
+        pages = [_panel_sort_key_local(pid)[0] for pid in panels]
+        return min(pages), max(pages)
+
+    while len(combined) > max_beats and len(combined) >= 2:
+        best_i = -1
+        best_size = 10**9
+        for i in range(len(combined) - 1):
+            _, a_hi = _beat_page_range(combined[i][1])
+            b_lo, _ = _beat_page_range(combined[i + 1][1])
+            if b_lo - a_hi > 1:
+                continue  # different scene neighborhood — never merge
+            size = len(combined[i][1]) + len(combined[i + 1][1])
+            if size < best_size:
+                best_size = size
+                best_i = i
+        if best_i < 0:
+            break  # nothing mergeable within scene bounds; accept more beats
+        a = combined[best_i]
+        b = combined[best_i + 1]
+        merged = (
+            a[0],
+            list(dict.fromkeys([*a[1], *b[1]])),
+            f"{a[2]} / {b[2]}",
+            list(dict.fromkeys([*a[3], *b[3]])),
+        )
+        combined = [*combined[:best_i], merged, *combined[best_i + 2 :]]
+
+    outline: list[ScriptOutlineBeat] = []
+    for idx, (_sk, panels, plot, char_ids) in enumerate(combined, start=1):
+        panels = sorted(panels, key=_panel_sort_key_local)
+        outline.append(
+            ScriptOutlineBeat(
+                beat_id=idx,
+                panel_ids=panels,
+                character_ids=char_ids,
+                plot_beat=plot[:400],
+            )
+        )
+    return outline
+
+
+def _continuity_seed(
+    panels: list[str],
+    by_panel: dict[str, SceneCard],
+    bible: SeriesBible,
+) -> tuple[int, list[str], str, list[str]]:
+    card = by_panel.get(panels[0])
+    action = (card.action if card else "") or "continues"
+    dialogue = (card.dialogue_summary if card else "")[:120]
+    plot = action if action else dialogue or "Story continues"
+    char_ids = [p.ref for p in (card.people if card else []) if p.ref and p.ref != "new"]
+    sort_key = min(_panel_sort_key_local(pid) for pid in panels)
+    return (sort_key[0] * 1000 + sort_key[1], panels, plot[:400], char_ids)
+
+
+def _panel_sort_key_local(panel_id: str) -> tuple[int, int, str]:
+    match = re.match(r"p(\d+)_(\d+)", panel_id, re.I)
+    if match:
+        return int(match.group(1)), int(match.group(2)), panel_id
+    return 9999, 9999, panel_id
+
+
+def format_seeded_outline_for_prompt(beats: list[ScriptOutlineBeat], cards: list[SceneCard]) -> str:
+    lines: list[str] = []
+    for beat in beats:
+        evid = evidence_for_panels(beat.panel_ids, cards)
+        lines.append(
+            f"SEED Beat {beat.beat_id} panels={beat.panel_ids} "
+            f"chars={beat.character_ids}\n"
+            f"  locked_plot={beat.plot_beat}\n"
+            f"  evidence:\n{evid}"
+        )
+    return "\n".join(lines)
+
+
+def narration_grounding_keywords(text: str) -> set[str]:
+    lower = text.lower()
+    hits: set[str] = set()
+    for key, phrases in GROUNDING_KEYWORDS.items():
+        if any(p in lower for p in phrases):
+            hits.add(key)
+    return hits
+
+
+def evidence_supports_keywords(panel_ids: list[str], cards: list[SceneCard], keys: set[str]) -> set[str]:
+    blob = evidence_for_panels(panel_ids, cards).lower()
+    supported: set[str] = set()
+    for key in keys:
+        phrases = GROUNDING_KEYWORDS.get(key, ())
+        if any(p in blob for p in phrases):
+            supported.add(key)
+    return supported
+
+
+def unsupported_grounding_keywords(panel_ids: list[str], cards: list[SceneCard], narration: str) -> list[str]:
+    claimed = narration_grounding_keywords(narration)
+    if not claimed:
+        return []
+    supported = evidence_supports_keywords(panel_ids, cards, claimed)
+    return sorted(claimed - supported)

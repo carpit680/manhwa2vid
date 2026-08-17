@@ -144,6 +144,8 @@ def format_bible_for_prompt(bible: SeriesBible, *, active_ids: set[str] | None =
         key=lambda p: (p.tier.value, -len(p.appearances), p.canonical_name),
     )
     for profile in ordered:
+        if profile.merged_into:
+            continue  # tombstone — kept only so id redirects survive consolidation
         if active_ids and profile.id not in active_ids and profile.tier not in (
             CharacterTier.MAIN,
             CharacterTier.SUPPORTING,
@@ -173,29 +175,32 @@ def format_bible_for_prompt(bible: SeriesBible, *, active_ids: set[str] | None =
 
 
 def naming_priority_rules(bible: SeriesBible | None = None, config: dict | None = None) -> str:
-    mc_labels = "MC, the protagonist, our guy"
-    if config:
-        from manhwa2vid.config import get_nested
-
-        labels = get_nested(config, "characters", "mc_labels", default=[])
-        if labels:
-            mc_labels = ", ".join(str(label) for label in labels)
-    protagonist_note = ""
+    """Anchor policy measured from the reference channel: the protagonist is anchored by
+    NAME roughly every 80 words, with pronouns carrying everything in between (6+ pronoun
+    references per anchor). Generic labels are what make a script feel like it lost its
+    protagonist, so they are essentially banned."""
+    mc_name = ""
+    mc_pronoun = "he"
     if bible and bible.protagonist_id and bible.protagonist_id in bible.characters:
         mc = bible.characters[bible.protagonist_id]
-        protagonist_note = f"\nProtagonist id={bible.protagonist_id} ({mc.canonical_name}). Use {mc_labels} after the hook beat."
+        mc_name = mc.canonical_name.strip()
+        mc_pronoun = mc.pronoun or "he"
+    anchor = f"'{mc_name}'" if mc_name else "the protagonist's canonical name"
     return (
-        "Naming priority (never use the word 'character' for a person on screen):\n"
-        f"Protagonist:{protagonist_note}\n"
-        "  1. MC / the protagonist / configured mc_labels (after opening hook)\n"
-        "  2. Pronoun (he/she/they) once established\n"
-        "  3. Full canonical name (intro, re-intro after gap, or clarity needed)\n"
-        "  4. Role descriptor (the E-Rank hunter, the guild clerk)\n"
-        "Supporting:\n"
-        "  1. Name once per chapter, then pronoun or role\n"
-        "  2. Never use MC labels for non-protagonist characters\n"
-        "Background: some hunters, a bystander — NEVER 'character'\n"
-        "Never attribute an action to the protagonist unless they are on screen in that beat's panels.\n"
+        "Naming rules (never use the word 'character' for a person on screen):\n"
+        f"Protagonist{f' = {mc_name}' if mc_name else ''}:\n"
+        f"  - Anchor with the NAME {anchor} roughly every 70-90 words, and at each scene change.\n"
+        f"  - Between anchors use pronouns only ({mc_pronoun}/him/his) — several pronoun uses per name anchor.\n"
+        "  - NEVER write 'MC'. Use the phrase 'the protagonist' at most ONCE in the whole chapter.\n"
+        "  - Never describe the protagonist by clothing or gear as if a different person "
+        "('the man with the backpack' is FORBIDDEN when it is him).\n"
+        "Supporting cast:\n"
+        "  - FIRST mention in the script: name + one short intro clause from the bible "
+        "(role or look): 'Lee Joo-hee, the party's rookie healer, ...'.\n"
+        "  - Every later mention: name or pronoun. Never repeat the intro clause.\n"
+        "Unnamed people: a short role phrase (the guild clerk, a veteran hunter) — "
+        "NEVER 'character', 'someone', 'a man', 'two people'.\n"
+        "Never attribute an action or line to anyone not on screen in that beat's panels.\n"
     )
 
 

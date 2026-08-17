@@ -23,7 +23,7 @@ from manhwa2vid.characters.resolve import (
     resolve_character_ref,
 )
 from manhwa2vid.config import get_nested
-from manhwa2vid.llm.provider import get_llm_provider
+from manhwa2vid.llm.provider import apply_stage_model, get_stage_llm
 from manhwa2vid.models import (
     CharacterProfile,
     CharacterRef,
@@ -59,6 +59,38 @@ Rules:
 
 def _speaker_for_card(card: SceneCard) -> str:
     return card.speakers[0] if card.speakers else ""
+
+
+def _ref_label(ref: str) -> str:
+    """Human-readable text hidden inside a VLM-invented ref id.
+
+    The vision model sometimes emits ids that were never minted by the bible
+    (e.g. 'char_man_with_green_backpack'). The descriptor buried in the id is often
+    the only evidence we have, so recover it for resolution.
+    """
+    if not ref or ref == "new":
+        return ""
+    return ref.removeprefix("char_").replace("_", " ").strip()
+
+
+def _close_ref_against_bible(person: CharacterRef, card: SceneCard, bible: SeriesBible) -> str:
+    """Resolve a ref that is not in the bible; return a valid char_id or ''.
+
+    Tries, in order: MC strong visual signals (including the text inside the invented id),
+    then normal name/descriptor resolution. Never invents protagonist assignment without
+    a visual signal.
+    """
+    label = _ref_label(person.ref)
+    name = person.name_used or ""
+    descriptor = person.descriptor or label
+    speaker = _speaker_for_card(card)
+
+    if bible.protagonist_id and is_mc_visual_signal(name, descriptor, speaker):
+        return bible.protagonist_id
+    if bible.protagonist_id and label and is_mc_visual_signal("", label):
+        return bible.protagonist_id
+
+    return resolve_character_ref(name or label, descriptor, bible, speaker=speaker) or ""
 
 
 def _name_match_score(name: str, profile: CharacterProfile) -> float:
@@ -267,6 +299,61 @@ def _apply_panel_updates(cards: list[SceneCard], panel_updates: list[dict[str, A
     return updated
 
 
+def _dedupe_card_people(cards: list[SceneCard], bible: SeriesBible) -> list[SceneCard]:
+    """One identity per panel: collapse people entries that resolve to the same profile."""
+    deduped: list[SceneCard] = []
+    for card in cards:
+        seen: set[str] = set()
+        people: list[CharacterRef] = []
+        for person in card.people:
+            if person.ref != "new" and person.ref in seen:
+                continue
+            if person.ref != "new":
+                seen.add(person.ref)
+            people.append(person)
+        deduped.append(card.model_copy(update={"people": people}))
+    return deduped
+
+
+def _cast_integrity_report(cards: list[SceneCard], bible: SeriesBible) -> "QAReport":
+    """Gates: every ref exists in the bible; no ref points at a merged-away profile."""
+    from manhwa2vid.qa import QAReport
+
+    report = QAReport(stage="cast")
+    dangling: dict[str, list[str]] = {}
+    redirected: dict[str, list[str]] = {}
+    for card in cards:
+        for person in card.people:
+            if person.ref == "new":
+                continue
+            profile = bible.characters.get(person.ref)
+            if profile is None:
+                dangling.setdefault(person.ref, []).extend(card.panel_ids)
+            elif profile.merged_into:
+                redirected.setdefault(person.ref, []).extend(card.panel_ids)
+
+    report.add(
+        "referential-integrity",
+        not dangling,
+        f"{len(dangling)} ref(s) not in bible: {sorted(dangling)[:5]}" if dangling else "",
+        dangling={k: v[:8] for k, v in dangling.items()},
+    )
+    report.add(
+        "no-merged-refs",
+        "warn" if redirected else True,
+        f"{len(redirected)} ref(s) point at merged profiles" if redirected else "",
+        redirected={k: v[:8] for k, v in redirected.items()},
+    )
+    mc = bible.protagonist_id
+    if not mc:
+        # No protagonist detected: legitimate for sparse/mock content, but worth surfacing.
+        report.add("protagonist-exists", "warn", "no protagonist detected")
+    else:
+        report.add("protagonist-exists", mc in bible.characters,
+                   "" if mc in bible.characters else f"protagonist_id={mc!r} not in bible")
+    return report
+
+
 def _build_attribution(cards: list[SceneCard]) -> list[PanelCast]:
     attribution: list[PanelCast] = []
     for card in cards:
@@ -318,10 +405,7 @@ def _llm_link_pass(
     if not evidence_lines:
         return {}, []
 
-    llm = get_llm_provider(config=config)
-    model_name = get_nested(config, "script", "model", default="gpt-4o-mini")
-    if hasattr(llm, "model"):
-        llm.model = model_name
+    llm = apply_stage_model(get_stage_llm("script", config), "script", config)
 
     user = (
         f"Bible:\n{format_bible_for_prompt(bible)}\n\n"
@@ -413,7 +497,9 @@ def _normalize_mc_attribution(cards: list[SceneCard], bible: SeriesBible) -> lis
         people = _collapse_mc_duplicates(list(card.people), bible)
         promoted: list[CharacterRef] = []
         for person in people:
-            if person.ref != mc_id and is_mc_visual_signal(person.name_used, person.descriptor):
+            if person.ref != mc_id and is_mc_visual_signal(
+                person.name_used, person.descriptor or _ref_label(person.ref)
+            ):
                 promoted.append(
                     CharacterRef(
                         ref=mc_id,
@@ -525,6 +611,28 @@ def run_cast_linking(
                     )
                     if resolved:
                         person.ref = resolved
+                elif person.ref not in bible.characters:
+                    # VLM-invented id — close it against the bible or seed it, so every
+                    # ref downstream is guaranteed to exist (referential integrity).
+                    resolved = _close_ref_against_bible(person, card, bible)
+                    if resolved:
+                        person.ref = resolved
+                    else:
+                        label = person.name_used or person.descriptor or _ref_label(person.ref)
+                        if label:
+                            merge_profile(
+                                bible,
+                                CharacterProfile(
+                                    id=person.ref,
+                                    canonical_name=label,
+                                    tier=CharacterTier.MINOR,
+                                    descriptors=[person.descriptor] if person.descriptor else (
+                                        [label] if label != person.name_used else []
+                                    ),
+                                    first_seen_panel=panel_id,
+                                    sufficiency="pending",
+                                ),
+                            )
                 if person.ref == "new":
                     continue
                 if person.ref in bible.characters:
@@ -557,11 +665,16 @@ def run_cast_linking(
     clean_bible_aliases(bible)
     enriched = apply_id_redirects(enriched, bible)
     enriched = _normalize_mc_attribution(enriched, bible)
+    enriched = _dedupe_card_people(enriched, bible)
 
     attribution = _build_attribution(enriched)
     save_json(paths["scene_enriched_json"], enriched)
     save_json(paths["cast_attribution_json"], attribution)
     save_series_bible(bible)
+
+    from manhwa2vid.qa import enforce, qa_forced
+
+    enforce(_cast_integrity_report(enriched, bible), paths["root"], force=qa_forced(config))
 
     console.print(
         f"[green]Cast linking complete[/] — {len(enriched)} scenes, "

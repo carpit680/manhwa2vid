@@ -205,12 +205,17 @@ def _mix_audio(
 
 
 def _normalize_loudness(input_path: Path, output: Path, target: float) -> None:
+    # loudnorm internally resamples to 192 kHz, so pin the rate afterwards or the output
+    # lands at 96 kHz from 24 kHz sources. alimiter's `limit` takes a LINEAR value, not a
+    # dB string — 0.89 is about -1 dBFS of headroom.
     _run_ffmpeg(
         [
             "-i",
             str(input_path),
             "-af",
-            f"loudnorm=I={target}:TP=-1.5:LRA=11",
+            f"loudnorm=I={target}:TP=-1.5:LRA=11,alimiter=limit=0.89,aresample=48000",
+            "-ar",
+            "48000",
             "-c:v",
             "copy",
             "-c:a",

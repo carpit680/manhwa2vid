@@ -86,6 +86,21 @@ def exclude_by_filename(source_path: str) -> str | None:
     return None
 
 
+def is_blank_panel(panel: Panel, config: dict[str, Any]) -> bool:
+    """Near-white page-transition sliver, by pixel stats stamped at split time.
+
+    False when stats are absent (pre-change cached panels.json) — apply_panel_filter
+    backfills stats before mapping, so builders that call this directly stay pure.
+    """
+    if not get_nested(config, "panels", "exclude_blank_panels", default=True):
+        return False
+    if panel.ink_ratio is None or panel.dark_ratio is None:
+        return False
+    max_ink = float(get_nested(config, "panels", "blank_max_ink_ratio", default=0.30))
+    max_dark = float(get_nested(config, "panels", "blank_max_dark_ratio", default=0.10))
+    return panel.ink_ratio < max_ink and panel.dark_ratio < max_dark
+
+
 def build_exclusion_map(
     panels: list[Panel],
     scene_cards: list[SceneCard],
@@ -108,6 +123,12 @@ def build_exclusion_map(
 
     for panel in panels:
         if panel.id in excluded:
+            continue
+
+        # Pixel rule first: a blank sliver is blank regardless of what any scene card
+        # claims about it (a hallucinated card must not rescue an empty image).
+        if is_blank_panel(panel, config):
+            excluded[panel.id] = "blank transition sliver"
             continue
 
         if use_filename:
@@ -137,6 +158,18 @@ def apply_panel_filter(
     sources_path = paths["pages"] / "sources.json"
     if sources_path.exists():
         sources = json.loads(sources_path.read_text(encoding="utf-8"))
+
+    # Backfill ink stats for panels persisted before stats existed, so the blank rule
+    # applies to cached projects without forcing a panels re-run.
+    needs_backfill = [p for p in panels if p.ink_ratio is None or p.dark_ratio is None]
+    if needs_backfill:
+        from manhwa2vid.panels.split import panel_ink_stats_from_file
+
+        for panel in needs_backfill:
+            stats = panel_ink_stats_from_file(paths["root"] / panel.image_path)
+            if stats is not None:
+                panel.ink_ratio, panel.dark_ratio = stats
+        save_json(paths["panels_json"], panels)
 
     excluded = build_exclusion_map(panels, scene_cards, sources, config)
     save_json(paths["excluded_panels_json"], excluded)

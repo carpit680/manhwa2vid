@@ -76,6 +76,10 @@ class Panel(BaseModel):
     split_method: str = "auto"
     aspect_ratio: float | None = None
     camera_hint: str = "auto"  # auto | scroll | ken_burns
+    # Pixel-content stats stamped at split time (None on pre-change cached panels.json;
+    # backfilled lazily by apply_panel_filter). Used to exclude blank transition slivers.
+    ink_ratio: float | None = None   # fraction of pixels with gray < 245
+    dark_ratio: float | None = None  # fraction of pixels with gray < 128
 
 
 class PageSplitResult(BaseModel):
@@ -112,6 +116,10 @@ class CharacterRef(BaseModel):
     descriptor: str = ""
     visibility: str = "face"  # face | back_turned | partial | crowd
     notes: str = ""
+    # The vision model's own certainty that this is that specific cast member (0-1).
+    # 0.0 on pre-change cached cards. Only high-confidence identifications may become
+    # reference images — a shaky one would make identity confusion self-reinforcing.
+    confidence: float = 0.0
 
 
 class VisualProfile(BaseModel):
@@ -200,6 +208,7 @@ class ScriptOutlineBeat(BaseModel):
     panel_ids: list[str]
     character_ids: list[str] = Field(default_factory=list)
     plot_beat: str = ""
+    is_closer: bool = False  # final beat: next-chapter hook written from open_threads
 
 
 class NamedCastEntry(BaseModel):
@@ -216,6 +225,10 @@ class ChapterSynopsis(BaseModel):
     named_cast: list[NamedCastEntry] = Field(default_factory=list)
     plot_facts: list[str] = Field(default_factory=list)
     open_threads: list[str] = Field(default_factory=list)
+    # Narrative devices the chapter uses (cold-open flashforward, flashback, time skip)
+    # and where the frame shifts happen. Narration must SPEAK these transitions; panels
+    # are not strictly chronological and pretending they are confuses viewers.
+    narrative_structure: str = ""
 
 
 class ScriptDraft(BaseModel):
@@ -240,6 +253,7 @@ class Timeline(BaseModel):
     entries: list[TimelineEntry]
     total_duration: float
     fps: int = 30
+    dropped_panels: int = 0  # panels the per-beat budget removed (see budget_panels_for_beat)
 
 
 class PipelineStage(str, Enum):
@@ -288,6 +302,7 @@ def project_paths(project_dir: Path) -> dict[str, Path]:
         "excluded_panels_json": project_dir / "excluded_panels.json",
         "ocr_json": project_dir / "ocr.json",
         "scene_json": project_dir / "scene_cards.json",
+        "scene_partial_json": project_dir / "scene_cards.partial.json",
         "scene_enriched_json": project_dir / "scene_cards.enriched.json",
         "scene_normalized_json": project_dir / "scene_cards.normalized.json",
         "cast_attribution_json": project_dir / "cast_attribution.json",

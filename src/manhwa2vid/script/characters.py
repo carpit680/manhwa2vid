@@ -9,7 +9,7 @@ from typing import Any
 from rich.console import Console
 
 from manhwa2vid.config import get_nested
-from manhwa2vid.llm.provider import get_llm_provider
+from manhwa2vid.llm.provider import apply_stage_model, get_stage_llm
 from manhwa2vid.models import SceneCard, save_json
 
 console = Console()
@@ -106,10 +106,7 @@ def build_character_registry(
     if not evidence.strip():
         return glossary.get("characters") or {}
 
-    llm = get_llm_provider(config=config)
-    model_name = get_nested(config, "script", "model", default="gpt-4o-mini")
-    if hasattr(llm, "model"):
-        llm.model = model_name
+    llm = apply_stage_model(get_stage_llm("script", config), "script", config)
 
     user = (
         f"Existing glossary characters:\n{json.dumps(glossary.get('characters', {}), ensure_ascii=False)}\n\n"

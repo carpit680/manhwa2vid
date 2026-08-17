@@ -76,9 +76,11 @@ def merge_profiles_into(bible: SeriesBible, keep_id: str, drop_id: str) -> None:
             source_chapters=list(dict.fromkeys([*keep.source_chapters, *drop.source_chapters])),
         ),
     )
+    # Keep the dropped profile as a TOMBSTONE (merged_into set, never deleted):
+    # apply_id_redirects builds its map from surviving tombstones, so deleting here
+    # orphaned every card ref that pointed at a consolidated id — the exact dangling-ref
+    # failure the cast integrity gate catches.
     bible.characters[drop_id].merged_into = keep_id
-    if drop_id in bible.characters:
-        del bible.characters[drop_id]
     if bible.protagonist_id == drop_id:
         bible.protagonist_id = keep_id
 

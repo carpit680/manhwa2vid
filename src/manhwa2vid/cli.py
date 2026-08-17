@@ -105,9 +105,10 @@ def init_project(
 def run_all(
     project: Path = typer.Option(..., "--project", help="Project directory"),
     force: bool = typer.Option(False, "--force", help="Re-run completed stages"),
+    force_past_qa: bool = typer.Option(False, "--force-past-qa", help="Continue despite failed QA gates"),
 ) -> None:
     """Run ingest → panels → OCR/scene → script (pauses for review)."""
-    run_all_until_review(project.resolve(), force=force)
+    run_all_until_review(project.resolve(), force=force, force_past_qa=force_past_qa)
 
 
 @run_app.command("ingest")
@@ -126,18 +127,30 @@ def run_scout(project: Path = typer.Option(..., "--project"), force: bool = Fals
 
 
 @run_app.command("ocr")
-def run_ocr(project: Path = typer.Option(..., "--project"), force: bool = False) -> None:
-    run_stage(project.resolve(), PipelineStage.OCR, force=force)
+def run_ocr(
+    project: Path = typer.Option(..., "--project"),
+    force: bool = False,
+    force_past_qa: bool = typer.Option(False, "--force-past-qa", help="Continue despite failed QA gates"),
+) -> None:
+    run_stage(project.resolve(), PipelineStage.OCR, force=force, force_past_qa=force_past_qa)
 
 
 @run_app.command("cast")
-def run_cast(project: Path = typer.Option(..., "--project"), force: bool = False) -> None:
-    run_stage(project.resolve(), PipelineStage.CAST, force=force)
+def run_cast(
+    project: Path = typer.Option(..., "--project"),
+    force: bool = False,
+    force_past_qa: bool = typer.Option(False, "--force-past-qa", help="Continue despite failed QA gates"),
+) -> None:
+    run_stage(project.resolve(), PipelineStage.CAST, force=force, force_past_qa=force_past_qa)
 
 
 @run_app.command("script")
-def run_script(project: Path = typer.Option(..., "--project"), force: bool = False) -> None:
-    run_stage(project.resolve(), PipelineStage.SCRIPT, force=force)
+def run_script(
+    project: Path = typer.Option(..., "--project"),
+    force: bool = False,
+    force_past_qa: bool = typer.Option(False, "--force-past-qa", help="Continue despite failed QA gates"),
+) -> None:
+    run_stage(project.resolve(), PipelineStage.SCRIPT, force=force, force_past_qa=force_past_qa)
 
 
 @run_app.command("tts")
@@ -201,6 +214,20 @@ def review_preview_cmd(
     if approve:
         approve_preview(checkpoint, paths)
         console.print("[green]Preview approved. Run:[/] manhwa2vid run render --project ... --final")
+
+
+@app.command("storyboard")
+def storyboard_cmd(project: Path = typer.Option(..., "--project")) -> None:
+    """Regenerate debug/storyboard.html from the current script (prefers script.final.md)."""
+    from manhwa2vid.review.storyboard import write_storyboard
+    from manhwa2vid.script.generate import _parse_markdown_beats, load_script_beats
+
+    _, paths, _, _ = load_project(project.resolve())
+    draft = load_script_beats(paths)
+    if paths["script_final"].exists():
+        draft.beats = _parse_markdown_beats(paths["script_final"])
+    out = write_storyboard(paths, draft)
+    console.print(f"[green]Storyboard written:[/] {out}")
 
 
 @app.command("status")

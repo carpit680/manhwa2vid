@@ -11,7 +11,7 @@ from rich.console import Console
 from manhwa2vid.characters.bible import format_bible_for_prompt, merge_profile, naming_priority_rules, save_series_bible
 from manhwa2vid.characters.bible import slugify_char_id
 from manhwa2vid.config import get_nested
-from manhwa2vid.llm.provider import get_llm_provider
+from manhwa2vid.llm.provider import apply_stage_model, get_stage_llm
 from manhwa2vid.models import (
     ChapterSynopsis,
     CharacterProfile,
@@ -86,6 +86,8 @@ def format_synopsis_for_prompt(synopsis: ChapterSynopsis) -> str:
         "Open threads:",
         *thread_lines,
     ]
+    if synopsis.narrative_structure.strip():
+        parts.append(f"Narrative structure (SPEAK these frame shifts): {synopsis.narrative_structure}")
     return "\n".join(parts)
 
 
@@ -164,10 +166,7 @@ def generate_chapter_synopsis(
     out_path: Path | None = None,
 ) -> ChapterSynopsis:
     template = _load_prompt_template("synopsis.txt")
-    llm = get_llm_provider(config=config)
-    model_name = get_nested(config, "script", "model", default="gpt-4o-mini")
-    if hasattr(llm, "model"):
-        llm.model = model_name
+    llm = apply_stage_model(get_stage_llm("script", config), "script", config)
 
     attr_lines = []
     for row in attribution[:120]:
@@ -198,6 +197,7 @@ def generate_chapter_synopsis(
         named_cast=named,
         plot_facts=[str(f) for f in data.get("plot_facts", [])],
         open_threads=[str(t) for t in data.get("open_threads", [])],
+        narrative_structure=str(data.get("narrative_structure", "")),
     )
     apply_named_cast_to_bible(bible, synopsis.named_cast)
     save_series_bible(bible)

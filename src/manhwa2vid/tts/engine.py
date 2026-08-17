@@ -57,3 +57,70 @@ def run_tts_and_timeline(
         f"[green]TTS complete[/] — {len(script.beats)} beats, "
         f"timeline {timeline.total_duration:.1f}s"
     )
+
+    _enforce_timeline_qa(script.beats, panels, timeline, paths, config)
+
+
+def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
+    """Final-surface checks: what actually ships in the timeline, not what upstream
+    stages intended. Catches blank entries, starved-into-static beats, and beats whose
+    panels all vanished after the script was written."""
+    from manhwa2vid.config import get_nested
+    from manhwa2vid.panels.filter import is_blank_panel
+    from manhwa2vid.qa import QAReport, enforce, qa_forced
+
+    report = QAReport(stage="timeline")
+    panel_map = {p.id: p for p in panels}
+
+    blanks = sorted(
+        {
+            e.panel_id
+            for e in timeline.entries
+            if e.panel_id in panel_map and is_blank_panel(panel_map[e.panel_id], config)
+        }
+    )
+    report.add(
+        "no-blank-panels",
+        not blanks,
+        f"blank panel(s) shipped in timeline: {blanks}" if blanks else "",
+        blanks=blanks,
+    )
+
+    max_sec = float(get_nested(config, "video", "max_panel_seconds", default=8.0))
+    multiplier = float(get_nested(config, "video", "dwell_warn_multiplier", default=1.5))
+    limit = max_sec * multiplier
+    words_by_beat = {b.beat_id: len(b.narration.split()) for b in beats}
+    panels_by_beat = {b.beat_id: max(len(b.panel_ids), 1) for b in beats}
+    over = [
+        f"beat {e.beat_id}: {e.duration:.1f}s on {e.panel_id} "
+        f"({words_by_beat.get(e.beat_id, 0)}w / {panels_by_beat.get(e.beat_id, 1)} panel(s))"
+        for e in timeline.entries
+        if e.duration > limit
+    ]
+    report.add(
+        "dwell-over-limit",
+        "warn" if over else True,
+        "; ".join(over[:4]) + " — narration too long for its panel count" if over else "",
+        over=over,
+    )
+
+    report.add(
+        "panel-budget",
+        "warn" if timeline.dropped_panels else True,
+        f"{timeline.dropped_panels} panel(s) dropped by the per-beat budget"
+        if timeline.dropped_panels else "",
+        dropped=timeline.dropped_panels,
+    )
+
+    orphan_beats = [
+        b.beat_id for b in beats if b.panel_ids and not any(pid in panel_map for pid in b.panel_ids)
+    ]
+    report.add(
+        "beat-panels-missing",
+        "warn" if orphan_beats else True,
+        f"beat(s) {orphan_beats} lost all panels to exclusion — nearest panel substituted"
+        if orphan_beats else "",
+        beats=orphan_beats,
+    )
+
+    enforce(report, paths["root"], force=qa_forced(config))

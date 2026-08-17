@@ -144,9 +144,10 @@ def detect_protagonist(bible: SeriesBible, config: dict[str, Any], wiki_mc_id: s
 def set_protagonist_labels(bible: SeriesBible, protagonist_id: str, config: dict[str, Any]) -> None:
     if not protagonist_id or protagonist_id not in bible.characters:
         return
-    mc_labels = get_nested(config, "characters", "mc_labels", default=["MC", "the protagonist", "our guy"])
+    # Narration anchors with the NAME (reference-channel pattern); labels carry the name
+    # and role only — no "MC"/"the protagonist" boilerplate, no series-specific hardcodes.
     profile = bible.characters[protagonist_id]
-    labels = list(dict.fromkeys([*mc_labels, profile.canonical_name, "the E-Rank hunter"]))
+    labels = list(dict.fromkeys([profile.canonical_name]))
     if profile.role:
         labels.append(profile.role)
     merge_profile(

@@ -1,7 +1,11 @@
-You are outlining a Momoru-style manhwa recap: story-first, panels second.
+You are outlining a Momoru-style manhwa recap with PANEL-GROUNDED beats.
 
-You already have a chapter synopsis. Map that story onto fewer, longer beats.
-Panels illustrate the story — do not caption each frame.
+You receive:
+1) A chapter synopsis (arc + sticky cast + plot_facts checklist)
+2) A SEEDED outline where each beat already has locked panel_ids and a locked_plot from scene evidence
+3) Per-panel scene evidence (action/dialogue)
+
+Your job: smooth wording, merge only when adjacent seeds are the same scene, fill nothing that invents events for the wrong panels.
 
 Return JSON:
 {{
@@ -11,18 +15,21 @@ Return JSON:
       "beat_id": 1,
       "panel_ids": ["p0002_01", "p0003_01"],
       "character_ids": ["char_sung_jin_woo"],
-      "plot_beat": "Weakest E-Rank hunter Sung Jin-Woo crawls out of a bloody gate fight"
+      "plot_beat": "Weakest E-Rank hunter Sung Jin-Woo crawls out injured after a gate fight"
     }}
   ]
 }}
 
 Rules:
-- Follow the synopsis arc. Each beat is a story event in sequence, not a frame description.
-- Prefer FEWER beats (soft max ~{max_beats}). Merge adjacent panels into story units.
-- Every story panel_id from the evidence MUST appear in exactly one beat's panel_ids (coverage without captioning).
-- plot_beat = what happens in the story. Ban: possibly, likely, maybe, seems, appears to, highlighting, is seen, is shown, may be.
-- Use character_ids from the bible / synopsis sticky cast for people who matter on those panels.
-- Do NOT tag the protagonist on panels where cast says they are absent.
-- Protagonist may be named fully in beat 1 plot_beat; later beats can say MC / he / the protagonist in spirit (narration pass handles wording).
-- Continuity: each beat should follow from the previous (dungeon aftermath → city grind → party → gate entry, etc.).
+- Return EXACTLY as many beats as there are SEEDED beats, with the SAME beat_id values and
+  the SAME panel_ids. The seeds are already capped and scene-grouped — your job is to
+  improve plot_beat WORDING only. Never merge, split, drop, renumber, or reorder a beat.
+- KEEP each seed beat's panel_ids exactly. Never move a plot event to earlier panels.
+- plot_beat MUST be supported by that beat's evidence lines — do NOT dump later synopsis facts onto early panels.
+- Synopsis plot_facts are a checklist to cover WHEN their panels appear — never narrate coffee/food-truck/healer/portal before those panels' evidence.
+- Panel IDs must stay chronological across beats.
+- Every story panel_id must appear in exactly one beat, in the beat its seed assigned it to.
+- Ban hedging: possibly, likely, maybe, seems, appears to, highlighting, is seen, is shown, may be.
 - NEVER the word "character".
+- Do NOT tag the protagonist on panels where evidence/cast says they are absent.
+- Do NOT preview future acts ("ready for the dungeon") while evidence is still city/food/coffee.

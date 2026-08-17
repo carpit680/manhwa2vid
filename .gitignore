@@ -12,3 +12,13 @@ dist/
 build/
 .pytest_cache/
 .mypy_cache/
+# Downloaded reference material — keep the derived profile, not the source
+reference/*.srt
+reference/*.vtt
+reference/*.mp4
+reference/*.webm
+reference/*.m4a
+reference/*.wav
+reference/*.log
+reference/preview_page.html
+reference/voice_lab*/

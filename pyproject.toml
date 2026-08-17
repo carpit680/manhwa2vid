@@ -20,15 +20,21 @@ dependencies = [
     "httpx>=0.27",
     "openai>=1.0",
     "python-dotenv>=1.0",
+    # Last-resort repair for malformed model JSON (literal newlines in strings, trailing
+    # commas, single-quoted keys, unescaped quotes in prose). See _extract_json_object.
+    "json-repair>=0.30",
 ]
 
 [project.optional-dependencies]
 ocr = ["paddleocr>=2.7", "paddlepaddle>=2.6"]
 translate = ["transformers>=4.40", "sentencepiece>=0.2", "torch"]
 tts-chatterbox = ["chatterbox-tts", "soundfile"]
+tts-kokoro = ["kokoro>=0.9", "soundfile"]
 # After install, for RTX 5070/5090 (Blackwell sm_120) use PyTorch cu128 nightly:
 #   pip install --pre torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 dev = ["pytest>=8"]
+# Reference-video tooling: download captions/clips from recap channels to profile their style
+reference = ["yt-dlp"]
 
 [project.scripts]
 manhwa2vid = "manhwa2vid.cli:app"
