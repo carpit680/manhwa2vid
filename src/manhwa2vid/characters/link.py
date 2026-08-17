@@ -75,6 +75,68 @@ def _ref_label(ref: str) -> str:
     return ref.removeprefix("char_").replace("_", " ").strip()
 
 
+# Catch-all profiles the vision pass reaches for when it will not commit to a name. They
+# are legitimate ids, so nothing downstream re-examines them — which is how Bak's own
+# inner line ("is he actually a powerful hunter?") was delivered by an anonymous stranger:
+# char_bystander's descriptor is literally "person with dark curly hair", Bak's trait.
+_GENERIC_REF_RE = re.compile(
+    r"char_(?:bystander|crowd|onlooker|onlookers|pedestrian|pedestrians|passerby|"
+    r"passersby|workers|worker|hunters|group|people|spectator|spectators)",
+    re.I,
+)
+
+
+def resolve_generic_refs(cards: list[SceneCard], bible: SeriesBible) -> int:
+    """Re-open catch-all refs and bind them to a named character when the evidence names
+    exactly one. Returns how many were resolved.
+
+    Deliberately conservative — the wrong direction of this trade is roster priming:
+    - only NAMED cast are candidates (a descriptor profile would match everything);
+    - the character must already have appeared FACE-ON earlier in the chapter, so this
+      can never introduce someone (the rule the intro guard established);
+    - two or more candidates means no resolution.
+    """
+    order = sorted(cards, key=lambda c: c.panel_ids[0] if c.panel_ids else "")
+    named = {
+        profile.id: profile
+        for profile in bible.characters.values()
+        if not profile.merged_into
+        and profile.canonical_name.strip()
+        and not is_descriptor_label(profile.canonical_name)
+    }
+    seen_face: set[str] = set()
+    resolved = 0
+    for card in order:
+        for person in card.people:
+            ref = (person.ref or "").strip()
+            if ref in named and person.visibility in ("face", "partial"):
+                seen_face.add(ref)
+        for person in card.people:
+            ref = (person.ref or "").strip()
+            if not ref or not _GENERIC_REF_RE.fullmatch(ref):
+                continue
+            text = " ".join(
+                filter(None, [person.descriptor, person.notes, person.name_used])
+            ).lower()
+            if not text:
+                continue
+            matches = [
+                cid
+                for cid, profile in named.items()
+                if cid in seen_face
+                and any(
+                    d.strip()
+                    and len(d.strip()) > 6
+                    and d.strip().lower() in text
+                    for d in [*profile.descriptors, *profile.narration_labels]
+                )
+            ]
+            if len(set(matches)) == 1:
+                person.ref = matches[0]
+                resolved += 1
+    return resolved
+
+
 def _resolve_from_basis_text(notes: str, bible: SeriesBible) -> str:
     """A char_id when the basis text names exactly ONE named bible character, else ''.
 
@@ -750,6 +812,12 @@ def run_cast_linking(
     # in, one scene before her actual first appearance. The guard belongs wherever identity
     # is FINALIZED; running it in both places is what makes the demotion stick.
     from manhwa2vid.ocr.extract import demote_unintroduced_back_views
+
+    generic_resolved = resolve_generic_refs(enriched, bible)
+    if generic_resolved:
+        console.print(
+            f"[dim]Cast: bound {generic_resolved} catch-all ref(s) to named cast[/]"
+        )
 
     reverted = demote_unintroduced_back_views(enriched)
     if reverted:

@@ -1321,3 +1321,148 @@ def test_basis_text_naming_a_character_resolves_the_ref() -> None:
     # Descriptor-profile words must not match ("blue jacket" appears in half the bases).
     assert _resolve_from_basis_text("basis: torso in a blue jacket holding a cup", bible) == ""
     assert _resolve_from_basis_text("", bible) == ""
+
+
+def test_bubbles_carry_speaker_and_addressee() -> None:
+    """Attribution is decided at PERCEPTION time or not at all.
+
+    Downstream had only a paraphrase, so it guessed: "MY sick mother's medical bills"
+    (Kim's own line) became a whole crowd's motivation, and "TAKE CARE OF US, MR. SONG
+    CHI-YUL" was narrated as Jin-Woo addressing someone else.
+    """
+    from manhwa2vid.ocr.extract import _normalize_bubbles
+
+    texts, attributed = _normalize_bubbles([
+        {"text": "MY SICK MOTHER'S MEDICAL BILLS...", "speaker": "Kim Sangshik", "to": "the vendor"},
+        {"text": "TAKE CARE OF US, MR. SONG CHI-YUL.", "speaker": "Jin-Woo", "to": "Song Chi-yul"},
+        {"text": "...KIM!", "speaker": "", "to": ""},
+    ])
+    assert texts[0].startswith("MY SICK MOTHER")
+    assert attributed[0] == 'Kim Sangshik -> the vendor: "MY SICK MOTHER\'S MEDICAL BILLS..."'
+    assert attributed[1].startswith('Jin-Woo -> Song Chi-yul:')
+    assert attributed[2] == '"...KIM!"', "no speaker shown -> no owner invented"
+
+
+def test_bubbles_accept_legacy_string_shape() -> None:
+    """Old cards and the mock emit bare strings; both paths must keep working."""
+    from manhwa2vid.ocr.extract import _normalize_bubbles
+
+    texts, attributed = _normalize_bubbles(["HI, MAY I HAVE A CUP OF COFFEE?"])
+    assert texts == ["HI, MAY I HAVE A CUP OF COFFEE?"]
+    assert attributed == ["HI, MAY I HAVE A CUP OF COFFEE?"]
+    assert _normalize_bubbles(None) == ([], [])
+
+
+def test_generic_ref_binds_to_named_cast_seen_face_on() -> None:
+    """char_bystander's descriptor is literally "person with dark curly hair" — Bak's
+    trait — so Bak's own inner line was delivered by an anonymous stranger, twice."""
+    from manhwa2vid.characters.link import resolve_generic_refs
+    from manhwa2vid.models import (
+        CharacterProfile, CharacterRef, CharacterTier, SceneCard, SeriesBible,
+    )
+
+    bible = SeriesBible(series_slug="s", title="S")
+    bible.characters["char_bak"] = CharacterProfile(
+        id="char_bak", canonical_name="Bak", tier=CharacterTier.SUPPORTING,
+        descriptors=["man with curly black hair in a green vest", "dark curly hair"],
+    )
+    cards = [
+        # Bak face-on earlier in the chapter — the intro requirement is satisfied.
+        SceneCard(panel_ids=["p0012_01"], people=[
+            CharacterRef(ref="char_bak", visibility="face", confidence=0.95),
+        ]),
+        SceneCard(panel_ids=["p0014_03"], people=[
+            CharacterRef(ref="char_bystander", visibility="partial",
+                         descriptor="top of head with dark curly hair"),
+        ]),
+    ]
+    assert resolve_generic_refs(cards, bible) == 1
+    assert cards[1].people[0].ref == "char_bak"
+
+
+def test_generic_ref_refuses_before_a_face_on_appearance() -> None:
+    """Binding must never INTRODUCE someone — that is the roster-priming failure."""
+    from manhwa2vid.characters.link import resolve_generic_refs
+    from manhwa2vid.models import (
+        CharacterProfile, CharacterRef, CharacterTier, SceneCard, SeriesBible,
+    )
+
+    bible = SeriesBible(series_slug="s", title="S")
+    bible.characters["char_bak"] = CharacterProfile(
+        id="char_bak", canonical_name="Bak", tier=CharacterTier.SUPPORTING,
+        descriptors=["dark curly hair"],
+    )
+    cards = [SceneCard(panel_ids=["p0002_01"], people=[
+        CharacterRef(ref="char_bystander", visibility="crowd",
+                     descriptor="someone with dark curly hair"),
+    ])]
+    assert resolve_generic_refs(cards, bible) == 0
+    assert cards[0].people[0].ref == "char_bystander"
+
+
+def test_attribution_survives_into_the_scene_card() -> None:
+    """End-to-end contract test, not a unit test of the formatter.
+
+    Two API runs produced ZERO attributed lines while every gate passed and metrics even
+    improved. Two separate causes: the prompt's JSON EXAMPLE still showed a flat
+    "bubbles": [] (the example wins over the prose), and _normalize_scene_data builds a
+    FRESH dict — so setting the key on its input was silently discarded. Assert the field
+    where it is actually consumed.
+    """
+    from manhwa2vid.models import Panel, PanelBBox
+    from manhwa2vid.ocr.extract import _build_window_prompt, _card_from_entry
+
+    entry = {
+        "panel_ids": ["p0010_03"],
+        "bubbles": [
+            {"text": "MY SICK MOTHER'S MEDICAL BILLS...", "speaker": "Kim Sangshik",
+             "to": "the vendor"}
+        ],
+        "people": [{"ref": "new", "descriptor": "man in a blue cap",
+                    "basis": "clear frontal view", "confidence": 0.9}],
+        "speakers": ["Kim Sangshik"],
+        "action": "Kim waits at the food truck",
+        "mood": "weary", "key_terms": [], "is_story": True,
+    }
+    panel = Panel(id="p0010_03", page_num=10, image_path="a.png",
+                  bbox=PanelBBox(x=0, y=0, width=100, height=100))
+    counters = {"dropped_speakers": 0, "demoted": 0, "grounded_from_bubbles": 0}
+
+    card = _card_from_entry(dict(entry), panel, "p0010_03", {}, set(), counters)
+    assert "Kim Sangshik -> the vendor:" in card.source_text
+
+    # The prompt's example must show the attributed shape, or the model ignores the prose.
+    prompt = _build_window_prompt([panel], {}, {}, "CAST: none", {"summary": "s"}, "")
+    assert '"speaker"' in prompt and '"to"' in prompt
+
+
+def test_empty_vision_pass_fails_loudly(tmp_path) -> None:
+    """Zero cards for a non-empty chapter is a FAILED run, not an empty chapter.
+
+    Silently returning let downstream reuse stale artifacts and report green gates.
+    """
+    import pytest as _pytest
+
+    from manhwa2vid.models import Panel, PanelBBox, SeriesBible
+    from manhwa2vid.ocr.extract import _run_chapter_scene_pass
+
+    panels = [
+        Panel(id="p0001_01", page_num=1, image_path="a.png",
+              bbox=PanelBBox(x=0, y=0, width=10, height=10))
+    ]
+
+    class _EmptyLLM:
+        MAX_VISION_TOKENS = 4096
+
+        def describe_panels(self, image_paths, prompt):
+            return json.dumps({"summary": "", "temporal_devices": "", "roster": []})
+
+        def describe_labeled_panels(self, labeled, prompt):
+            return json.dumps({"panels": []})   # provider returned nothing usable
+
+    with _pytest.raises(RuntimeError, match="no scene cards"):
+        _run_chapter_scene_pass(
+            panels,
+            {"root": tmp_path, "scene_partial_json": tmp_path / "p.json"},
+            {}, {}, SeriesBible(series_slug="s", title="S"), _EmptyLLM(), {},
+        )

@@ -116,6 +116,8 @@ Rules:
 - If an issue says caption:..., the beat reads like an image description. Delete visual
   inventory (objects, clothing, expressions-as-phrases) and retell the beat as EVENTS with
   consequence — what happens, who says what, why it matters.
+- If an issue says repeats_beat_N, this beat re-tells what beat N already said —
+  keep only what is NEW here and carry the moment forward.
 - If an issue says reintro:Name, that person was already introduced — remove the
   appearance appositive and use the bare name or a pronoun.
 - If an issue says pronoun_monotony, vary the sentence openings: start from the action,
@@ -471,6 +473,31 @@ def lint_reintroduction(
         if issues:
             report[beat.beat_id] = issues
     return report
+
+
+def lint_cross_beat_repetition(beats: list[ScriptBeat]) -> dict[int, list[str]]:
+    """Flag a beat that re-tells content its predecessor already delivered.
+
+    Each beat is written from only its own panels plus a short running summary, so two
+    consecutive cards of one conversation produce two narrations of the same exchange —
+    the hospital/healer content landed three times across beats 12-14. Nothing in the
+    pipeline said a fact may be narrated once, and no gate measured it.
+    """
+    report: dict[int, list[str]] = {}
+    prev: set[str] | None = None
+    prev_id: int | None = None
+    for beat in beats:
+        tokens = _content_words(beat.narration)
+        if prev and tokens:
+            overlap = len(prev & tokens) / len(prev | tokens)
+            if overlap >= 0.5:
+                report[beat.beat_id] = [f"repeats_beat_{prev_id}:{overlap:.0%}"]
+        prev, prev_id = tokens, beat.beat_id
+    return report
+
+
+def _content_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(w) > 3}
 
 
 def lint_pronoun_monotony(beats: list[ScriptBeat]) -> dict[int, list[str]]:
@@ -920,6 +947,8 @@ def lint_beats(
     if bible is not None:
         for beat_id, issues in lint_reintroduction(beats, bible).items():
             report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
+    for beat_id, issues in lint_cross_beat_repetition(beats).items():
+        report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_captioning(beats).items():
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_pronoun_monotony(beats).items():

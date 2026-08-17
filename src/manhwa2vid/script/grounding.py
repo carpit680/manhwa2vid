@@ -81,9 +81,25 @@ def evidence_for_panels(panel_ids: list[str], cards: list[SceneCard]) -> str:
         if key in seen:
             continue
         seen.add(key)
+        # The writer gets ATTRIBUTED verbatim lines, not a paraphrase. Sending only
+        # `dialogue_summary` cost us both attribution and register: the summary drops who
+        # said what (one man's "MY sick mother's medical bills" became a crowd's
+        # motivation) and, being itself an abstraction, invited a second one on top
+        # ("questions the reckless pride of hunters"). With the real words present, the
+        # writer converts verbatim -> reported speech ONCE, and vocatives plus
+        # first-person pronouns make the owner of each line decidable.
+        who = ", ".join(
+            dict.fromkeys(
+                p.name_used or p.descriptor or p.ref
+                for p in card.people
+                if (p.name_used or p.descriptor or p.ref)
+            )
+        )
+        said = card.source_text.strip()
         lines.append(
-            f"{','.join(card.panel_ids)} | action={card.action} | "
-            f"dialogue={card.dialogue_summary} | terms={card.key_terms}"
+            f"{','.join(card.panel_ids)} | who={who or '(nobody)'} | action={card.action}"
+            + (f"\n    SPOKEN (convert to reported speech, keep the owner): {said}" if said else "")
+            + (f"\n    terms={card.key_terms}" if card.key_terms else "")
         )
     return "\n".join(lines) or "(no scene evidence)"
 

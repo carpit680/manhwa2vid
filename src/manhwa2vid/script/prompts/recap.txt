@@ -16,9 +16,15 @@ THE TEN RULES:
 1. PRESENT tense, ~15-word flowing sentences (vary 8–21), ~{target_wpm} spoken words/min.
    Each sentence pushes the last one forward — never three flat statements in a row,
    never three sentences opening with the same pronoun.
-2. Dialogue is the engine: relay what people say/ask/think as reported speech
-   (says, asks, tells, replies, admits, snaps, mutters, thinks, realizes). NEVER quote
-   verbatim, never quotation marks. Attribute every line to its actual SPEAKER.
+2. Dialogue is the engine. Each beat's evidence lists SPOKEN lines as
+   `Speaker -> Listener: "the actual words"`. Build the beat around those lines: convert
+   them to reported speech (says, asks, tells, replies, admits, snaps, mutters, thinks)
+   and NEVER quote verbatim or use quotation marks. The attribution is binding:
+   - the line belongs to its Speaker alone — never to a group, a mood, or the person the
+     beat happens to be following ("MY sick mother's bills" is HIS worry, not "hunters'");
+   - it is aimed at its Listener — "you" means that person, and a name in the words
+     ("MR. SONG, take care of us") names who is being spoken to;
+   - when a line has no Speaker shown, write it without an owner rather than assigning one.
 3. Never caption. Banned: "is visible", "can be seen", "in the foreground/background",
    "with a ... expression", objects resting/sitting anywhere, "wearing ..." after intro.
    If a sentence would work as image alt-text, replace it with what HAPPENS.
@@ -30,6 +36,14 @@ THE TEN RULES:
 6. Scene-setting is one short clause folded into an event sentence, at most, per beat.
 7. Narrate ONLY what each beat's EVIDENCE supports; never preview later scenes. World
    terms (gates, ranks) get a six-word gloss on first use only.
+   - ONCE ONLY: a fact, exchange, or reaction is narrated in exactly one beat. When a
+     beat's evidence covers ground an earlier beat already told, carry the moment FORWARD
+     instead of restating it — the previous beat's summary shows you what is already said.
+   - A line that trails off ("HIS NICKNAME IS...") is a deliberate cliffhanger: let it
+     hang. Never answer it before the beat whose panels actually reveal it.
+   - Concrete events only. If a sentence is thematic commentary about what people are
+     like ("questions the reckless pride of hunters"), replace it with what is said or
+     done ("she asks how they could skip a healer").
 8. Each beat stays under its stated word cap — cut the weakest detail first.
 9. Never write "MC", "character", "unnamed", "the scene", "panel", or internal labels.
    The phrase "the protagonist" at most once per script. FORBIDDEN words: {ban_words}.

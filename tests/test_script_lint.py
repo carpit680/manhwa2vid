@@ -453,3 +453,23 @@ def test_prepositions_that_double_as_conjunctions(text, expected) -> None:
         id="char_mc", canonical_name="Hero", tier=CharacterTier.MAIN, pronoun="he"
     )
     assert fix_pronoun_case(text, bible) == expected
+
+
+def test_cross_beat_repetition_flagged() -> None:
+    """Hospital/healer content landed three times across beats 12-14: each beat is
+    written from only its own panels, so a conversation spanning cards gets re-narrated."""
+    from manhwa2vid.script.lint import lint_cross_beat_repetition
+
+    beats = [
+        ScriptBeat(beat_id=12, panel_ids=["p1"],
+                   narration="Lee Joo-hee asks why Jin-Woo visited the hospital again "
+                             "after another injured raid."),
+        ScriptBeat(beat_id=13, panel_ids=["p2"],
+                   narration="Lee Joo-hee asks whether Jin-Woo visited the hospital "
+                             "again after another injured raid."),
+        ScriptBeat(beat_id=14, panel_ids=["p3"],
+                   narration="He steps through the swirling gate without looking back."),
+    ]
+    report = lint_cross_beat_repetition(beats)
+    assert 13 in report and report[13][0].startswith("repeats_beat_12")
+    assert 14 not in report

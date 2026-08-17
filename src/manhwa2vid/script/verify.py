@@ -44,6 +44,10 @@ severity=major ONLY for story-breaking errors:
 - an action or line attributed to a person who contradicts that person's description
 - a named person claimed present when NOBODY matching their description is visible
 - an event, object handoff, or location that does not appear at all
+- a reported line given to the WRONG SPEAKER, or aimed at the WRONG LISTENER —
+  read the bubble text in the panels: its tail points at the speaker, a name in
+  the words ('MR. SONG, take care of us') names who is addressed, and first-person
+  content ('MY sick mother') belongs to whoever says it, not to a group
 
 severity=minor for everything else. Explicitly NOT unsupported (do not list at all):
 - reasonable paraphrase or interpretation of what is visible

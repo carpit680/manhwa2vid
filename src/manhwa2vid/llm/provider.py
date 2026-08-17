@@ -35,6 +35,29 @@ def _parse_retry_after(msg: str) -> float | None:
     return minutes * 60.0 + seconds
 
 
+class BillingExhausted(RuntimeError):
+    """Provider credits are gone. Permanent until a human tops up — never retried,
+    never swallowed by a stage's graceful-degradation path."""
+
+
+# Phrases providers use for "you are out of money", as distinct from "you are going too
+# fast". Gemini: "Your prepayment credits are depleted"; OpenAI: "exceeded your current
+# quota" / "insufficient_quota"; Anthropic: "credit balance is too low".
+_BILLING_PHRASES = (
+    "credits are depleted",
+    "prepayment",
+    "insufficient_quota",
+    "exceeded your current quota",
+    "credit balance is too low",
+    "billing",
+)
+
+
+def _is_billing_exhausted(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(phrase in msg for phrase in _BILLING_PHRASES)
+
+
 def _retry_on_rate_limit(call: Any, *, max_attempts: int = 8) -> Any:
     last_exc: Exception | None = None
     for attempt in range(max_attempts):
@@ -47,6 +70,15 @@ def _retry_on_rate_limit(call: Any, *, max_attempts: int = 8) -> Any:
                 # A per-request size cap: retrying the identical request can never succeed.
                 # Raise immediately so the caller's shrink-and-retry handler engages.
                 raise
+            if _is_billing_exhausted(exc):
+                # Money, not throughput. Retrying and backing off cannot help, and the
+                # caller's graceful degradation turns this into a SILENT no-op: three
+                # full runs reported EXIT=0 with green gates while every vision window
+                # returned nothing and stale cards were reused. Stop the run outright.
+                raise BillingExhausted(
+                    "LLM provider credits are exhausted — top up billing and re-run. "
+                    "No artifacts were regenerated."
+                ) from exc
             if "rate_limit" not in msg and "429" not in msg:
                 raise
             suggested = _parse_retry_after(msg)
@@ -604,6 +636,10 @@ class MockLLMProvider(LLMProvider):
                 "people": [
                     {"ref": "new", "name_used": "Hero", "descriptor": "", "visibility": "face"}
                 ],
+                # Attributed shape, so the pipeline test exercises the real contract.
+                "bubbles": [
+                    {"text": f"We should move, {actor} says.", "speaker": "Hero", "to": actor}
+                ],
                 "dialogue_summary": f"{actor} mentions {place} while {beat}.",
                 "action": f"Near {place}, {actor} {beat} as the light shifts ({tag}).",
                 "mood": "dramatic",
@@ -613,6 +649,28 @@ class MockLLMProvider(LLMProvider):
                 "panel_type": "story",
             }
         )
+
+
+def preflight_check(llm: LLMProvider, *, label: str = "provider") -> None:
+    """One cheap call to prove the key can actually spend, before a long run starts.
+
+    A depleted key fails identically to a healthy one until the first request — and a
+    chapter pass makes ~60 of them. Costs a handful of tokens; saves discovering the
+    problem after the run reports success on stale artifacts.
+    """
+    from rich.console import Console
+
+    try:
+        llm.complete("Reply with OK.", "ping", json_mode=False)
+    except BillingExhausted:
+        raise
+    except Exception as exc:
+        if _is_billing_exhausted(exc):
+            raise BillingExhausted(
+                f"{label}: credits exhausted — top up billing before re-running."
+            ) from exc
+        # Anything else (transient network, odd model) is not worth blocking the run.
+        Console().print(f"[dim]Preflight warning for {label}: {type(exc).__name__}[/]")
 
 
 def get_stage_llm(stage: str, config: dict[str, Any] | None = None) -> LLMProvider:

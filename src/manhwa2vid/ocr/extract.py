@@ -194,6 +194,49 @@ def _duplicate_card_ratio(cards: list[SceneCard]) -> tuple[float, list[str]]:
     return (len(dupes) / len(story) if story else 0.0), dupes
 
 
+def _normalize_bubbles(value: Any) -> tuple[list[str], list[str]]:
+    """Returns (verbatim_texts, attributed_lines).
+
+    Speech attribution is decided at PERCEPTION time — bubble tails, gaze and vocatives
+    are visible there and nowhere later. Previously only the paraphrase reached the
+    writer, so it guessed: one man's line about "MY sick mother's medical bills" became a
+    whole crowd's motivation, and "TAKE CARE OF US, MR. SONG CHI-YUL" was narrated as
+    Jin-Woo addressing someone else entirely.
+
+    Accepts the attributed object shape and bare strings alike, so legacy cards and the
+    mock keep working.
+    """
+    texts: list[str] = []
+    attributed: list[str] = []
+    if not isinstance(value, list):
+        return texts, attributed
+    for item in value:
+        if isinstance(item, str):
+            if item.strip():
+                texts.append(item.strip())
+                attributed.append(item.strip())
+            continue
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text", "")).strip()
+        if not text:
+            continue
+        texts.append(text)
+        speaker = str(item.get("speaker", "")).strip()
+        addressee = str(item.get("to", "")).strip()
+        if _is_nullish_name(speaker):
+            speaker = ""
+        if _is_nullish_name(addressee):
+            addressee = ""
+        if speaker and addressee:
+            attributed.append(f'{speaker} -> {addressee}: "{text}"')
+        elif speaker:
+            attributed.append(f'{speaker}: "{text}"')
+        else:
+            attributed.append(f'"{text}"')
+    return texts, attributed
+
+
 def _coerce_confidence(value: Any) -> float:
     """Parse the model's self-reported certainty into 0.0-1.0.
 
@@ -344,7 +387,11 @@ def _normalize_scene_data(
         for person in people:
             if person.ref != "new" and person.ref not in known_ids:
                 person.ref = "new"
-    bubbles = _as_str_list(data.get("bubbles"))
+    # Bubbles arrive either as the attributed object shape (current prompt) or as bare
+    # strings (legacy cards, the mock, and any provider that ignores the schema). Keep
+    # both: `bubbles` stays a list[str] for every existing consumer/gate, while
+    # `attributed_lines` carries speaker→addressee for the writer's evidence.
+    bubbles, attributed = _normalize_bubbles(data.get("bubbles"))
 
     # Gate: a speaker must be one of the people visible in this panel. This is where the
     # "Sung Jin-Woo speaks in a panel he is not in" class of hallucination is stopped.
@@ -380,6 +427,9 @@ def _normalize_scene_data(
         "dropped_speakers": [s for s in raw_speakers if s not in speakers],
         "demoted_identifications": demoted_identifications,
         "bubbles": bubbles,
+        # Must be in the RETURNED dict: this function builds a fresh one, so setting the
+        # key on the input silently dropped every speaker/addressee.
+        "attributed_lines": attributed,
         "dialogue_summary": dialogue,
         "action": _sanitize_scene_text(_as_str(data.get("action"))),
         "mood": _as_str(data.get("mood")),
@@ -445,9 +495,11 @@ def _card_from_entry(
     counters["demoted"] += int(data.get("demoted_identifications", 0))
     if not data["dialogue_summary"] and data.get("bubbles"):
         counters["grounded_from_bubbles"] += 1
-    source_text = " | ".join(
-        filter(None, [panel_ocr.strip(), " / ".join(data.get("bubbles", []))])
-    )
+    # Prefer the ATTRIBUTED lines in source_text: this is the field the writer's evidence
+    # is built from, and "Kim -> Bak: \"...\"" is the difference between a line having an
+    # owner and the writer guessing one. Falls back to bare bubbles for legacy shapes.
+    spoken = data.get("attributed_lines") or data.get("bubbles", [])
+    source_text = " | ".join(filter(None, [panel_ocr.strip(), " / ".join(spoken)]))
     return SceneCard(
         panel_ids=data["panel_ids"],
         speakers=data["speakers"],
@@ -604,6 +656,17 @@ def _run_chapter_scene_pass(
             save_json(paths["scene_partial_json"], cards)
             progress.advance(task)
 
+    # A vision pass that produced NOTHING is a failed run, not an empty chapter. Without
+    # this the stage returns quietly, downstream reuses whatever is on disk, and every
+    # gate reports green on stale artifacts — exactly what three credit-exhausted runs
+    # did while reporting EXIT=0.
+    if analysis_panels and not cards:
+        raise RuntimeError(
+            f"Vision pass produced no scene cards for {len(analysis_panels)} panel(s). "
+            "The provider returned nothing usable — check credits/quota and re-run; "
+            "existing artifacts were left untouched."
+        )
+
     cards.sort(key=lambda c: c.panel_ids[0] if c.panel_ids else "")
     intro_demoted = demote_unintroduced_back_views(cards)
     if intro_demoted:
@@ -666,7 +729,15 @@ def _build_window_prompt(
         "from what is in THAT image alone. Knowing the story does not let you describe "
         "events from other panels.\n\n"
         "For each panel return:\n"
-        "- bubbles: verbatim text of every speech bubble/caption in reading order\n"
+        "- bubbles: one object per speech bubble/caption in reading order:\n"
+        '    {"text": verbatim words, "speaker": who says it, "to": who they say it to}\n'
+        "  Judge speaker from the bubble TAIL (which body it points at) and 'to' from gaze,\n"
+        "  body facing, and the words themselves — a vocative ('MR. SONG, ...') names the\n"
+        "  listener, 'YOU' addresses whoever the previous line concerned. Use the same\n"
+        "  name/descriptor you used in `people`. Leave either field \"\" when the panel does\n"
+        "  not show it — an honest blank is far better than a guess, because every later\n"
+        "  stage trusts this attribution and cannot re-derive it.\n"
+        "  Thought bubbles and narration boxes: speaker = the thinker, to = \"\".\n"
         "- people: every VISIBLE person as {ref, name_used, descriptor, visibility, "
         "basis, confidence}. ref = a char_id from the cast list, or 'new'. visibility = "
         "face|back_turned|partial|crowd. basis = the specific visual evidence IN THIS "
@@ -688,7 +759,11 @@ def _build_window_prompt(
         f"{cast_context}\n\n"
         f"OCR already extracted (ground truth where present):\n{ocr_block}\n\n"
         f"Glossary: {json.dumps(glossary, ensure_ascii=False)}\n\n"
-        'Return ONE JSON object: {"panels": [{"panel_id": "...", "bubbles": [], '
+        # The EXAMPLE governs, not the prose: with `"bubbles": []` here the model returned
+        # bare strings and every speaker/addressee was silently lost.
+        'Return ONE JSON object: {"panels": [{"panel_id": "...", '
+        '"bubbles": [{"text": "verbatim words", "speaker": "who says it", '
+        '"to": "who they say it to"}], '
         '"people": [], "speakers": [], "dialogue_summary": "", "action": "", "mood": "", '
         '"key_terms": [], "panel_type": "story", "is_story": true, "exclude_reason": ""}]}'
     )
@@ -874,6 +949,10 @@ def run_ocr_and_scenes(
 
     llm = apply_stage_model(get_stage_llm("scene", config), "scene", config)
     console.print(f"[dim]Scene LLM:[/] {type(llm).__name__} ({getattr(llm, 'vision_model', '?')})")
+    # Prove the key can spend BEFORE ~60 vision calls, not after.
+    from manhwa2vid.llm.provider import preflight_check
+
+    preflight_check(llm, label="scene stage")
 
     scene_cards: list[SceneCard] = []
 
@@ -958,9 +1037,8 @@ def run_ocr_and_scenes(
                 grounded_from_bubbles += 1
             # Ground truth for grounding: OCR where available, else the VLM's verbatim
             # bubble transcription — never its summary.
-            source_text = " | ".join(
-                filter(None, [batch_ocr.strip(), " / ".join(data.get("bubbles", []))])
-            )
+            spoken = data.get("attributed_lines") or data.get("bubbles", [])
+            source_text = " | ".join(filter(None, [batch_ocr.strip(), " / ".join(spoken)]))
             card = SceneCard(
                 panel_ids=data["panel_ids"],
                 speakers=data["speakers"],

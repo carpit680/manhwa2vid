@@ -298,3 +298,60 @@ def test_extract_json_object_never_returns_a_list(raw) -> None:
     data = _json.loads(_extract_json_object(raw))
     assert isinstance(data, dict), f"got {type(data).__name__}"
     assert "bubbles" in data
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Error code: 429 - Your prepayment credits are depleted. Please go to AI Studio",
+        "429 insufficient_quota: You exceeded your current quota",
+        "Your credit balance is too low to access this model",
+    ],
+)
+def test_billing_exhaustion_is_fatal_not_retried(message) -> None:
+    """Out of money is permanent; retrying wastes time and, worse, the caller's graceful
+    degradation turns it into a SILENT no-op — three runs reported EXIT=0 with green
+    gates while every vision call failed and stale cards were reused."""
+    from manhwa2vid.llm.provider import BillingExhausted, _retry_on_rate_limit
+
+    calls = {"n": 0}
+
+    def _boom():
+        calls["n"] += 1
+        raise RuntimeError(message)
+
+    with pytest.raises(BillingExhausted):
+        _retry_on_rate_limit(_boom)
+    assert calls["n"] == 1, "must not retry a billing failure"
+
+
+def test_ordinary_rate_limit_still_retries(monkeypatch) -> None:
+    """Throughput limits are transient and must keep their backoff."""
+    from manhwa2vid.llm.provider import _retry_on_rate_limit
+
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+    calls = {"n": 0}
+
+    def _flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("429 rate_limit_exceeded: too many requests")
+        return "ok"
+
+    assert _retry_on_rate_limit(_flaky) == "ok"
+    assert calls["n"] == 3
+
+
+def test_preflight_raises_on_dead_key() -> None:
+    """One cheap call proves the key can spend before ~60 vision calls are attempted."""
+    from manhwa2vid.llm.provider import BillingExhausted, preflight_check
+
+    class _Dead:
+        def complete(self, system, user, *, json_mode=False):
+            raise RuntimeError("429 - Your prepayment credits are depleted.")
+
+        def describe_panels(self, image_paths, prompt):
+            return "{}"
+
+    with pytest.raises(BillingExhausted):
+        preflight_check(_Dead(), label="test")
