@@ -111,7 +111,16 @@ Rules:
 - Anchor people by NAME (from the cast list) or pronoun; never by clothing descriptor if they have a name
 - If an issue below says named_offscreen, remove or re-attribute that person's action — they are not in these panels
 - If an issue below says overlong, cut to UNDER the stated word count — keep only the strongest plot facts
-- Write flowing sentences of roughly 9-16 words — cutting length must NOT mean chopping into staccato fragments
+- If an issue says caption:..., the beat reads like an image description. Delete visual
+  inventory (objects, clothing, expressions-as-phrases) and retell the beat as EVENTS with
+  consequence — what happens, who says what, why it matters.
+- If an issue says reintro:Name, that person was already introduced — remove the
+  appearance appositive and use the bare name or a pronoun.
+- If an issue says pronoun_monotony, vary the sentence openings: start from the action,
+  the other character, or a connective (But / So / Still / Then) — never three
+  "He ..." sentences in a row.
+- Write flowing sentences of roughly 9-18 words, linked by stance or consequence —
+  cutting length must NOT mean chopping into staccato fragments
 - Narrate ONLY what the panel EVIDENCE supports
 
 Return ONLY the rewritten narration as plain prose. No JSON, no quotes around it, no
@@ -309,6 +318,100 @@ def lint_register(beats: list[ScriptBeat]) -> dict[int, list[str]]:
     return report
 
 
+# Caption constructions: each of these describes an IMAGE rather than advancing a story.
+# Straight from the user's review of the shipped video ("a plate of food sits on the
+# counter", "with a startled expression") — the failure they summarized as "a stringed
+# narration of image descriptions".
+_CAPTION_RE = re.compile(
+    r"\bis visible\b|\bare visible\b|\bcan be seen\b"
+    r"|\bin the (?:foreground|background)\b"
+    r"|\bwith an? \w+ expression\b"
+    r"|\bsits? on the\b|\brests? on the\b"   # "an empty plate ... rests on the counter"
+    r"|\bpasses by\b"                          # narrated scenery extras
+    r"|\bthe (?:image|view|shot|close-up)\b"
+    r"|\b(?:left|right) side of\b",
+    re.I,
+)
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_PRONOUN_START_RE = re.compile(r"^(?:He|She|They|His|Her|Their)\b")
+
+
+def lint_captioning(beats: list[ScriptBeat]) -> dict[int, list[str]]:
+    """Flag beats written as image descriptions instead of story."""
+    report: dict[int, list[str]] = {}
+    for beat in beats:
+        hits = sorted({m.group(0).lower() for m in _CAPTION_RE.finditer(beat.narration)})
+        if hits:
+            report[beat.beat_id] = [f"caption:{h}" for h in hits[:3]]
+    return report
+
+
+def lint_reintroduction(
+    beats: list[ScriptBeat],
+    bible: SeriesBible | None,
+) -> dict[int, list[str]]:
+    """Flag appearance appositives after a character's first introduction.
+
+    One iteration attached "with short grey hair" to Kim Sangshik SEVEN times, then
+    introduced Song Chi-yul with the same phrase — three men sharing one description,
+    indistinguishable to a listener. An intro clause exists exactly once per character;
+    afterwards the name stands alone.
+    """
+    if bible is None:
+        return {}
+    report: dict[int, list[str]] = {}
+    seen_intro: set[str] = set()
+    patterns = []
+    for profile in bible.characters.values():
+        if profile.merged_into:
+            continue
+        name = profile.canonical_name.strip()
+        if not name or is_descriptor_label(name):
+            continue
+        # "Name, a/an/the <up to 8 words>," — the appositive shape.
+        patterns.append(
+            (name, re.compile(
+                rf"\b{re.escape(name)},\s+(?:a|an|the)\s+(?:[\w''-]+\s+){{0,8}}[\w''-]+,",
+                re.I,
+            ))
+        )
+    for beat in beats:
+        issues: list[str] = []
+        for name, rx in patterns:
+            hits = len(rx.findall(beat.narration))
+            if not hits:
+                continue
+            allowed = 0 if name in seen_intro else 1
+            if hits > allowed:
+                issues.append(f"reintro:{name}")
+            seen_intro.add(name)
+        if issues:
+            report[beat.beat_id] = issues
+    return report
+
+
+def lint_pronoun_monotony(beats: list[ScriptBeat]) -> dict[int, list[str]]:
+    """Flag >=3 consecutive sentences opening with a subject pronoun.
+
+    The aggregate pronoun:name ratio can be on target while one beat still reads
+    "He walks... He blends... He thinks... He heads..." — the monotony is local, so the
+    check must be local too. The gold script's worst run is 2.
+    """
+    report: dict[int, list[str]] = {}
+    for beat in beats:
+        run = longest = 0
+        for sentence in _SENTENCE_SPLIT_RE.split(beat.narration):
+            if _PRONOUN_START_RE.match(sentence.strip()):
+                run += 1
+                longest = max(longest, run)
+            else:
+                run = 0
+        if longest >= 3:
+            report[beat.beat_id] = [f"pronoun_monotony:{longest}_consecutive"]
+    return report
+
+
 def lint_overlong_beats(
     beats: list[ScriptBeat],
     config: dict[str, Any],
@@ -433,14 +536,34 @@ def _looks_like_verb(word: str) -> bool:
     return len(w) > 3 and (w.endswith("s") or w.endswith("ed") or w.endswith("ing"))
 
 
-def fix_pronoun_case(text: str, bible: SeriesBible) -> str:
-    """Repair subject pronouns sitting in object position.
+# Words after which a personal pronoun is reliably an OBJECT. Prepositions plus verbs
+# that take a direct person object. Deliberately EXCLUDES clause-taking report verbs
+# (says/admits/explains/wonders/realizes): "admits he returned" keeps a subject clause.
+# History, because both directions of this bug have now shipped: a next-word-is-a-verb
+# default converted "admits he only returned" -> "admits him" (adverbs) and "asks if he
+# went" -> "if him went" (irregular pasts defeat suffix checks). Precision beats recall
+# here — a missed conversion reads slightly off; a wrong one is gibberish out loud.
+_OBJECT_PREV_WORDS = frozenset(
+    """
+    to with at for from on of about behind beside near toward towards into onto than
+    over under around past against upon after before between among across without
+    tells told asks asked warns warned calls called greets greeted thanks thanked
+    helps helped stops stopped leads led drags dragged pushes pushed shoves shoved
+    hits hit gives gave hands handed shows showed offers offered passes passed
+    reminds reminded orders ordered sends sent meets met joins joined follows followed
+    pats patted nudges nudged elbows elbowed hugs hugged grabs grabbed pulls pulled
+    catches caught watches watched sees saw beside besides
+    """.split()
+)
 
-    Name rotation substitutes the subject form, so "Kim pats Jin-Woo on the shoulder"
-    became "pats HE on the shoulder" — ungrammatical, and this text is SPOKEN, so the
-    error is audible rather than cosmetic. A verb whitelist could not keep up (the miss
-    was 'pats'); deciding on the word AFTER the pronoun does: a finite verb means the
-    pronoun is a subject, anything else in mid-sentence means it is an object.
+
+def fix_pronoun_case(text: str, bible: SeriesBible) -> str:
+    """Repair subject pronouns sitting in object position ("pats he on the shoulder").
+
+    Converts ONLY when the previous word is in a high-precision object-cue whitelist;
+    everything else keeps the nominative the writer chose. Spoken narration punishes the
+    two failure modes asymmetrically: a missed conversion sounds slightly stiff, a wrong
+    conversion ("Will him manage to survive?") is gibberish.
     """
     if not bible.protagonist_id or bible.protagonist_id not in bible.characters:
         return text
@@ -449,22 +572,12 @@ def fix_pronoun_case(text: str, bible: SeriesBible) -> str:
     if objective == pronoun:
         return text
 
-    # Word boundaries matter: without them "he" matches inside "the" and "shoulder".
-    pattern = re.compile(
-        r"(\S+\s+)\b" + re.escape(pronoun) + r"\b(?=(\s*)(\S*))",
-        re.I,
-    )
+    pattern = re.compile(r"([A-Za-z']+)(\s+)\b" + re.escape(pronoun) + r"\b(?![-'’])", re.I)
 
     def _sub(m: re.Match) -> str:
-        before, after = m.group(1), m.group(3)
-        # Clause-initial position stays nominative whatever preceded the break.
-        if not before.strip() or before.strip().endswith((".", "!", "?", ",", ";", ":")):
-            return m.group(0)
-        # A finite verb after the pronoun means it is the subject of its own clause —
-        # "says he is the weakest", "and he laughs".
-        if _looks_like_verb(after):
-            return m.group(0)
-        return f"{before}{objective}"
+        if m.group(1).lower() in _OBJECT_PREV_WORDS:
+            return f"{m.group(1)}{m.group(2)}{objective}"
+        return m.group(0)
 
     return pattern.sub(_sub, text)
 
@@ -699,6 +812,13 @@ def lint_beats(
         for beat_id, issues in lint_descriptor_quarantine(beats, bible).items():
             report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_aside_overuse(beats, config).items():
+        report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
+    if bible is not None:
+        for beat_id, issues in lint_reintroduction(beats, bible).items():
+            report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
+    for beat_id, issues in lint_captioning(beats).items():
+        report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
+    for beat_id, issues in lint_pronoun_monotony(beats).items():
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_overlong_beats(beats, config).items():
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))

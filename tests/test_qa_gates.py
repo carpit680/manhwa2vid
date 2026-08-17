@@ -1292,3 +1292,32 @@ def test_intro_guard_is_idempotent_across_stages() -> None:
     assert demote_unintroduced_back_views(cards) == 0
     assert cards[0].people[0].ref == "new"
     assert cards[1].people[0].ref == "char_joo"
+
+
+def test_basis_text_naming_a_character_resolves_the_ref() -> None:
+    """Vision sometimes recognizes someone but leaves ref='new', burying the
+    recognition in the basis: "curly hair matching Bak's profile observed from behind".
+    That orphaned Bak's inner line from his identity in the shipped video.
+    """
+    from manhwa2vid.characters.link import _resolve_from_basis_text
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+
+    bible = SeriesBible(series_slug="s", title="S")
+    bible.characters["char_bak"] = CharacterProfile(
+        id="char_bak", canonical_name="Bak", tier=CharacterTier.SUPPORTING
+    )
+    bible.characters["char_kim"] = CharacterProfile(
+        id="char_kim", canonical_name="Kim Sangshik", tier=CharacterTier.SUPPORTING
+    )
+    bible.characters["char_desc"] = CharacterProfile(
+        id="char_desc", canonical_name="man in blue jacket", tier=CharacterTier.MINOR
+    )
+
+    assert _resolve_from_basis_text(
+        "basis: curly hair matching Bak's profile observed from behind/above", bible
+    ) == "char_bak"
+    # Ambiguous (two names) -> no resolution; guessing is roster priming.
+    assert _resolve_from_basis_text("basis: either Bak or Sangshik from behind", bible) == ""
+    # Descriptor-profile words must not match ("blue jacket" appears in half the bases).
+    assert _resolve_from_basis_text("basis: torso in a blue jacket holding a cup", bible) == ""
+    assert _resolve_from_basis_text("", bible) == ""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ from rich.console import Console
 
 from manhwa2vid.characters.bible import (
     clean_bible_aliases,
+    is_descriptor_label,
     format_bible_for_prompt,
     load_series_bible,
     merge_profile,
@@ -71,6 +73,31 @@ def _ref_label(ref: str) -> str:
     if not ref or ref == "new":
         return ""
     return ref.removeprefix("char_").replace("_", " ").strip()
+
+
+def _resolve_from_basis_text(notes: str, bible: SeriesBible) -> str:
+    """A char_id when the basis text names exactly ONE named bible character, else ''.
+
+    Only real names count (descriptor profiles like 'man in blue jacket' would match half
+    the cast's basis strings), and ambiguity means no resolution — a guess here would be
+    the roster-priming failure all over again. The intro-order guard still runs after
+    this, so a basis-resolved back view before the character's first face-on appearance
+    is re-demoted rather than trusted.
+    """
+    text = (notes or "").lower()
+    if not text:
+        return ""
+    matches: list[str] = []
+    for profile in bible.characters.values():
+        if profile.merged_into:
+            continue
+        name = profile.canonical_name.strip()
+        if not name or is_descriptor_label(name):
+            continue
+        tokens = [t for t in re.split(r"[\s\-‑]+", name) if len(t) > 2]
+        if tokens and any(re.search(rf"\b{re.escape(t.lower())}\b", text) for t in tokens):
+            matches.append(profile.id)
+    return matches[0] if len(matches) == 1 else ""
 
 
 def _close_ref_against_bible(person: CharacterRef, card: SceneCard, bible: SeriesBible) -> str:
@@ -609,6 +636,14 @@ def run_cast_linking(
                         bible,
                         speaker=_speaker_for_card(card),
                     )
+                    if not resolved:
+                        # The vision model sometimes recognizes someone but leaves ref
+                        # 'new' anyway, putting the recognition in the BASIS instead:
+                        # "curly hair matching Bak's profile observed from behind". That
+                        # orphaned Bak's inner line ("is he actually a powerful hunter?")
+                        # from his identity in the shipped video. If the basis names
+                        # exactly one bible character, that is the identification.
+                        resolved = _resolve_from_basis_text(person.notes, bible)
                     if resolved:
                         person.ref = resolved
                 elif person.ref not in bible.characters:

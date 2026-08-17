@@ -554,9 +554,17 @@ def _sighted_complete_json(
         labeled = labeled[:max_images]
         prompt = (
             f"{system}\n\n"
-            "The images below are the ACTUAL PANELS for these beats, each labeled with its "
-            "beat and panel id. Narrate what you can see in them. Where the evidence text "
-            "and an image disagree, trust the image.\n\n"
+            # VERIFICATION stance, not description. The first wording ("narrate what you
+            # can see in them") turned the writer into a captioner — the shipped video
+            # read as "a stringed narration of image descriptions": plates on counters,
+            # jacket colours, 'with a startled expression'. Images exist to keep the
+            # story HONEST (who is present, what actually happens), never to be described.
+            "The images below are the panels for these beats, labeled by beat and panel "
+            "id. They are for FACT-CHECKING only: use them to confirm who is present and "
+            "what actually happens, and to catch anything the text evidence gets wrong. "
+            "Do NOT describe the images — no visual inventory, no clothing or object "
+            "detail unless the story turns on it. Write the beats as one continuous "
+            "story in the voice the system prompt defines.\n\n"
             f"{user}"
         )
         raw = llm.describe_labeled_panels(labeled, prompt)

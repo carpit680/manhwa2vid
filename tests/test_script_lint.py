@@ -248,3 +248,94 @@ def test_pronoun_case_decided_by_following_word(text, expected) -> None:
         id="char_mc", canonical_name="Hero", tier=CharacterTier.MAIN, pronoun="he"
     )
     assert expected in fix_pronoun_case(text, bible)
+
+
+def test_captioning_lint_flags_image_description_language() -> None:
+    """'A plate of food sits on the counter' is alt-text, not narration.
+
+    The user's verdict on the shipped video: "a stringed narration of image
+    descriptions". These constructions are its fingerprint — the gold script contains
+    zero of them across 677 words.
+    """
+    from manhwa2vid.script.lint import lint_captioning
+
+    flagged = ScriptBeat(
+        beat_id=1, panel_ids=["p1"],
+        narration="A plate of food sits on the counter. Kim looks up with a startled "
+                  "expression. Bak is visible in the background.",
+    )
+    clean = ScriptBeat(
+        beat_id=2, panel_ids=["p2"],
+        narration="Kim looks up, startled, when someone shouts his name across the lot.",
+    )
+    report = lint_captioning([flagged, clean])
+    assert 1 in report and len(report[1]) == 3
+    assert 2 not in report
+
+
+def test_pronoun_monotony_is_local_to_a_beat() -> None:
+    """Aggregate ratio can pass while one beat reads He... He... He... He..."""
+    from manhwa2vid.script.lint import lint_pronoun_monotony
+
+    monotone = ScriptBeat(
+        beat_id=3, panel_ids=["p3"],
+        narration="He walks through the streets. He blends into the crowd. "
+                  "He thinks about his job. He heads toward the site.",
+    )
+    varied = ScriptBeat(
+        beat_id=4, panel_ids=["p4"],
+        narration="He walks through the streets. Nobody looks at him twice. "
+                  "He thinks about his job. But the site ahead is already buzzing.",
+    )
+    report = lint_pronoun_monotony([monotone, varied])
+    assert report == {3: ["pronoun_monotony:4_consecutive"]}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Every one of these shipped as gibberish from the previous default-to-object
+        # heuristic (adverbs and irregular pasts defeat suffix-based verb detection).
+        "He admits he only returned because of his wife.",
+        "She asks if he went to the hospital.",
+        "Will he manage to survive this dungeon?",
+        "Kim says he is the weakest hunter.",
+        "He admits he already went.",
+    ],
+)
+def test_pronoun_case_never_corrupts_subject_clauses(text) -> None:
+    """A wrong conversion is gibberish out loud; precision beats recall."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import fix_pronoun_case
+
+    bible = SeriesBible(series_slug="s", title="S", protagonist_id="char_mc")
+    bible.characters["char_mc"] = CharacterProfile(
+        id="char_mc", canonical_name="Hero", tier=CharacterTier.MAIN, pronoun="he"
+    )
+    assert fix_pronoun_case(text, bible) == text, "subject clause must not be converted"
+
+
+def test_reintroduction_appositives_flagged_after_first() -> None:
+    """Kim got 'with short grey hair' seven times; Song Chi-yul then got the SAME
+    description — three men indistinguishable to a listener. One intro per character."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import lint_reintroduction
+
+    bible = SeriesBible(series_slug="s", title="S")
+    bible.characters["char_kim"] = CharacterProfile(
+        id="char_kim", canonical_name="Kim Sangshik", tier=CharacterTier.SUPPORTING
+    )
+
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p1"],
+                   narration="Kim Sangshik, a seasoned hunter with short grey hair, waves."),
+        ScriptBeat(beat_id=2, panel_ids=["p2"],
+                   narration="Kim Sangshik, the man with short grey hair, drinks his coffee."),
+        ScriptBeat(beat_id=3, panel_ids=["p3"],
+                   narration="Kim Sangshik laughs at the joke."),
+    ]
+
+    report = lint_reintroduction(beats, bible)
+    assert 1 not in report, "the first intro is legitimate"
+    assert report.get(2) == ["reintro:Kim Sangshik"]
+    assert 3 not in report, "bare name is always fine"
