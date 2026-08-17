@@ -885,3 +885,86 @@ def test_demoted_identification_loses_its_confidence() -> None:
     assert demoted == 1
     assert people[0].ref == "new"
     assert people[0].confidence == 0.0
+
+
+def test_reference_window_rejects_panels_carrying_dialogue() -> None:
+    """A reference with its own speech bubbles poisons bubble transcription.
+
+    The ch1 reference was a full page reading "MY NAME IS SUNG JIN-WOO / E-RANK HUNTER".
+    The vision model transcribed THAT instead of the panel under analysis, and 85% of
+    chapter 2's cards inherited the chapter 1 cold open's narration and injury imagery.
+    """
+    from manhwa2vid.characters.reference import select_reference_panels
+    from manhwa2vid.models import CharacterRef, SceneCard
+
+    person = CharacterRef(
+        ref="char_mc", visibility="face", notes="clear face, distinctive hair", confidence=0.95
+    )
+    talky = SceneCard(
+        panel_ids=["p0001_01"],
+        people=[person],
+        dialogue_summary="He introduces himself as an E-rank hunter.",
+    )
+    assert not select_reference_panels(_ref_bible(), [talky])
+
+    silent = SceneCard(panel_ids=["p0002_01"], people=[person])
+    assert select_reference_panels(_ref_bible(), [silent])["char_mc"][0][0] == "p0002_01"
+
+
+def test_reference_window_rejects_tall_scroll_strips() -> None:
+    """A 1080x4500 scroll strip is a page, not a portrait — it was picked once, and the
+    model described the whole page as if it were the panel."""
+    from manhwa2vid.characters.reference import select_reference_panels
+    from manhwa2vid.models import CharacterRef, Panel, PanelBBox, SceneCard
+
+    person = CharacterRef(
+        ref="char_mc", visibility="face", notes="clear face, distinctive hair", confidence=0.95
+    )
+    panels = {
+        "p0001_01": Panel(
+            id="p0001_01", page_num=1, image_path="a.png",
+            bbox=PanelBBox(x=0, y=0, width=1080, height=4500),  # scroll strip
+        ),
+        "p0002_01": Panel(
+            id="p0002_01", page_num=2, image_path="b.png",
+            bbox=PanelBBox(x=0, y=0, width=1080, height=1200),  # portrait-ish
+        ),
+    }
+    cards = [
+        SceneCard(panel_ids=["p0001_01"], people=[person]),
+        SceneCard(panel_ids=["p0002_01"], people=[person]),
+    ]
+
+    picked = select_reference_panels(_ref_bible(), cards, panels=panels, per_character=3)
+    chosen = [pid for pid, _score in picked["char_mc"]]
+    assert chosen == ["p0002_01"], f"scroll strip must be rejected, got {chosen}"
+
+
+@pytest.mark.parametrize("bad", ["None", "null", "N/A", "unknown", "  none  ", "None."])
+def test_nullish_names_never_become_identities(bad) -> None:
+    """A model with no name to give answers "None" — that must not become a character.
+
+    Slugified, it produced char_none, which was seeded into the bible and then absorbed a
+    pale silhouette, an orange-haired man in a blue jacket, and two other unrelated figures
+    into one fake identity that passed every downstream id check.
+    """
+    from manhwa2vid.characters.bible import slugify_char_id
+    from manhwa2vid.ocr.extract import _normalize_people
+
+    people, _demoted = _normalize_people(
+        [{"ref": "new", "name_used": bad, "descriptor": "pale-skinned person",
+          "basis": "clearly visible", "confidence": 0.9}]
+    )
+    assert people[0].name_used == "", f"{bad!r} leaked through as a name"
+    assert slugify_char_id(bad) == "char_unknown"
+
+
+def test_nullish_ref_is_forced_to_new() -> None:
+    """char_none arriving as a ref must be rejected even though it looks well-formed."""
+    from manhwa2vid.ocr.extract import _normalize_people
+
+    people, _ = _normalize_people(
+        [{"ref": "char_none", "name_used": "", "descriptor": "small white silhouette",
+          "basis": "visible outline", "confidence": 0.9}]
+    )
+    assert people[0].ref == "new"

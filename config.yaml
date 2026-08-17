@@ -54,8 +54,12 @@ scene:
   batch_size: 1
   # Lead each vision request with cached reference images of the main cast so identity
   # is matched against pixels, not text descriptions two similar men both satisfy.
-  # Built from prior runs' best-evidenced identifications (characters/reference.py).
-  use_reference_images: true
+  # DEFAULT OFF — measured harmful on ch2 2026-08-17: references are whole story panels,
+  # and the model transcribed the REFERENCE's speech bubbles instead of the panel's
+  # (85% of ch2 cards inherited the ch1 cold-open's injury imagery and narration, vs 7%
+  # without). Re-enable only with the shape/text guards in characters/reference.py and
+  # re-measure action-text diversity against a no-reference baseline.
+  use_reference_images: false
   # Only identifications the vision model itself rates this confident may become
   # reference images. A shaky anchor propagates one wrong face through the series.
   reference_min_confidence: 0.75

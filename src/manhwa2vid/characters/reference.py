@@ -26,10 +26,17 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from manhwa2vid.models import CharacterProfile, CharacterTier, SceneCard, SeriesBible
+from manhwa2vid.models import CharacterProfile, CharacterTier, Panel, SceneCard, SeriesBible
 
 # A reference is only useful if the character is actually legible in it.
 _USABLE_VISIBILITY = ("face", "partial")
+# A reference must LOOK like a portrait, not like a page. Selection originally had no shape
+# constraint and picked a 1080x4500 scroll strip containing its own speech bubbles; the
+# vision model then transcribed the REFERENCE's bubbles instead of the panel's, and 85% of
+# the next chapter's cards inherited that page's narration and injury imagery. A reference
+# that carries its own text or spans a whole page is worse than no reference at all.
+MAX_REFERENCE_ASPECT = 2.0   # height/width — above this it is a scroll strip, not a portrait
+MIN_REFERENCE_ASPECT = 0.4
 # How many characters get a reference window at all.
 MAX_CHARACTERS = 3
 # Images kept per character. >1 is the whole point: one image cannot distinguish a
@@ -81,18 +88,32 @@ def select_reference_panels(
     max_refs: int = MAX_CHARACTERS,
     per_character: int = WINDOW_PER_CHARACTER,
     min_confidence: float = MIN_REFERENCE_CONFIDENCE,
+    panels: dict[str, Panel] | None = None,
 ) -> dict[str, list[tuple[str, int]]]:
     """Best reference panels per character id → [(panel_id, score), ...], best first.
 
-    Two filters must both pass: an explicit visual `basis`, and the model's own
-    `confidence` at or above `min_confidence`. An unbacked or uncertain guess is exactly
-    the failure a reference window exists to correct, so seeding from one would make the
-    confusion self-reinforcing.
+    Four filters must all pass: an explicit visual `basis`; the model's own `confidence`
+    at or above `min_confidence`; NO dialogue on the panel (its bubbles would be
+    transcribed as if they belonged to the panel under analysis); and a portrait-ish
+    aspect ratio (a tall scroll strip is a page, not a face). The first two stop a shaky
+    identification becoming a self-reinforcing anchor; the last two stop the reference's
+    own content bleeding into every downstream card.
     """
     candidates: dict[str, list[tuple[str, int]]] = {}
     for card in cards:
         if not card.is_story or not card.panel_ids:
             continue
+        # A reference carrying its own speech bubbles contaminates bubble transcription.
+        if card.dialogue_summary.strip() or card.source_text.strip():
+            continue
+        if panels is not None:
+            panel = panels.get(card.panel_ids[0])
+            if panel is None:
+                continue
+            width = panel.bbox.width or 1
+            aspect = panel.bbox.height / width
+            if not (MIN_REFERENCE_ASPECT <= aspect <= MAX_REFERENCE_ASPECT):
+                continue
         crowd = len(card.people)
         for person in card.people:
             ref = (person.ref or "").strip()
@@ -158,6 +179,7 @@ def build_reference_sheet(
     max_refs: int = MAX_CHARACTERS,
     per_character: int = WINDOW_PER_CHARACTER,
     min_confidence: float = MIN_REFERENCE_CONFIDENCE,
+    panel_meta: dict[str, Panel] | None = None,
 ) -> list[tuple[str, Path]]:
     """Fold this chapter's best identifications into the rolling window on disk.
 
@@ -171,6 +193,7 @@ def build_reference_sheet(
         max_refs=max_refs,
         per_character=per_character,
         min_confidence=min_confidence,
+        panels=panel_meta,
     )
     out_dir = reference_dir(series_dir)
     manifest = _load_manifest(out_dir)

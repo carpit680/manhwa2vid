@@ -22,9 +22,19 @@ def is_junk_alias(text: str) -> bool:
     return bool(_JUNK_ALIAS_RE.search(text.strip()))
 
 
+# Null-ish placeholders a model returns instead of admitting it has no name. Slugified,
+# these become real-looking ids ("None" -> char_none) that then absorb every anonymous
+# figure into one fake identity — so they must never reach an id.
+_NULLISH_NAME_TOKENS = frozenset(
+    {"none", "null", "nil", "n_a", "na", "unknown", "unnamed", "undefined"}
+)
+
+
 def slugify_char_id(name: str) -> str:
     base = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
-    return f"char_{base}" if base else "char_unknown"
+    if not base or base in _NULLISH_NAME_TOKENS:
+        return "char_unknown"
+    return f"char_{base}"
 
 
 def is_descriptor_label(text: str) -> bool:

@@ -183,6 +183,19 @@ def _coerce_confidence(value: Any) -> float:
     return max(0.0, min(1.0, number))
 
 
+# Serializers stringify null in several dialects, and a vision model asked for a name it
+# does not know will happily answer with one of these. Slugified, "None" became char_none —
+# a bible profile that then absorbed a pale silhouette, an orange-haired man, and two other
+# unrelated people into a single fake identity that passed every downstream id check.
+_NULLISH_NAMES = frozenset(
+    {"none", "null", "nil", "n/a", "na", "unknown", "unnamed", "undefined", "-", "?"}
+)
+
+
+def _is_nullish_name(value: str) -> bool:
+    return value.strip().strip(".").lower() in _NULLISH_NAMES
+
+
 def _normalize_people(value: Any) -> tuple[list[CharacterRef], int]:
     """Returns (people, demoted_count).
 
@@ -201,6 +214,10 @@ def _normalize_people(value: Any) -> tuple[list[CharacterRef], int]:
             continue
         ref = str(item.get("ref", "new"))
         name_used = str(item.get("name_used", ""))
+        if _is_nullish_name(name_used):
+            name_used = ""
+        if _is_nullish_name(ref) or _is_nullish_name(ref.removeprefix("char_")):
+            ref = "new"
         basis = str(item.get("basis", "")).strip()
         notes = str(item.get("notes", ""))
         confidence = _coerce_confidence(item.get("confidence"))
@@ -602,6 +619,7 @@ def run_ocr_and_scenes(
                 min_confidence=float(
                     get_nested(config, "scene", "reference_min_confidence", default=0.75)
                 ),
+                panel_meta={p.id: p for p in panels},  # enforces the portrait-shape guard
             )
             if _sheet:
                 console.print(
