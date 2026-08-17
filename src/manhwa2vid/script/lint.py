@@ -10,7 +10,11 @@ from typing import Any
 
 from rich.console import Console
 
-from manhwa2vid.characters.bible import format_bible_for_prompt, naming_priority_rules
+from manhwa2vid.characters.bible import (
+    format_bible_for_prompt,
+    is_descriptor_label,
+    naming_priority_rules,
+)
 from manhwa2vid.config import get_nested
 from manhwa2vid.llm.provider import apply_stage_model, get_stage_llm
 from manhwa2vid.models import PanelCast, SceneCard, ScriptBeat, SeriesBible
@@ -248,18 +252,21 @@ def lint_mc_name_spam(
     name = mc.canonical_name.strip()
     if not name:
         return {}
-    max_after = int(get_nested(config, "script", "max_mc_full_name_after_hook", default=2))
-    name_re = re.compile(re.escape(name), re.I)
-    after_hook_hits = 0
+    # Spam is DENSITY, not existence. The old cumulative cap (hook + 2 names for the
+    # whole script) shipped a video where the MC was 'he' for fifteen straight beats —
+    # 21:1 pronouns-to-names against the reference channel's ~6:1, and ambiguous out
+    # loud wherever another man was named. One anchor per beat is the register the
+    # reference actually speaks; two-plus in a single beat is the spam worth flagging.
+    short = _short_name_form(name)
+    name_re = re.compile(
+        rf"\b(?:{re.escape(name)}|{re.escape(short)})(?:'s|’s)?\b", re.I
+    )
     report: dict[int, list[str]] = {}
     for beat in beats:
         count = len(name_re.findall(beat.narration))
-        if beat.beat_id <= 1:
-            continue
-        if count:
-            after_hook_hits += count
-            if after_hook_hits > max_after:
-                report[beat.beat_id] = ["mc_full_name_spam"]
+        allowed = 2 if beat.beat_id <= 1 else 1
+        if count > allowed:
+            report[beat.beat_id] = ["mc_full_name_spam"]
     return report
 
 
@@ -325,6 +332,7 @@ def rotate_protagonist_name(
     *,
     keep: int = 1,
     state: dict[str, int] | None = None,
+    keep_form: str | None = None,
 ) -> str:
     """Deterministically replace 2nd+ uses of ANY protagonist name form in a beat with
     their pronoun. Models chronically ignore rotation instructions; the reference channel
@@ -372,6 +380,12 @@ def rotate_protagonist_name(
         nonlocal seen
         seen += 1
         if seen <= keep:
+            # `keep_form` lets a kept anchor use the natural short form ("Jin-Woo")
+            # instead of echoing the full canonical name at every anchor.
+            if keep_form and not m.group(1):
+                return keep_form
+            if keep_form and m.group(1):
+                return f"{keep_form}{m.group(1)}"
             return m.group(0)
         start = m.start()
         prior = text[:start].rstrip()
@@ -455,27 +469,78 @@ def fix_pronoun_case(text: str, bible: SeriesBible) -> str:
     return pattern.sub(_sub, text)
 
 
+def _short_name_form(name: str) -> str:
+    """The natural short anchor: the last hyphenated token ('Sung Jin-Woo' -> 'Jin-Woo')."""
+    parts = name.split()
+    return parts[-1] if len(parts) > 1 else name
+
+
+def _same_pronoun_rivals(bible: SeriesBible) -> list[str]:
+    """Names of non-protagonist characters who share the protagonist's pronoun.
+
+    When one of these is named in a beat, a bare 'he' is ambiguous out loud — the listener
+    cannot tell which man just laughed.
+    """
+    if not bible.protagonist_id or bible.protagonist_id not in bible.characters:
+        return []
+    mc_pron = (bible.characters[bible.protagonist_id].pronoun or "he").lower()
+    rivals: list[str] = []
+    for profile in bible.characters.values():
+        if profile.id == bible.protagonist_id or profile.merged_into:
+            continue
+        if (profile.pronoun or "").lower() != mc_pron:
+            continue
+        name = profile.canonical_name.strip()
+        if name and not is_descriptor_label(name):
+            rivals.append(name)
+    return rivals
+
+
 def enforce_mc_name_budget(
     beats: list[ScriptBeat],
     bible: SeriesBible,
     config: dict[str, Any],
 ) -> list[ScriptBeat]:
-    """Script-wide protagonist-name rotation — the deterministic twin of lint_mc_name_spam.
+    """Cadence-based protagonist-name rotation.
 
-    Beat 1 (the hook) keeps one anchor; every later beat draws from a single shared
-    budget, so the pass mirrors exactly what the lint rule measures. Per-beat rotation
-    can never satisfy a script-wide rule, and asking the LLM to self-limit across beats
-    it cannot see is hopeless.
+    The first version enforced a hard script-wide cap (hook + 2 names for 18 beats),
+    which shipped a video where the MC is 'he' for fifteen straight beats — 62 pronouns
+    to 3 names, 21:1 against the reference channel's ~6:1 — and made every beat that
+    names another man ambiguous out loud ('Kim sips coffee and shouts to him. He says…').
+
+    Cadence semantics instead: a beat keeps ONE name anchor when
+      - it is the hook beat, or
+      - at least `mc_anchor_every_beats` beats have passed since the last anchor, or
+      - the beat names another same-pronoun character (a bare pronoun would be ambiguous).
+    Everything else rotates to pronouns. Anchors after the first use the natural short
+    form ('Jin-Woo'), matching how the reference channel actually speaks.
     """
-    max_after = int(get_nested(config, "script", "max_mc_full_name_after_hook", default=2))
-    state = {"seen": 0}
+    cadence = int(get_nested(config, "script", "mc_anchor_every_beats", default=2))
+    rivals = _same_pronoun_rivals(bible)
+    mc = bible.characters.get(bible.protagonist_id)
+    short = _short_name_form(mc.canonical_name) if mc else ""
+
+    rival_res = [re.compile(rf"\b{re.escape(n)}\b", re.I) for n in rivals]
+    beats_since_anchor = 999  # first eligible beat anchors
+    anchors = 0
     out: list[ScriptBeat] = []
     for beat in beats:
-        if beat.beat_id <= 1:
-            # The hook anchors the name; rotate only repeats within the beat itself.
-            text = rotate_protagonist_name(beat.narration, bible, keep=1)
+        ambiguous = any(rx.search(beat.narration) for rx in rival_res)
+        anchor_here = beat.beat_id <= 1 or beats_since_anchor >= cadence or ambiguous
+        if anchor_here:
+            # Full name for the very first anchor (the hook introduction); the short,
+            # spoken form after that.
+            form = None if anchors == 0 else (short or None)
+            text = rotate_protagonist_name(beat.narration, bible, keep=1, keep_form=form)
+            # Only count it as an anchor if the beat actually contained a name to keep.
+            if text != rotate_protagonist_name(beat.narration, bible, keep=0):
+                anchors += 1
+                beats_since_anchor = 0
+            else:
+                beats_since_anchor += 1
         else:
-            text = rotate_protagonist_name(beat.narration, bible, keep=max_after, state=state)
+            text = rotate_protagonist_name(beat.narration, bible, keep=0)
+            beats_since_anchor += 1
         out.append(beat.model_copy(update={"narration": fix_pronoun_case(text, bible)}))
     return out
 

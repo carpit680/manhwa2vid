@@ -83,15 +83,22 @@ def test_mc_name_spam_after_hook() -> None:
             )
         },
     )
-    config = {"script": {"max_mc_full_name_after_hook": 2}}
+    # Spam is DENSITY, not existence: one anchor per beat is the reference register
+    # (the old cumulative cap produced the 'he for fifteen beats' video); two names in
+    # ONE beat is the true name-spam-every-12-words failure this lint was born from.
+    config: dict = {}
     beats = [
         ScriptBeat(beat_id=1, panel_ids=["p1"], narration="Sung Jin-Woo is the weakest hunter."),
         ScriptBeat(beat_id=2, panel_ids=["p2"], narration="Sung Jin-Woo walks home."),
         ScriptBeat(beat_id=3, panel_ids=["p3"], narration="Sung Jin-Woo meets Song."),
-        ScriptBeat(beat_id=4, panel_ids=["p4"], narration="Sung Jin-Woo enters the gate."),
+        ScriptBeat(
+            beat_id=4, panel_ids=["p4"],
+            narration="Sung Jin-Woo enters the gate. Sung Jin-Woo draws a breath.",
+        ),
     ]
     report = lint_mc_name_spam(beats, bible, config)
-    assert 4 in report
+    assert 4 in report, "two names in one beat is spam"
+    assert 2 not in report and 3 not in report, "one anchor per beat is the register"
     assert "mc_full_name_spam" in report[4]
 
 

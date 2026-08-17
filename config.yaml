@@ -103,7 +103,12 @@ script:
   genz_level: none      # reference uses ~0 slang (0.07 per 1k words)
   max_narrator_asides: 0  # reference has 18 first-person tokens in 75k words
   max_beats: 18
-  max_mc_full_name_after_hook: 2
+  # Name-anchor cadence: a beat keeps ONE protagonist name anchor when this many
+  # beats have passed since the last one, or when the beat names another same-pronoun
+  # character (bare 'he' would be ambiguous out loud). The old hard cap (hook + 2
+  # names for the whole script) shipped a video where the MC was 'he' for fifteen
+  # straight beats — 21:1 pronouns-to-names vs the reference channel's ~6:1.
+  mc_anchor_every_beats: 2
   narration_chunk_size: 5   # beats per narration LLM call — small outputs can't drop beats
   # Attach each chunk's actual panels to the narration call. The writer used to compose
   # from text cards while the alignment audit judged it against images — an image-blind

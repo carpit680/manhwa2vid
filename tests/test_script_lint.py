@@ -42,11 +42,12 @@ def test_lint_mc_attribution_flags_off_screen_mc() -> None:
     assert 2 in report
 
 
-def test_name_budget_is_script_wide_not_per_beat() -> None:
-    """Per-beat rotation cannot satisfy a script-wide rule.
+def test_name_anchors_follow_cadence_not_a_hard_cap() -> None:
+    """The hard cap (hook + 2 names per script) made the MC 'he' for fifteen beats.
 
-    rotate_protagonist_name kept the first name use in EVERY beat, so 18 beats produced
-    18 name uses against a budget of 2 — 11 of the 13 lint flags surviving on ch1.
+    Measured on the shipped ch1 video: 62 pronouns to 3 names — 21:1 against the
+    reference channel's ~6:1 — which the user immediately flagged as repetitive.
+    Cadence semantics: an anchor roughly every N beats, short form after the first.
     """
     from manhwa2vid.models import CharacterProfile, CharacterTier, ScriptBeat, SeriesBible
     from manhwa2vid.script.lint import enforce_mc_name_budget, lint_mc_name_spam
@@ -55,21 +56,62 @@ def test_name_budget_is_script_wide_not_per_beat() -> None:
     bible.characters["char_mc"] = CharacterProfile(
         id="char_mc", canonical_name="Sung Jin-Woo", tier=CharacterTier.MAIN, pronoun="he"
     )
-    config = {"script": {"max_mc_full_name_after_hook": 2}}
+    config = {"script": {"mc_anchor_every_beats": 2}}
 
     beats = [
         ScriptBeat(beat_id=i, panel_ids=[f"p{i:04d}_01"], narration="Sung Jin-Woo walks on.")
         for i in range(1, 11)
     ]
 
-    assert lint_mc_name_spam(beats, bible, config), "fixture must start in violation"
-
     out = enforce_mc_name_budget(beats, bible, config)
 
+    names = sum(1 for b in out if "Jin-Woo" in b.narration)
+    pronouns = sum(1 for b in out if b.narration.startswith("He "))
+    assert 3 <= names <= 6, f"cadence 2 over 10 beats should anchor ~4-5 times, got {names}"
+    assert pronouns >= 4, "the beats between anchors must still rotate"
+    assert out[0].narration.startswith("Sung Jin-Woo"), "hook keeps the full name"
+    assert any(b.narration.startswith("Jin-Woo ") for b in out[1:]), \
+        "later anchors use the natural short form"
     assert not lint_mc_name_spam(out, bible, config)
-    total = sum(b.narration.count("Sung Jin-Woo") for b in out)
-    assert total == 3, f"hook anchor + 2 allowance, got {total}"
-    assert out[-1].narration.startswith("He "), "later beats must read as pronouns"
+
+
+def test_ambiguous_beat_forces_a_name_anchor() -> None:
+    """A beat naming another same-pronoun character must anchor the MC by name.
+
+    'Kim Sangshik sips coffee and shouts to him. He says…' — spoken aloud, the listener
+    cannot tell which man is 'he'. This ambiguity was most of the 'other inconsistencies'
+    in the user's review of the ch1 video.
+    """
+    from manhwa2vid.models import CharacterProfile, CharacterTier, ScriptBeat, SeriesBible
+    from manhwa2vid.script.lint import enforce_mc_name_budget
+
+    bible = SeriesBible(series_slug="s", title="S", protagonist_id="char_mc")
+    bible.characters["char_mc"] = CharacterProfile(
+        id="char_mc", canonical_name="Sung Jin-Woo", tier=CharacterTier.MAIN, pronoun="he"
+    )
+    bible.characters["char_kim"] = CharacterProfile(
+        id="char_kim", canonical_name="Kim Sangshik", tier=CharacterTier.SUPPORTING,
+        pronoun="he",
+    )
+    bible.characters["char_joo"] = CharacterProfile(
+        id="char_joo", canonical_name="Lee Joo-hee", tier=CharacterTier.SUPPORTING,
+        pronoun="she",
+    )
+
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p1"], narration="Sung Jin-Woo wakes up."),
+        # Cadence 99 would rotate this — but Kim shares 'he', so it must anchor.
+        ScriptBeat(beat_id=2, panel_ids=["p2"],
+                   narration="Kim Sangshik waves. Sung Jin-Woo walks over."),
+        # Joo-hee is 'she' — no collision, cadence rotation applies.
+        ScriptBeat(beat_id=3, panel_ids=["p3"],
+                   narration="Lee Joo-hee scolds Sung Jin-Woo gently."),
+    ]
+
+    out = enforce_mc_name_budget(beats, bible, {"script": {"mc_anchor_every_beats": 99}})
+
+    assert "Jin-Woo walks over" in out[1].narration, out[1].narration
+    assert "Jin-Woo" not in out[2].narration, "no collision -> rotates on cadence"
 
 
 def test_name_budget_preserves_beat_one_anchor() -> None:

@@ -22,6 +22,11 @@ Character handling (CRITICAL):
   (e.g. "Lee Joo-hee, the party's rookie healer, ..."). The "Already introduced" list tells you who has
   had their intro — never repeat an intro clause for them, and never intro-clause the protagonist after beat 1.
 - After introduction: name or pronoun only.
+- NAME CADENCE (the listener has no subtitles): re-anchor the protagonist by NAME in
+  roughly every second beat, and ALWAYS in a beat that also names another man — "Kim
+  Sangshik shouts to him. He says he is fine" is unintelligible aloud, because "he" could
+  be either of them. Between anchors use pronouns freely. Aim for about six pronouns per
+  name anchor: a chapter narrated almost entirely as "he" is the failure mode here.
 - People without a bible name: use a short role phrase ("a veteran hunter", "the guild clerk").
 - FORBIDDEN words: {ban_words}
 - Never write "character", "unnamed", "a person", or "someone" for a person the cast list identifies.

@@ -1194,3 +1194,101 @@ def test_cast_stage_elects_protagonist_when_bible_has_none() -> None:
     )
 
     assert detect_protagonist(bible, {}) == "char_hero"
+
+
+def test_election_prefers_named_profile_over_descriptor() -> None:
+    """Appearance count alone elected a descriptor as protagonist on ch2.
+
+    "young man with black hair and white shirt" won on appearances — but narration cannot
+    name a descriptor, and every naming rule anchors on the protagonist's canonical name.
+    """
+    from manhwa2vid.characters.bible import is_descriptor_label
+
+    assert is_descriptor_label("young man with black hair and white shirt")
+    assert not is_descriptor_label("Sung Jin-Woo")
+
+
+def test_named_crowd_figure_is_demoted() -> None:
+    """Nobody is identifiable 'in a crowd' by definition.
+
+    A named crowd figure is roster priming — the same failure that put Lee Joo-hee at a
+    crosswalk she was never in, introducing her a scene early in the shipped video.
+    """
+    from manhwa2vid.ocr.extract import _normalize_people
+
+    people, demoted = _normalize_people(
+        [{"ref": "char_lee_joo_hee", "name_used": "Lee Joo-hee",
+          "descriptor": "woman in the crowd", "visibility": "crowd",
+          "basis": "woman with long orange hair", "confidence": 0.95}]
+    )
+    assert people[0].ref == "new"
+    assert people[0].confidence == 0.0
+    assert demoted == 1
+
+
+def test_character_cannot_be_introduced_from_behind() -> None:
+    """A first appearance needs a face; a back view before that is roster priming.
+
+    This is how Lee Joo-hee ended up "standing in a crowd" at a crosswalk one scene
+    before she actually appears — a back-turned pedestrian matched on hair colour alone
+    at 0.95 confidence, which reached the narration as her introduction.
+    """
+    from manhwa2vid.models import CharacterRef, SceneCard
+    from manhwa2vid.ocr.extract import demote_unintroduced_back_views
+
+    cards = [
+        # Crosswalk: MC recognizable from behind by his backpack, Joo-hee only by hair.
+        SceneCard(panel_ids=["p0008_01"], people=[
+            CharacterRef(ref="char_mc", visibility="face", confidence=1.0),
+        ]),
+        SceneCard(panel_ids=["p0008_02"], people=[
+            CharacterRef(ref="char_mc", visibility="back_turned", confidence=1.0),
+            CharacterRef(ref="char_joo", visibility="back_turned", confidence=0.95,
+                         name_used="Lee Joo-hee"),
+        ]),
+        # Her real first appearance, face-on, later in the chapter.
+        SceneCard(panel_ids=["p0019_01"], people=[
+            CharacterRef(ref="char_joo", visibility="face", confidence=0.95),
+        ]),
+        SceneCard(panel_ids=["p0020_01"], people=[
+            CharacterRef(ref="char_joo", visibility="back_turned", confidence=0.9),
+        ]),
+    ]
+
+    demoted = demote_unintroduced_back_views(cards)
+
+    assert demoted == 1
+    crosswalk = cards[1].people
+    assert crosswalk[0].ref == "char_mc", "already face-on -> back view is credible"
+    assert crosswalk[1].ref == "new", "Joo-hee's first sighting cannot be a back view"
+    assert crosswalk[1].name_used == ""
+    assert cards[3].people[0].ref == "char_joo", "after a face sighting, back views are kept"
+
+
+def test_intro_guard_is_idempotent_across_stages() -> None:
+    """The demotion must survive the cast stage, which re-resolves 'new' people.
+
+    Demoting Joo-hee in the scene cards was undone within one stage: closing a 'new'
+    person whose descriptor reads "woman with long orange hair" against the bible put her
+    back at a crosswalk she is not in. Running the guard again after finalization is what
+    makes it stick — so it must be safe to run twice.
+    """
+    from manhwa2vid.models import CharacterRef, SceneCard
+    from manhwa2vid.ocr.extract import demote_unintroduced_back_views
+
+    def _cards():
+        return [
+            SceneCard(panel_ids=["p0008_02"], people=[
+                CharacterRef(ref="char_joo", visibility="back_turned", confidence=0.95),
+            ]),
+            SceneCard(panel_ids=["p0019_01"], people=[
+                CharacterRef(ref="char_joo", visibility="face", confidence=0.95),
+            ]),
+        ]
+
+    cards = _cards()
+    assert demote_unintroduced_back_views(cards) == 1
+    # Second pass has nothing left to do, and must not touch the legitimate face sighting.
+    assert demote_unintroduced_back_views(cards) == 0
+    assert cards[0].people[0].ref == "new"
+    assert cards[1].people[0].ref == "char_joo"

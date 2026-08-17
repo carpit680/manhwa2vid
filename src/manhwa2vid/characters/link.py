@@ -674,6 +674,25 @@ def run_cast_linking(
         from manhwa2vid.characters.quest import detect_protagonist, set_protagonist_labels
 
         elected = detect_protagonist(bible, config)
+        # Appearance count alone elected "young man with black hair and white shirt" on ch2
+        # — a descriptor profile, not a person the narration can name. A real name is
+        # always the better anchor, so prefer the best-attested NAMED profile and fall back
+        # to the descriptor only when the chapter genuinely names nobody.
+        if elected and is_descriptor_label(bible.characters[elected].canonical_name):
+            named = [
+                profile
+                for profile in bible.characters.values()
+                if not profile.merged_into
+                and profile.canonical_name.strip()
+                and not is_descriptor_label(profile.canonical_name)
+            ]
+            if named:
+                best = max(named, key=lambda pr: (len(pr.appearances), pr.confidence))
+                console.print(
+                    f"[dim]Election skipped descriptor profile "
+                    f"{bible.characters[elected].canonical_name!r} → {best.canonical_name}[/]"
+                )
+                elected = best.id
         if elected:
             bible.protagonist_id = elected
             profile = bible.characters.get(elected)
@@ -688,6 +707,21 @@ def run_cast_linking(
     enriched = apply_id_redirects(enriched, bible)
     enriched = _normalize_mc_attribution(enriched, bible)
     enriched = _dedupe_card_people(enriched, bible)
+
+    # Re-apply the "cannot be introduced from behind" rule HERE, not only at scene time.
+    # This stage's whole job is closing 'new' people against the bible, so a figure the
+    # scene stage demoted gets resolved straight back the moment its descriptor matches an
+    # alias — "woman with long orange hair" re-became Lee Joo-hee at a crosswalk she is not
+    # in, one scene before her actual first appearance. The guard belongs wherever identity
+    # is FINALIZED; running it in both places is what makes the demotion stick.
+    from manhwa2vid.ocr.extract import demote_unintroduced_back_views
+
+    reverted = demote_unintroduced_back_views(enriched)
+    if reverted:
+        console.print(
+            f"[dim]Cast: re-demoted {reverted} back-view identification(s) claimed before "
+            f"a face-on introduction[/]"
+        )
 
     attribution = _build_attribution(enriched)
     save_json(paths["scene_enriched_json"], enriched)

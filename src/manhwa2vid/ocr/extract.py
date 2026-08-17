@@ -257,7 +257,15 @@ def _normalize_people(value: Any) -> tuple[list[CharacterRef], int]:
         basis = str(item.get("basis", "")).strip()
         notes = str(item.get("notes", ""))
         confidence = _coerce_confidence(item.get("confidence"))
+        visibility = str(item.get("visibility", "face"))
         if (ref != "new" or name_used) and len(basis) < 4:
+            ref, name_used = "new", ""
+            confidence = 0.0
+            demoted += 1
+        elif (ref != "new" or name_used) and visibility == "crowd":
+            # Nobody is identifiable "in a crowd" by definition — a named crowd figure is
+            # roster priming, the same failure that put Lee Joo-hee at a crosswalk she
+            # was never in (a back-turned extra "identified" by hair colour alone).
             ref, name_used = "new", ""
             confidence = 0.0
             demoted += 1
@@ -266,7 +274,7 @@ def _normalize_people(value: Any) -> tuple[list[CharacterRef], int]:
                 ref=ref,
                 name_used=name_used,
                 descriptor=str(item.get("descriptor", "")),
-                visibility=str(item.get("visibility", "face")),
+                visibility=visibility,
                 notes=f"basis: {basis}" if basis else notes,
                 confidence=confidence,
             )
@@ -383,6 +391,78 @@ def _normalize_scene_data(
     }
 
 
+def demote_unintroduced_back_views(cards: list[SceneCard]) -> int:
+    """A character cannot be INTRODUCED from behind. Returns how many were demoted.
+
+    Cards are walked in panel order. The first time a named character appears they must be
+    face-on or clearly partial; a back-turned or crowd figure claimed before any face
+    sighting is roster priming, not recognition. That is precisely how Lee Joo-hee ended
+    up "standing in a crowd" at a crosswalk one scene before she actually appears — a
+    back-turned pedestrian matched on hair colour alone at 0.95 confidence, which then
+    reached the narration as an introduction.
+
+    Once a character HAS been seen face-on in the chapter, later back views are credible
+    (the protagonist is legitimately recognizable from behind by his green backpack), so
+    this only rejects the introduction case.
+    """
+    seen_face: set[str] = set()
+    demoted = 0
+    for card in sorted(cards, key=lambda c: c.panel_ids[0] if c.panel_ids else ""):
+        for person in card.people:
+            ref = (person.ref or "").strip()
+            if not ref or ref == "new":
+                continue
+            if person.visibility in ("face", "partial"):
+                seen_face.add(ref)
+                continue
+            if ref not in seen_face:
+                person.ref = "new"
+                person.name_used = ""
+                person.confidence = 0.0
+                demoted += 1
+    return demoted
+
+
+def _card_from_entry(
+    entry: dict[str, Any],
+    panel: Panel,
+    pid: str,
+    ocr_map: dict[str, PanelOCR],
+    known_ids: set[str],
+    counters: dict[str, int],
+) -> SceneCard:
+    """One annotation -> one SceneCard, through the shared normalization.
+
+    Used by both the window path and its single-panel retry so a retried panel gets the
+    identical guards (panel-id clamping, off-panel speakers, dialogue grounding,
+    basis-required identification, nullish-name rejection).
+    """
+    ocr = ocr_map.get(pid)
+    panel_ocr = (ocr.translated_text or ocr.full_text) if ocr else ""
+    entry["panel_ids"] = [pid]
+    data = _normalize_scene_data(entry, [panel], ocr_text=panel_ocr, known_ids=known_ids)
+    counters["dropped_speakers"] += len(data.get("dropped_speakers", []))
+    counters["demoted"] += int(data.get("demoted_identifications", 0))
+    if not data["dialogue_summary"] and data.get("bubbles"):
+        counters["grounded_from_bubbles"] += 1
+    source_text = " | ".join(
+        filter(None, [panel_ocr.strip(), " / ".join(data.get("bubbles", []))])
+    )
+    return SceneCard(
+        panel_ids=data["panel_ids"],
+        speakers=data["speakers"],
+        dialogue_summary=data["dialogue_summary"],
+        action=data["action"],
+        mood=data["mood"],
+        key_terms=data["key_terms"],
+        source_text=source_text,
+        is_story=data["is_story"],
+        exclude_reason=data["exclude_reason"],
+        panel_type=data["panel_type"],
+        people=data["people"],
+    )
+
+
 def _run_chapter_scene_pass(
     analysis_panels: list[Panel],
     paths: dict[str, Path],
@@ -471,44 +551,67 @@ def _run_chapter_scene_pass(
                 if panel is None or pid in seen or pid not in window_ids:
                     continue
                 seen.add(pid)
-                ocr = ocr_map.get(pid)
-                panel_ocr = (ocr.translated_text or ocr.full_text) if ocr else ""
-                entry["panel_ids"] = [pid]
-                data = _normalize_scene_data(
-                    entry, [panel], ocr_text=panel_ocr, known_ids=known_ids
-                )
-                counters["dropped_speakers"] += len(data.get("dropped_speakers", []))
-                counters["demoted"] += int(data.get("demoted_identifications", 0))
-                if not data["dialogue_summary"] and data.get("bubbles"):
-                    counters["grounded_from_bubbles"] += 1
-                source_text = " | ".join(
-                    filter(None, [panel_ocr.strip(), " / ".join(data.get("bubbles", []))])
-                )
-                card = SceneCard(
-                    panel_ids=data["panel_ids"],
-                    speakers=data["speakers"],
-                    dialogue_summary=data["dialogue_summary"],
-                    action=data["action"],
-                    mood=data["mood"],
-                    key_terms=data["key_terms"],
-                    source_text=source_text,
-                    is_story=data["is_story"],
-                    exclude_reason=data["exclude_reason"],
-                    panel_type=data["panel_type"],
-                    people=data["people"],
+                card = _card_from_entry(
+                    entry, panel, pid, ocr_map, known_ids, counters
                 )
                 update_bible_from_scene(bible, card, pid)
                 cards.append(card)
 
             missing = [pid for pid in window_ids if pid not in seen]
+            if missing:
+                # A window can come back empty — an empty completion parses to {} and
+                # yields zero entries, silently dropping 12 panels (ch2 lost its first
+                # 24 that way; only cards-coverage caught it). Retry the stragglers one
+                # at a time: a single panel is a smaller, safer request and its id is
+                # unambiguous, so partial perception beats none.
+                console.print(f"[yellow]Window left {len(missing)} panel(s) — retrying singly[/]")
+                for pid in list(missing):
+                    panel = by_id.get(pid)
+                    if panel is None:
+                        continue
+                    try:
+                        solo = json.loads(
+                            llm.describe_labeled_panels(
+                                [(f"PANEL {pid}:", paths["root"] / panel.image_path)],
+                                _build_window_prompt(
+                                    [panel], ocr_map, glossary,
+                                    format_cast_context(bible, cards[-3:]),
+                                    story_map, roster_text,
+                                ),
+                            )
+                        )
+                    except Exception:
+                        continue
+                    solo_entries = solo.get("panels")
+                    entry = None
+                    if isinstance(solo_entries, list) and solo_entries:
+                        entry = solo_entries[0] if isinstance(solo_entries[0], dict) else None
+                    elif isinstance(solo, dict) and solo.get("action"):
+                        entry = solo  # some replies answer a single panel unwrapped
+                    if not isinstance(entry, dict):
+                        continue
+                    entry["panel_ids"] = [pid]
+                    card = _card_from_entry(
+                        entry, panel, pid, ocr_map, known_ids, counters
+                    )
+                    update_bible_from_scene(bible, card, pid)
+                    cards.append(card)
+                    seen.add(pid)
+                missing = [pid for pid in window_ids if pid not in seen]
             counters["missing"] += len(missing)
             if missing:
                 console.print(f"[yellow]Window skipped {len(missing)} panel(s):[/] {missing[:8]}")
-            save_series_bible(bible)
             save_json(paths["scene_partial_json"], cards)
             progress.advance(task)
 
     cards.sort(key=lambda c: c.panel_ids[0] if c.panel_ids else "")
+    intro_demoted = demote_unintroduced_back_views(cards)
+    if intro_demoted:
+        counters["demoted"] += intro_demoted
+        console.print(
+            f"[dim]Demoted {intro_demoted} back-turned/crowd figure(s) claimed before "
+            f"their first face-on appearance[/]"
+        )
     return cards, counters, story_map
 
 
@@ -568,6 +671,14 @@ def _build_window_prompt(
         "basis, confidence}. ref = a char_id from the cast list, or 'new'. visibility = "
         "face|back_turned|partial|crowd. basis = the specific visual evidence IN THIS "
         "PANEL. confidence = 0.0-1.0, below 0.5 when guessing from posture or clothing.\n"
+        "IDENTIFICATION DISCIPLINE: the cast roster exists to RESOLVE people you can "
+        "already recognize — it is NOT a list of who to expect. Unnamed strangers vastly "
+        "outnumber the cast: street crowds, pedestrians and background figures are almost "
+        "never cast members. NEVER name a back-turned, partial, or crowd figure from "
+        "position or a common trait (hair colour alone is a common trait) — knowing a "
+        "cast member is nearby in the story does not put them in this panel. Naming "
+        "requires a marker unique to that person. When unsure use ref='new': an unnamed "
+        "extra is always correct; a wrongly named one corrupts every later stage.\n"
         "- speakers: which of THIS panel's people speak a bubble here\n"
         "- dialogue_summary: reported speech from this panel's bubbles only\n"
         "- action, mood, key_terms, panel_type (story|title_splash|credit|ad|other), "
