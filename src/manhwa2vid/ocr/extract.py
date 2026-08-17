@@ -383,6 +383,220 @@ def _normalize_scene_data(
     }
 
 
+def _run_chapter_scene_pass(
+    analysis_panels: list[Panel],
+    paths: dict[str, Path],
+    ocr_map: dict[str, PanelOCR],
+    glossary: dict,
+    bible: Any,
+    llm: Any,
+    config: dict[str, Any],
+) -> tuple[list[SceneCard], dict[str, int], dict[str, str]]:
+    """Read the chapter whole, then annotate it in small LABELED windows.
+
+    Pass 1 gives the model the thing the per-panel loop destroyed: the chapter as one
+    story, so identity is tracked across panels by sight rather than reconstructed from
+    prose downstream. Pass 2 annotates in windows whose images carry their panel id
+    inline — a single 59-image pass produced correct annotations bound to the wrong ids
+    (measured shift of +3), because a model cannot reliably count images. The chapter
+    understanding rides along as text, so windows lose nothing but the counting burden.
+
+    Every annotation is pushed through the same `_normalize_scene_data` the per-panel path
+    uses, so all existing guards and scene gates apply unchanged.
+    """
+    window_size = int(get_nested(config, "scene", "chapter_window_panels", default=12))
+    if hasattr(llm, "MAX_VISION_TOKENS"):
+        llm.MAX_VISION_TOKENS = int(
+            get_nested(config, "scene", "chapter_max_output_tokens", default=16384)
+        )
+
+    # --- Pass 1: read the whole chapter -------------------------------------------------
+    story_map: dict[str, str] = {}
+    roster_text = ""
+    try:
+        raw = llm.describe_panels(
+            [paths["root"] / p.image_path for p in analysis_panels],
+            _build_chapter_read_prompt(analysis_panels),
+        )
+        read = json.loads(raw)
+        story_map = {
+            "summary": str(read.get("summary", "")),
+            "temporal_devices": str(read.get("temporal_devices", "")),
+        }
+        roster = read.get("roster") or []
+        roster_text = "\n".join(
+            f"  - {r.get('who','?')}: {r.get('looks','')}"
+            for r in roster if isinstance(r, dict)
+        )
+        console.print(f"[dim]Chapter read:[/] {story_map['summary'][:110]}")
+    except Exception as exc:
+        console.print(f"[yellow]Chapter read failed ({type(exc).__name__}) — annotating without it[/]")
+
+    # --- Pass 2: annotate in labeled windows --------------------------------------------
+    by_id = {p.id: p for p in analysis_panels}
+    known_ids = set(bible.characters)
+    cards: list[SceneCard] = []
+    counters = {"dropped_speakers": 0, "demoted": 0, "grounded_from_bubbles": 0, "missing": 0}
+    windows = _chapter_windows(analysis_panels, window_size)
+
+    with Progress() as progress:
+        task = progress.add_task("Chapter scene analysis", total=len(windows))
+        for window in windows:
+            prompt = _build_window_prompt(
+                window, ocr_map, glossary,
+                format_cast_context(bible, cards[-3:]), story_map, roster_text,
+            )
+            labeled = [
+                (f"PANEL {p.id}:", paths["root"] / p.image_path) for p in window
+            ]
+            try:
+                payload = json.loads(llm.describe_labeled_panels(labeled, prompt))
+            except json.JSONDecodeError:
+                console.print("[yellow]Window returned unparseable JSON[/]")
+                payload = {}
+
+            entries = payload.get("panels")
+            entries = entries if isinstance(entries, list) else []
+            window_ids = [p.id for p in window]
+            seen: set[str] = set()
+            for position, entry in enumerate(entries):
+                if not isinstance(entry, dict):
+                    continue
+                pid = str(entry.get("panel_id", "")).strip()
+                if pid not in by_id:
+                    # Unknown id: fall back to this entry's POSITION in the window, which
+                    # is the order the labeled images were sent in.
+                    pid = window_ids[position] if position < len(window_ids) else ""
+                panel = by_id.get(pid)
+                if panel is None or pid in seen or pid not in window_ids:
+                    continue
+                seen.add(pid)
+                ocr = ocr_map.get(pid)
+                panel_ocr = (ocr.translated_text or ocr.full_text) if ocr else ""
+                entry["panel_ids"] = [pid]
+                data = _normalize_scene_data(
+                    entry, [panel], ocr_text=panel_ocr, known_ids=known_ids
+                )
+                counters["dropped_speakers"] += len(data.get("dropped_speakers", []))
+                counters["demoted"] += int(data.get("demoted_identifications", 0))
+                if not data["dialogue_summary"] and data.get("bubbles"):
+                    counters["grounded_from_bubbles"] += 1
+                source_text = " | ".join(
+                    filter(None, [panel_ocr.strip(), " / ".join(data.get("bubbles", []))])
+                )
+                card = SceneCard(
+                    panel_ids=data["panel_ids"],
+                    speakers=data["speakers"],
+                    dialogue_summary=data["dialogue_summary"],
+                    action=data["action"],
+                    mood=data["mood"],
+                    key_terms=data["key_terms"],
+                    source_text=source_text,
+                    is_story=data["is_story"],
+                    exclude_reason=data["exclude_reason"],
+                    panel_type=data["panel_type"],
+                    people=data["people"],
+                )
+                update_bible_from_scene(bible, card, pid)
+                cards.append(card)
+
+            missing = [pid for pid in window_ids if pid not in seen]
+            counters["missing"] += len(missing)
+            if missing:
+                console.print(f"[yellow]Window skipped {len(missing)} panel(s):[/] {missing[:8]}")
+            save_series_bible(bible)
+            save_json(paths["scene_partial_json"], cards)
+            progress.advance(task)
+
+    cards.sort(key=lambda c: c.panel_ids[0] if c.panel_ids else "")
+    return cards, counters, story_map
+
+
+def _build_chapter_read_prompt(panels: list[Panel]) -> str:
+    """Pass 1: understand the chapter. No per-panel output, so nothing can misbind."""
+    return (
+        f"You are reading ONE COMPLETE manhwa chapter: {len(panels)} panels attached in "
+        "reading order. Read it as a story before anything is described panel by panel.\n\n"
+        "Work out:\n"
+        "- what happens, in order, as a connected sequence of events\n"
+        "- WHO recurs. Track each person across panels by face, hair, build and clothing. "
+        "The same person seen from behind, in shadow, or in a different outfit is still "
+        "that person; two people who dress alike are still two people.\n"
+        "- any flashforward, flashback or time skip, and where the frame shifts\n\n"
+        'Return ONE JSON object:\n'
+        '{"summary": "what happens in this chapter, in order", '
+        '"temporal_devices": "devices used and where they shift, or empty string", '
+        '"roster": [{"who": "name if the chapter names them, else a stable visual label", '
+        '"looks": "the features that identify them across panels", '
+        '"first_seen": "roughly where they first appear"}]}'
+    )
+
+
+def _build_window_prompt(
+    panels: list[Panel],
+    ocr_map: dict[str, PanelOCR],
+    glossary: dict,
+    cast_context: str,
+    story_map: dict[str, str],
+    roster_text: str,
+) -> str:
+    """Pass 2: annotate a small window whose images are LABELED inline.
+
+    Each image is preceded by its own panel id in the message, so the binding is
+    positional rather than a count the model has to maintain. Windows stay small for the
+    same reason; the chapter-level understanding is carried in as text.
+    """
+    ocr_lines = []
+    for p in panels:
+        ocr = ocr_map.get(p.id)
+        if ocr and ocr.full_text.strip():
+            ocr_lines.append(f"  {p.id}: {ocr.full_text[:300]}")
+    ocr_block = "\n".join(ocr_lines) or "  (none — transcribe bubbles yourself)"
+
+    return (
+        "You have already read this whole chapter. Here is what you established:\n"
+        f"  STORY: {story_map.get('summary', '(none)')}\n"
+        f"  TEMPORAL: {story_map.get('temporal_devices', '') or '(strictly chronological)'}\n"
+        f"  WHO RECURS:\n{roster_text or '  (none)'}\n\n"
+        f"Now annotate ONLY these {len(panels)} panels. Each image below is preceded by a "
+        "line naming its panel id — use that id for that image, and annotate each image "
+        "from what is in THAT image alone. Knowing the story does not let you describe "
+        "events from other panels.\n\n"
+        "For each panel return:\n"
+        "- bubbles: verbatim text of every speech bubble/caption in reading order\n"
+        "- people: every VISIBLE person as {ref, name_used, descriptor, visibility, "
+        "basis, confidence}. ref = a char_id from the cast list, or 'new'. visibility = "
+        "face|back_turned|partial|crowd. basis = the specific visual evidence IN THIS "
+        "PANEL. confidence = 0.0-1.0, below 0.5 when guessing from posture or clothing.\n"
+        "- speakers: which of THIS panel's people speak a bubble here\n"
+        "- dialogue_summary: reported speech from this panel's bubbles only\n"
+        "- action, mood, key_terms, panel_type (story|title_splash|credit|ad|other), "
+        "is_story, exclude_reason\n\n"
+        "A panel with no people gets an empty people list — many panels are scenery, "
+        "close-ups, or pure effect. Never write 'a character' or 'unnamed character'.\n\n"
+        f"{cast_context}\n\n"
+        f"OCR already extracted (ground truth where present):\n{ocr_block}\n\n"
+        f"Glossary: {json.dumps(glossary, ensure_ascii=False)}\n\n"
+        'Return ONE JSON object: {"panels": [{"panel_id": "...", "bubbles": [], '
+        '"people": [], "speakers": [], "dialogue_summary": "", "action": "", "mood": "", '
+        '"key_terms": [], "panel_type": "story", "is_story": true, "exclude_reason": ""}]}'
+    )
+
+
+def _chapter_windows(panels: list[Panel], max_per_call: int) -> list[list[Panel]]:
+    """Split a chapter that is too large for one call, keeping windows big.
+
+    Continuity is the whole point, so windows are as large as the budget allows rather
+    than uniform — a 70-panel chapter is one window, not two of 35.
+    """
+    if len(panels) <= max_per_call:
+        return [panels]
+    windows: list[list[Panel]] = []
+    for i in range(0, len(panels), max_per_call):
+        windows.append(panels[i : i + max_per_call])
+    return windows
+
+
 def _batch_panels(panels: list[Panel], batch_size: int = 3) -> list[list[Panel]]:
     batches: list[list[Panel]] = []
     for i in range(0, len(panels), batch_size):
@@ -551,6 +765,27 @@ def run_ocr_and_scenes(
     console.print(f"[dim]Scene LLM:[/] {type(llm).__name__} ({getattr(llm, 'vision_model', '?')})")
 
     scene_cards: list[SceneCard] = []
+
+    # Chapter mode: one multimodal request carrying the whole chapter, so identity and
+    # causality are PERCEIVED rather than reconstructed from per-panel prose downstream.
+    # per_panel remains available for providers with small per-request caps.
+    if str(get_nested(config, "scene", "mode", default="per_panel")).lower() == "chapter":
+        scene_cards, counters, story_map = _run_chapter_scene_pass(
+            analysis_panels, paths, ocr_map, glossary, bible, llm, config
+        )
+        dropped_speakers_total = counters["dropped_speakers"]
+        demoted_ids_total = counters["demoted"]
+        grounded_from_bubbles = counters["grounded_from_bubbles"]
+        if story_map:
+            save_json(paths["scene_story_map_json"], story_map)
+            console.print(f"[dim]Chapter read:[/] {story_map.get('summary','')[:120]}")
+        save_json(paths["scene_json"], scene_cards)
+        paths["scene_partial_json"].unlink(missing_ok=True)
+        return _finish_scene_stage(
+            meta, paths, config, panels, blank_panels, scene_cards, ocr_results,
+            bible, dropped_speakers_total, grounded_from_bubbles, demoted_ids_total,
+        )
+
     batch_size = int(get_nested(config, "scene", "batch_size", default=1))
     batches = _batch_panels(analysis_panels, batch_size=batch_size)
     recent_cards: list[SceneCard] = []
@@ -638,6 +873,30 @@ def run_ocr_and_scenes(
 
     save_json(paths["scene_json"], scene_cards)
     paths["scene_partial_json"].unlink(missing_ok=True)  # checkpoint fulfilled
+    return _finish_scene_stage(
+        meta, paths, config, panels, blank_panels, scene_cards, ocr_results,
+        bible, dropped_speakers_total, grounded_from_bubbles, demoted_ids_total,
+    )
+
+
+def _finish_scene_stage(
+    meta: ProjectMeta,
+    paths: dict[str, Path],
+    config: dict[str, Any],
+    panels: list[Panel],
+    blank_panels: list[Panel],
+    scene_cards: list[SceneCard],
+    ocr_results: list[PanelOCR],
+    bible: Any,
+    dropped_speakers_total: int,
+    grounded_from_bubbles: int,
+    demoted_ids_total: int,
+) -> tuple[list[PanelOCR], list[SceneCard]]:
+    """Reference refresh, panel filter, and the scene QA gates.
+
+    Shared by both perception modes so chapter mode cannot silently bypass a gate the
+    per-panel path enforces.
+    """
 
     # Refresh the identity anchors from THIS chapter's best-evidenced identifications, so
     # each run (and each later chapter) starts from a stronger reference than the last.
@@ -725,3 +984,5 @@ def run_ocr_and_scenes(
     report.add("story-cards", story > 0, f"{story}/{len(scene_cards)} story cards")
     enforce(report, paths["root"], force=qa_forced(config))
     return ocr_results, scene_cards
+
+

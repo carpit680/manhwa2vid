@@ -305,6 +305,9 @@ def project_paths(project_dir: Path) -> dict[str, Path]:
         "scene_partial_json": project_dir / "scene_cards.partial.json",
         "scene_enriched_json": project_dir / "scene_cards.enriched.json",
         "scene_normalized_json": project_dir / "scene_cards.normalized.json",
+        # Chapter-mode only: the whole-chapter reading the vision pass produced before
+        # annotating individual panels (arc summary + temporal devices).
+        "scene_story_map_json": project_dir / "scene_story_map.json",
         "cast_attribution_json": project_dir / "cast_attribution.json",
         "script_synopsis_json": project_dir / "script.synopsis.json",
         "script_outline_json": project_dir / "script.outline.json",

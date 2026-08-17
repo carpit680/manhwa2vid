@@ -1044,3 +1044,131 @@ def test_card_diversity_ignores_non_story_cards() -> None:
     ]
     frac, _ = _duplicate_card_ratio(cards)
     assert frac < 0.15
+
+
+def test_window_images_are_labeled_inline_not_by_a_counted_list() -> None:
+    """Binding must be positional, not a count the model maintains.
+
+    A single 59-image pass returned CORRECT annotations attached to the panel id three
+    positions later (measured shift +3, similarity 0.75). Each image now carries its id
+    immediately before it in the message.
+    """
+    from manhwa2vid.models import Panel, PanelBBox
+    from manhwa2vid.ocr.extract import _build_window_prompt
+
+    panels = [
+        Panel(id=f"p{i:04d}_01", page_num=i, image_path=f"{i}.png",
+              bbox=PanelBBox(x=0, y=0, width=100, height=100))
+        for i in range(1, 4)
+    ]
+    prompt = _build_window_prompt(
+        panels, {}, {}, "CAST: none",
+        {"summary": "A hunter walks.", "temporal_devices": "flashforward at the start"},
+        "  - Hero: dark hair",
+    )
+    assert "annotate ONLY these 3 panels" in prompt
+    assert "preceded by a line naming its panel id" in prompt
+    # chapter understanding must ride into the window
+    assert "A hunter walks." in prompt
+    assert "flashforward at the start" in prompt
+    assert "Hero: dark hair" in prompt
+
+
+def test_labeled_panels_interleaves_label_before_each_image(tmp_path) -> None:
+    """The provider must emit text-then-image pairs, not all text then all images."""
+    from PIL import Image
+
+    from manhwa2vid.llm.provider import GeminiProvider
+
+    paths = []
+    for name in ("a", "b"):
+        f = tmp_path / f"{name}.png"
+        Image.new("RGB", (8, 8), "white").save(f)
+        paths.append(f)
+
+    captured = {}
+
+    class _Spy(GeminiProvider):
+        def __init__(self):  # skip client construction
+            self.vision_model = "test"
+
+        def _vision_call(self, content):
+            captured["content"] = content
+            return "{}"
+
+    _Spy().describe_labeled_panels(
+        [("PANEL p0001_01:", paths[0]), ("PANEL p0002_01:", paths[1])], "prompt"
+    )
+    kinds = [c["type"] for c in captured["content"]]
+    assert kinds == ["text", "text", "image_url", "text", "image_url"], kinds
+    assert captured["content"][1]["text"] == "PANEL p0001_01:"
+    assert captured["content"][3]["text"] == "PANEL p0002_01:"
+
+
+def test_chapter_windows_keep_one_window_when_it_fits() -> None:
+    """Continuity is the whole point — do not split a chapter that fits in one call."""
+    from manhwa2vid.models import Panel, PanelBBox
+    from manhwa2vid.ocr.extract import _chapter_windows
+
+    panels = [
+        Panel(id=f"p{i:04d}_01", page_num=i, image_path=f"{i}.png",
+              bbox=PanelBBox(x=0, y=0, width=10, height=10))
+        for i in range(70)
+    ]
+    assert len(_chapter_windows(panels, 90)) == 1
+    assert sum(len(w) for w in _chapter_windows(panels, 30)) == 70
+
+
+def test_chapter_pass_normalizes_through_the_same_guards(tmp_path, monkeypatch) -> None:
+    """Chapter mode must not bypass a guard the per-panel path enforces.
+
+    Asserts the shared normalization still fires: an invented panel_id is dropped, a
+    nullish name is rejected, and an unbacked identification is demoted.
+    """
+    from manhwa2vid.models import Panel, PanelBBox, SeriesBible
+    from manhwa2vid.ocr.extract import _run_chapter_scene_pass
+
+    panels = [
+        Panel(id="p0001_01", page_num=1, image_path="a.png",
+              bbox=PanelBBox(x=0, y=0, width=100, height=100)),
+        Panel(id="p0002_01", page_num=2, image_path="b.png",
+              bbox=PanelBBox(x=0, y=0, width=100, height=100)),
+    ]
+
+    class _ChapterLLM:
+        MAX_VISION_TOKENS = 4096
+
+        def describe_panels(self, image_paths, prompt):
+            return json.dumps({"summary": "A man walks.", "temporal_devices": "",
+                               "roster": [{"who": "a man", "looks": "dark coat"}]})
+
+        def describe_labeled_panels(self, labeled, prompt):
+            return json.dumps({
+                "panels": [
+                    {"panel_id": "p0001_01", "action": "A man crosses a street",
+                     "people": [{"ref": "new", "name_used": "None", "descriptor": "a man",
+                                 "basis": "clearly visible", "confidence": 0.9}],
+                     "speakers": [], "dialogue_summary": "", "mood": "calm",
+                     "key_terms": [], "is_story": True, "panel_type": "story"},
+                    {"panel_id": "p0002_01", "action": "Rain falls on an empty road",
+                     "people": [{"ref": "char_ghost", "name_used": "Ghost",
+                                 "descriptor": "", "basis": "", "confidence": 0.95}],
+                     "speakers": [], "dialogue_summary": "", "mood": "bleak",
+                     "key_terms": [], "is_story": True, "panel_type": "story"},
+                    {"panel_id": "p9999_99", "action": "invented panel", "people": [],
+                     "speakers": [], "dialogue_summary": "", "mood": "", "key_terms": [],
+                     "is_story": True, "panel_type": "story"},
+                ],
+            })
+
+    bible = SeriesBible(series_slug="s", title="S")
+    cards, counters, story_map = _run_chapter_scene_pass(
+        panels, {"root": tmp_path, "scene_partial_json": tmp_path / "partial.json"},
+        {}, {}, bible, _ChapterLLM(), {},
+    )
+
+    assert [c.panel_ids[0] for c in cards] == ["p0001_01", "p0002_01"], "invented id must drop"
+    assert story_map["summary"] == "A man walks."
+    assert cards[0].people[0].name_used == "", "nullish name must not survive"
+    assert cards[1].people[0].ref == "new", "unbacked identification must be demoted"
+    assert counters["demoted"] >= 1

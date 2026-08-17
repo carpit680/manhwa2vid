@@ -51,7 +51,21 @@ scene:
   # Mistral (medium) remains the fallback: SCENE_LLM_PROVIDER=mistral to switch back.
   provider: gemini
   model: gemini-3-flash-preview
-  batch_size: 1
+  # PERCEPTION MODE — chapter | per_panel
+  # chapter: ONE multimodal request carrying the whole chapter, so the model tracks
+  # identity and causality across panels the way a human reader does. per_panel makes
+  # ~60 isolated calls: story structure and 'this is the same man from panel 8' are
+  # destroyed at perception time and no downstream gate can recover them. per_panel was
+  # forced by Groq's 8k/request cap; on paid Gemini a 62-panel chapter is ~16k image
+  # tokens, so one call is both better and cheaper than 60 that re-send the cast list.
+  mode: chapter
+  # Pass 1 reads ALL panels (story + who recurs). Pass 2 annotates in small windows
+  # whose images carry their panel id inline — one 59-image annotate pass returned
+  # correct descriptions bound to the id 3 positions later, because a model cannot
+  # reliably count images. Chapter understanding rides into each window as text.
+  chapter_window_panels: 12
+  chapter_max_output_tokens: 16384
+  batch_size: 1                 # per_panel mode only
   # Lead each vision request with cached reference images of the main cast so identity
   # is matched against pixels, not text descriptions two similar men both satisfy.
   # DEFAULT OFF — measured harmful on ch2 2026-08-17: references are whole story panels,

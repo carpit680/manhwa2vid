@@ -152,6 +152,18 @@ class LLMProvider(ABC):
     def describe_panels(self, image_paths: list[Path], prompt: str) -> str:
         ...
 
+    def describe_labeled_panels(self, labeled: list[tuple[str, Path]], prompt: str) -> str:
+        """Annotate images whose identity must be unambiguous.
+
+        Handing a model N images plus a text list of N ids does NOT bind them: on a
+        59-panel chapter the annotations came back correct but attached to the id three
+        positions later (measured shift +3, 0.75 similarity). The model cannot reliably
+        count "this is image 37". Interleaving a label immediately before each image makes
+        the binding positional in the message itself rather than a lookup it must
+        maintain. Providers that cannot interleave fall back to the unlabeled path.
+        """
+        return self.describe_panels([path for _label, path in labeled], prompt)
+
 
 class OpenAIProvider(LLMProvider):
     def __init__(self, model: str | None = None, vision_model: str | None = None) -> None:
@@ -293,6 +305,20 @@ class OpenAICompatProvider(LLMProvider):
         content = resp.choices[0].message.content or ""
         return _extract_json_object(content) if json_mode else content
 
+    def describe_labeled_panels(self, labeled: list[tuple[str, Path]], prompt: str) -> str:
+        """Interleave each label immediately before its image so binding is positional."""
+        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for label, path in labeled:
+            media_type, data = encode_image_for_api(path)
+            content.append({"type": "text", "text": label})
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{media_type};base64,{data}"},
+                }
+            )
+        return self._vision_call(content)
+
     def describe_panels(self, image_paths: list[Path], prompt: str) -> str:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for path in image_paths:
@@ -303,6 +329,9 @@ class OpenAICompatProvider(LLMProvider):
                     "image_url": {"url": f"data:{media_type};base64,{data}"},
                 }
             )
+        return self._vision_call(content)
+
+    def _vision_call(self, content: list[dict[str, Any]]) -> str:
 
         def call(json_mode: bool) -> Any:
             kwargs: dict[str, Any] = {
@@ -495,6 +524,32 @@ class MockLLMProvider(LLMProvider):
                     "key_terms": ["hunter"],
                 }
             )
+        if "Read it as a story" in prompt:
+            return json.dumps({
+                "summary": "A hunter crosses the city, joins a party, enters a gate.",
+                "temporal_devices": "",
+                "roster": [{"who": "Hero", "looks": "dark hair", "first_seen": "start"}],
+            })
+        if "annotate ONLY these" in prompt or "IMAGE -> PANEL ID MAPPING" in prompt:
+            # Chapter mode annotates every panel in ONE response, keyed by the ids the
+            # prompt assigned. Reading them back out of the prompt is exactly what a real
+            # model does, so the mock exercises the same id-binding path.
+            mapped = re.findall(r"Image \d+: (\S+)", prompt) or [
+                (pp.stem if pp.stem.startswith("p") else f"panel_{pp.stem}")
+                for pp in image_paths
+            ]
+            return json.dumps(
+                {
+                    "story_map": {
+                        "summary": "A hunter crosses the city, joins a party, enters a gate.",
+                        "temporal_devices": "",
+                    },
+                    "panels": [self._mock_panel_dict([pid]) for pid in mapped],
+                }
+            )
+        return json.dumps(self._mock_panel_dict(ids))
+
+    def _mock_panel_dict(self, ids: list[str]) -> dict[str, Any]:
         # Vary per panel. A mock that returns one identical card for every panel is not a
         # faithful stand-in: it is exactly the degenerate output the card-diversity gate
         # exists to catch, so a constant mock would make the suite assert that a real bug
@@ -517,8 +572,9 @@ class MockLLMProvider(LLMProvider):
         place = places[seed % 7]
         actor = actors[seed % 11]
         beat = beats[seed % 13]
-        return json.dumps(
+        return (
             {
+                "panel_id": tag,
                 "speakers": ["Hero"],
                 "people": [
                     {"ref": "new", "name_used": "Hero", "descriptor": "", "visibility": "face"}
