@@ -827,3 +827,56 @@ def test_lock_transition_line_is_opt_in():
 
     beats = [ScriptBeat(beat_id=2, panel_ids=["p1"], narration="The sky clears over present-day Seoul.")]
     assert lock_transition_line(beats, "p1", {})[0].narration == "The sky clears over present-day Seoul."
+
+
+def test_dedupe_cross_beat_sentences_drops_near_verbatim_restatement():
+    from manhwa2vid.script.lint import dedupe_cross_beat_sentences
+
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p1"], narration="Jin-Woo asks the vendor for a cup of coffee."),
+        ScriptBeat(beat_id=2, panel_ids=["p2"], narration="Jin-Woo asks the vendor for a cup of coffee. Lee Joo-hee spots him from across the lot."),
+    ]
+    out = dedupe_cross_beat_sentences(beats)
+    assert out[1].narration == "Lee Joo-hee spots him from across the lot."
+
+
+def test_dedupe_cross_beat_sentences_never_empties_a_beat():
+    from manhwa2vid.script.lint import dedupe_cross_beat_sentences
+
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p1"], narration="Jin-Woo asks the vendor for coffee."),
+        ScriptBeat(beat_id=2, panel_ids=["p2"], narration="Jin-Woo asks the vendor for coffee."),
+    ]
+    assert dedupe_cross_beat_sentences(beats)[1].narration.strip()
+
+
+def test_dedupe_cross_beat_sentences_leaves_paraphrase_alone():
+    """Deliberate scope limit. The observed coffee repetition scores 0.29 overlap, so a
+    threshold that caught it would delete correct sentences elsewhere. Paraphrased
+    repetition stays a warn-only style finding, not a silent deletion."""
+    from manhwa2vid.script.lint import dedupe_cross_beat_sentences
+
+    second = "He sighs in disappointment when he learns there is no coffee left for him."
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p1"], narration="He sighs at the old men and asks for coffee."),
+        ScriptBeat(beat_id=2, panel_ids=["p2"], narration=second),
+    ]
+    assert dedupe_cross_beat_sentences(beats)[1].narration == second
+
+
+def test_lock_transition_line_removes_a_second_rewind_sentence():
+    """The model wrote the shift twice: 'Quiet bridges now span the wide river under the
+    distant skyline of Seoul.' immediately before the locked line."""
+    from manhwa2vid.script.lint import lock_transition_line
+
+    config = {"script": {"transition_line": "Then the sky clears, over present-day Seoul."}}
+    beats = [
+        ScriptBeat(
+            beat_id=2,
+            panel_ids=["p1"],
+            narration="A blinding flash erupts. Quiet bridges now span the wide river under the distant skyline of Seoul. Then the sky clears, over present-day Seoul.",
+        )
+    ]
+    assert lock_transition_line(beats, "p1", config)[0].narration == (
+        "A blinding flash erupts. Then the sky clears, over present-day Seoul."
+    )

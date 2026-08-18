@@ -1512,11 +1512,20 @@ def lock_transition_line(
             continue
         # The rewind closes the beat, so the final sentence is the one to replace — but
         # only if it is actually about the shift, never a story sentence.
-        tail = sentences[-1]
-        if re.search(r"\bpresent[- ]day\b|\bthe sky clears\b|\bback in the present\b", tail, re.I):
+        marker = re.compile(r"\bpresent[- ]day\b|\bthe sky clears\b|\bback in the present\b", re.I)
+        if marker.search(sentences[-1]):
             sentences[-1] = line
         else:
             sentences.append(line)
+        # The model often writes the shift twice, e.g. "Quiet bridges now span the wide
+        # river under the distant skyline of Seoul." right before the locked line. Any
+        # EARLIER sentence naming the destination is that same restatement.
+        destination = line.rsplit(" ", 1)[-1].strip(".,").lower()
+        if destination:
+            sentences = [
+                s for i, s in enumerate(sentences)
+                if i == len(sentences) - 1 or destination not in s.lower()
+            ]
         text = " ".join(sentences)
         out.append(beat.model_copy(update={"narration": text}) if text != beat.narration else beat)
     return out
@@ -1565,5 +1574,56 @@ def strip_appearance_descriptors(beats: list[ScriptBeat], bible: SeriesBible | N
     for beat in beats:
         text = _ANON_APPEARANCE_RE.sub(lambda m: f"{m.group(1)} {m.group(2)}".strip(), beat.narration)
         text = re.sub(r"\s{2,}", " ", text).strip()
+        out.append(beat.model_copy(update={"narration": text}) if text and text != beat.narration else beat)
+    return out
+
+
+def dedupe_cross_beat_sentences(beats: list[ScriptBeat], lookback: int = 2) -> list[ScriptBeat]:
+    """Remove a sentence that restates something an earlier beat already told.
+
+    The once-only rule is the one that keeps failing, in every architecture tried. The
+    latest run:
+
+        beat 10  He sighs at the old men and asks for coffee. The vendor apologetically
+                 admits they just ran out.
+        beat 11  He sighs in disappointment when he learns there is no coffee left for
+                 him. The coffee vendor tries to explain, but he politely says it is fine.
+
+    The style gate caught it ("beat 11: 'coffee' both asserted and negated") but only as a
+    warning. lint_cross_beat_repetition compares whole beats, so two beats that repeat one
+    exchange while differing elsewhere score below its threshold and pass.
+
+    Working at sentence level catches the real unit of repetition. Comparison is against
+    the previous `lookback` beats only — a motif legitimately recurring across the whole
+    chapter (the protagonist being called weak) is not the target; consecutive retellings
+    of one moment are. Never empties a beat: the first sentence always survives, so beat
+    conservation holds.
+
+    SCOPE, measured rather than assumed: at 0.6 this catches near-verbatim restatement.
+    The coffee pair above scores only 0.29 ("coffee", "sighs" are the entire overlap), so
+    a threshold low enough to catch PARAPHRASED repetition would start deleting correct
+    sentences. Paraphrase-level repetition is not reliably detectable by string matching;
+    it stays a warn-only style-gate finding and a human edit, and this function
+    deliberately does not chase it.
+    """
+    out: list[ScriptBeat] = []
+    history: list[list[set[str]]] = []
+    for beat in beats:
+        sentences = [s for s in _SENTENCE_SPLIT_RE.split(beat.narration.strip()) if s.strip()]
+        recent = [tokens for prev in history[-lookback:] for tokens in prev]
+        kept: list[str] = []
+        kept_tokens: list[set[str]] = []
+        for sentence in sentences:
+            tokens = _stemmed_words(sentence)
+            # Unlike the intra-beat pass, the FIRST sentence is checked too — restating
+            # the previous beat is precisely what a beat's opening sentence tends to do.
+            if tokens and any(len(tokens & prev) / len(tokens) >= 0.6 for prev in recent):
+                continue
+            kept.append(sentence)
+            kept_tokens.append(tokens)
+        if not kept:
+            kept, kept_tokens = sentences[:1], [_stemmed_words(sentences[0])] if sentences else ([], [])
+        history.append(kept_tokens)
+        text = " ".join(kept).strip()
         out.append(beat.model_copy(update={"narration": text}) if text and text != beat.narration else beat)
     return out

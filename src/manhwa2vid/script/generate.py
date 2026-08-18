@@ -974,6 +974,7 @@ def generate_script(
         strip_internal_labels,
         lock_transition_line,
         strip_appearance_descriptors,
+        dedupe_cross_beat_sentences,
     )
 
     beats = strip_repeated_appositives(beats, bible)
@@ -995,6 +996,7 @@ def generate_script(
     beats = strip_internal_labels(beats, bible)
     beats = strip_appearance_descriptors(beats, bible)
     beats = dedupe_intra_beat_sentences(beats)
+    beats = dedupe_cross_beat_sentences(beats)
     beats = trim_overlong_beats(beats, config)
     beats = enforce_mc_name_budget(beats, bible, config)
 
