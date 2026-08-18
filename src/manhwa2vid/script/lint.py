@@ -1474,3 +1474,96 @@ def lint_dropped_speakers(
         if missing:
             report[beat.beat_id] = [f"dropped_speaker:{n}" for n in missing]
     return report
+
+
+def lock_transition_line(
+    beats: list[ScriptBeat],
+    transition_panel: str,
+    config: dict[str, Any],
+) -> list[ScriptBeat]:
+    """Replace the flashforward's closing sentence with the approved wording.
+
+    The return to the present is the script's single most conspicuous line, and the model
+    keeps embellishing it into something worse than the exemplar it was given:
+
+        gold      Then the sky clears, over present-day Seoul.
+        produced  Away from the trials of him, the sky clears over the peaceful bridges
+                  of present-day Seoul.
+
+    That second version is not a style disagreement, it is broken English shipped in the
+    most audible position in the recap. Placement is already deterministic
+    (strip_duplicate_transitions picks the beat whose panels show the shift); this locks
+    the wording too, so the line stops being re-rolled every run.
+
+    Series-specific by nature — `script.transition_line` is empty by default and nothing
+    happens until a series sets it.
+    """
+    line = str(get_nested(config, "script", "transition_line", default="") or "").strip()
+    if not line or not transition_panel:
+        return beats
+    out: list[ScriptBeat] = []
+    for beat in beats:
+        if transition_panel not in beat.panel_ids:
+            out.append(beat)
+            continue
+        sentences = [s for s in _SENTENCE_SPLIT_RE.split(beat.narration.strip()) if s.strip()]
+        if not sentences:
+            out.append(beat)
+            continue
+        # The rewind closes the beat, so the final sentence is the one to replace — but
+        # only if it is actually about the shift, never a story sentence.
+        tail = sentences[-1]
+        if re.search(r"\bpresent[- ]day\b|\bthe sky clears\b|\bback in the present\b", tail, re.I):
+            sentences[-1] = line
+        else:
+            sentences.append(line)
+        text = " ".join(sentences)
+        out.append(beat.model_copy(update={"narration": text}) if text != beat.narration else beat)
+    return out
+
+
+# "a hunter with a fur collar", "another in a green jacket", "a man in a blue cap" — an
+# anonymous person identified by clothing. recap.txt rule 3 bans appearance captioning and
+# rule 5 bans scenery people; both keep being violated for extras specifically, because
+# the evidence names them that way ("woman with fur collar -> Song Chi-yul: ...") and the
+# writer passes the label straight through.
+_ANON_NOUN = r"hunter|man|woman|guy|person|figure|worker|vendor|bystander|onlooker|passerby|newcomer"
+_GARMENT = (
+    r"collar|jacket|cap|hat|coat|shirt|hoodie|glasses|hair|beard|goatee|backpack|"
+    r"uniform|vest|scarf|boots|gloves|mask"
+)
+_ANON_APPEARANCE_RE = re.compile(
+    # "a/an/another/one" + optional adjectives + optional noun, then a garment phrase.
+    # The noun is optional so "another in a green jacket" collapses too.
+    rf"\b(a|an|another|one)\s+"
+    rf"((?:[\w'’-]+\s+){{0,2}}(?:{_ANON_NOUN})\s+|)"
+    rf"(?:with|in|wearing)\s+"
+    rf"(?:a|an|the)?\s*"
+    rf"(?:[\w'’-]+\s+){{0,3}}"
+    rf"(?:{_GARMENT})\b",
+    re.I,
+)
+
+
+def strip_appearance_descriptors(beats: list[ScriptBeat], bible: SeriesBible | None = None) -> list[ScriptBeat]:
+    """Strip clothing and hair out of the noun phrases that identify people.
+
+    "A hunter with a fur collar and another in a green jacket chime in" becomes "A hunter
+    and another chime in" — the extras still act on the story, they just stop being
+    described by their outfits.
+
+    This also trims a NAMED character's intro clause down to its role, which is what rule
+    4 asks for anyway: "Kim Sangshik, a veteran hunter in a blue jacket" -> "Kim Sangshik,
+    a veteran hunter", matching the gold's "Lee Joo-hee, the party's rookie healer". Rule
+    3 bans appearance captioning outright, so the garment adds nothing in either position.
+
+    Only indefinite noun phrases match, so a definite reference the story depends on
+    ("the man in the blue cap" as a running identifier) is left alone, as is any phrase
+    whose head noun is not a person.
+    """
+    out: list[ScriptBeat] = []
+    for beat in beats:
+        text = _ANON_APPEARANCE_RE.sub(lambda m: f"{m.group(1)} {m.group(2)}".strip(), beat.narration)
+        text = re.sub(r"\s{2,}", " ", text).strip()
+        out.append(beat.model_copy(update={"narration": text}) if text and text != beat.narration else beat)
+    return out

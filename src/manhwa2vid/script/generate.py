@@ -972,6 +972,8 @@ def generate_script(
         trim_overlong_beats,
         repair_truncated_sentences,
         strip_internal_labels,
+        lock_transition_line,
+        strip_appearance_descriptors,
     )
 
     beats = strip_repeated_appositives(beats, bible)
@@ -987,9 +989,11 @@ def generate_script(
     except Exception:
         transition_panel = ""
     beats = strip_duplicate_transitions(beats, transition_panel)
+    beats = lock_transition_line(beats, transition_panel, config)
     beats = repair_malformed_openings(beats)
     beats = repair_truncated_sentences(beats)
     beats = strip_internal_labels(beats, bible)
+    beats = strip_appearance_descriptors(beats, bible)
     beats = dedupe_intra_beat_sentences(beats)
     beats = trim_overlong_beats(beats, config)
     beats = enforce_mc_name_budget(beats, bible, config)

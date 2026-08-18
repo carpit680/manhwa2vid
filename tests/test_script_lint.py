@@ -777,3 +777,53 @@ def test_humanize_issues_explains_dropped_speaker():
     text = _humanize_issues(["dropped_speaker:Song Chi-yul"])
     assert "Song Chi-yul" in text and "never appears" in text
     assert _humanize_issues(["aside_overuse"]) == "aside_overuse"
+
+
+def test_strip_appearance_descriptors_collapses_extras():
+    """Observed: 'A hunter with a fur collar and another in a green jacket quickly chime
+    in.' The evidence labels extras by clothing and the writer passes it straight through,
+    against rules 3 and 5 both."""
+    from manhwa2vid.script.lint import strip_appearance_descriptors
+
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p"], narration="A hunter with a fur collar and another in a green jacket quickly chime in.")]
+    assert strip_appearance_descriptors(beats)[0].narration == "A hunter and another quickly chime in."
+
+
+def test_strip_appearance_descriptors_trims_intro_to_role():
+    """Rule 4 wants name + role clause, like the gold's 'the party's rookie healer'."""
+    from manhwa2vid.script.lint import strip_appearance_descriptors
+
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p"], narration="Kim Sangshik, a veteran hunter in a blue jacket, waits nearby.")]
+    assert strip_appearance_descriptors(beats)[0].narration == "Kim Sangshik, a veteran hunter, waits nearby."
+
+
+def test_strip_appearance_descriptors_leaves_places_alone():
+    from manhwa2vid.script.lint import strip_appearance_descriptors
+
+    text = "He walks into a construction site in the city center."
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p"], narration=text)]
+    assert strip_appearance_descriptors(beats)[0].narration == text
+
+
+def test_lock_transition_line_replaces_embellished_wording():
+    """The return to the present is the most audible line in the recap, and the model
+    rewrote the exemplar into 'Away from the trials of him, the sky clears over the
+    peaceful bridges of present-day Seoul.'"""
+    from manhwa2vid.script.lint import lock_transition_line
+
+    config = {"script": {"transition_line": "Then the sky clears, over present-day Seoul."}}
+    beats = [
+        ScriptBeat(beat_id=2, panel_ids=["p0007_01"], narration="He grits his teeth. Away from the trials of him, the sky clears over the peaceful bridges of present-day Seoul."),
+        ScriptBeat(beat_id=3, panel_ids=["p0008_01"], narration="He walks through the crowd."),
+    ]
+    out = lock_transition_line(beats, "p0007_01", config)
+    assert out[0].narration == "He grits his teeth. Then the sky clears, over present-day Seoul."
+    assert out[1].narration == "He walks through the crowd."
+
+
+def test_lock_transition_line_is_opt_in():
+    """Empty config leaves every series that has not approved a line untouched."""
+    from manhwa2vid.script.lint import lock_transition_line
+
+    beats = [ScriptBeat(beat_id=2, panel_ids=["p1"], narration="The sky clears over present-day Seoul.")]
+    assert lock_transition_line(beats, "p1", {})[0].narration == "The sky clears over present-day Seoul."
