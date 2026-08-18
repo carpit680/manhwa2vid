@@ -721,3 +721,59 @@ def test_strip_internal_labels_leaves_real_role_clauses_alone():
     text = "Jin-Woo, the guild's weakest member, gasps."
     beats = [ScriptBeat(beat_id=1, panel_ids=["p"], narration=text)]
     assert strip_internal_labels(beats, _bible_with_mc())[0].narration == text
+
+
+def test_lint_dropped_speakers_catches_an_ignored_named_speaker():
+    """ch1 beat 16: evidence held Song Chi-yul asking the party to accept him as leader
+    plus an unowned "EVERY-ONE!" shout. The writer gave the unowned line to Kim Sangshik
+    and dropped Song Chi-yul, so the next beat's "he accepts the choice" had no
+    antecedent — the election never happened anywhere in the script."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SceneCard, SeriesBible
+    from manhwa2vid.script.lint import lint_dropped_speakers
+
+    bible = SeriesBible(
+        series_slug="s",
+        title="S",
+        protagonist_id="char_mc",
+        characters={
+            "char_mc": CharacterProfile(id="char_mc", canonical_name="Sung Jin-Woo", tier=CharacterTier.MAIN),
+            "char_song": CharacterProfile(id="char_song", canonical_name="Song Chi-yul", tier=CharacterTier.MAIN),
+        },
+    )
+    cards = [
+        SceneCard(
+            panel_ids=["p0023_01"],
+            source_text='Song Chi-yul -> the raid party: "I\'D LIKE TO LEAD."',
+            action="Song Chi-yul addresses the group.",
+        )
+    ]
+    beats = [ScriptBeat(beat_id=16, panel_ids=["p0023_01"], narration="Kim Sangshik calls to the others near the Gate.")]
+    assert lint_dropped_speakers(beats, cards, bible) == {16: ["dropped_speaker:Song Chi-yul"]}
+
+    ok = [ScriptBeat(beat_id=16, panel_ids=["p0023_01"], narration="Song Chi-yul asks the party to accept him as leader.")]
+    assert lint_dropped_speakers(ok, cards, bible) == {}
+
+
+def test_lint_dropped_speakers_exempts_the_protagonist():
+    """The MC is carried by pronoun for stretches by design; anchoring cadence is
+    enforce_mc_name_budget's job, not this lint's."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SceneCard, SeriesBible
+    from manhwa2vid.script.lint import lint_dropped_speakers
+
+    bible = SeriesBible(
+        series_slug="s",
+        title="S",
+        protagonist_id="char_mc",
+        characters={"char_mc": CharacterProfile(id="char_mc", canonical_name="Sung Jin-Woo", tier=CharacterTier.MAIN)},
+    )
+    cards = [SceneCard(panel_ids=["p1"], source_text='Sung Jin-Woo: "HAAH"', action="He gasps.")]
+    beats = [ScriptBeat(beat_id=2, panel_ids=["p1"], narration="He gasps for air as the spear falls.")]
+    assert lint_dropped_speakers(beats, cards, bible) == {}
+
+
+def test_humanize_issues_explains_dropped_speaker():
+    from manhwa2vid.script.lint import _humanize_issues
+
+    text = _humanize_issues(["dropped_speaker:Song Chi-yul"])
+    assert "Song Chi-yul" in text and "never appears" in text
+    assert _humanize_issues(["aside_overuse"]) == "aside_overuse"

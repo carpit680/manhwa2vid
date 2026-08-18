@@ -1168,6 +1168,8 @@ def lint_beats(
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_captioning(beats).items():
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
+    for beat_id, issues in lint_dropped_speakers(beats, scene_cards, bible).items():
+        report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_pronoun_monotony(beats).items():
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_overlong_beats(beats, config).items():
@@ -1199,6 +1201,23 @@ def _cast_for_panels(attribution: list[PanelCast], panel_ids: list[str]) -> str:
     return "\n".join(lines) or "(see bible)"
 
 
+
+
+def _humanize_issues(issues: list[str]) -> str:
+    """Turn lint codes into instructions. A rewrite prompt fed "dropped_speaker:Song
+    Chi-yul" has to guess what is being asked of it."""
+    out: list[str] = []
+    for issue in issues:
+        if issue.startswith("dropped_speaker:"):
+            name = issue.split(":", 1)[1]
+            out.append(
+                f"{name} SPEAKS in this beat's evidence but never appears in the narration — "
+                f"narrate what {name} says and to whom, and do not hand their line to anyone else"
+            )
+        else:
+            out.append(issue)
+    return ", ".join(out)
+
 def rewrite_beat(
     beat: ScriptBeat,
     bible: SeriesBible,
@@ -1224,7 +1243,7 @@ def rewrite_beat(
 
     ban = ", ".join(banned_words(config))
     cast = _cast_for_panels(attribution, beat.panel_ids)
-    issue_text = ", ".join(issues or remaining.get(beat.beat_id, []))
+    issue_text = _humanize_issues(issues or remaining.get(beat.beat_id, []))
     evid = evidence_for_panels(beat.panel_ids, scene_cards or [])
     user = (
         f"{naming_priority_rules(bible, config)}\n\n"
@@ -1397,3 +1416,61 @@ def strip_internal_labels(beats: list[ScriptBeat], bible: SeriesBible | None = N
         text = re.sub(r"\s{2,}", " ", text).strip()
         out.append(beat.model_copy(update={"narration": text}) if text and text != beat.narration else beat)
     return out
+
+
+_SPEAKER_LINE_RE = re.compile(r"^\s*([^:>]+?)\s*(?:->[^:]*)?:", re.M)
+
+
+def lint_dropped_speakers(
+    beats: list[ScriptBeat],
+    scene_cards: list[SceneCard] | None,
+    bible: SeriesBible | None,
+) -> dict[int, list[str]]:
+    """Flag a beat whose evidence has a NAMED speaker the narration never mentions.
+
+    Observed on ch1 beat 16: the evidence held Song Chi-yul asking the party to accept
+    him as leader, plus an unowned "EVERY-ONE!" shout. The writer gave the unowned line
+    to Kim Sangshik — a named character it already knew — and dropped Song Chi-yul
+    entirely, so the next beat opened on "he happily accepts the choice" with no
+    antecedent anywhere in the script. The election simply never happened.
+
+    A named character with a line in the panel is always narratable, which makes this a
+    high-signal check: if they are missing from the narration, the beat is telling the
+    wrong story rather than compressing it.
+    """
+    if not scene_cards or bible is None:
+        return {}
+    # The protagonist is exempt: they are referred to by pronoun for stretches BY DESIGN,
+    # and their anchoring cadence is enforce_mc_name_budget's job. Including them here
+    # flags every well-formed beat that opens on "He".
+    named = {
+        p.canonical_name
+        for pid, p in bible.characters.items()
+        if not p.merged_into
+        and p.canonical_name
+        and not is_descriptor_label(p.canonical_name)
+        and pid != bible.protagonist_id
+    }
+    if not named:
+        return {}
+    by_panel = {pid: c for c in scene_cards for pid in c.panel_ids}
+    report: dict[int, list[str]] = {}
+    for beat in beats:
+        speakers: set[str] = set()
+        for pid in beat.panel_ids:
+            card = by_panel.get(pid)
+            if card is None:
+                continue
+            for raw in _SPEAKER_LINE_RE.findall(card.source_text or ""):
+                candidate = raw.strip().strip('"').strip()
+                for name in named:
+                    if candidate.lower() == name.lower():
+                        speakers.add(name)
+        low = beat.narration.lower()
+        missing = [
+            n for n in sorted(speakers)
+            if n.lower() not in low and _short_name_form(n).lower() not in low
+        ]
+        if missing:
+            report[beat.beat_id] = [f"dropped_speaker:{n}" for n in missing]
+    return report
