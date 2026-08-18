@@ -31,7 +31,32 @@ BANDS: dict[str, tuple[float | None, float | None, float | None]] = {
     # Spoken words per panel, mean over beats. Too high = long static dwells (a 25-word
     # single-panel beat sits on screen ~10s); too low = strobing.
     "words_per_panel": (6.0, 18.0, None),
+    # Share of sentences opening with a bare pronoun. The gold script sits at 0.20 by
+    # varying how sentences START ("Three towering guardians close in on him", "A voice
+    # brands him the weakest hunter alive"), not by naming the protagonist more often —
+    # so this is NOT fixable by tightening mc_anchor_every_beats, which would only trade
+    # it for name spam. Warn-only and reported so the gap stays visible.
+    # The acute form of this — long runs of "He ... He ... He" — is separately bounded by
+    # rule 1 and currently matches the gold's max of 2 consecutive.
+    "pronoun_start_fraction": (None, 0.30, 0.20),
 }
+
+
+
+_PRONOUN_START_RE = re.compile(r"^\s*(?:he|she|they|it)\b", re.I)
+
+
+def _pronoun_start_fraction(beats) -> float:
+    """Share of narration sentences that open with a bare pronoun."""
+    sentences = [
+        part
+        for beat in beats
+        for part in re.split(r"(?<=[.!?])\s+", beat.narration.strip())
+        if part.strip()
+    ]
+    if not sentences:
+        return 0.0
+    return sum(1 for s in sentences if _PRONOUN_START_RE.match(s)) / len(sentences)
 
 _DIALOGUE_VERBS = ("says", "asks", "tells", "replies", "answers", "explains", "admits",
                    "snaps", "mutters", "warns", "begs", "shouts", "whispers")
@@ -142,6 +167,7 @@ def score_script(
         "words_per_panel": sum(
             len(b.narration.split()) / max(len(b.panel_ids), 1) for b in beats
         ) / max(len(beats), 1),
+        "pronoun_start_fraction": _pronoun_start_fraction(beats),
     }
 
     blocking = bool(get_nested(config, "qa", "style_blocking", default=False))

@@ -125,6 +125,16 @@ encode bugs that actually shipped once:
 `tests/test_qa_gates.py` holds one regression fixture per observed bug — keep it that way:
 a new failure class gets a gate AND a fixture.
 
+**The deterministic polish pass is where rules go to be enforced.** Prompts set voice and judgment;
+code enforces invariants. Every rule the model declined twice now lives in `lint.py` and runs after
+ALL LLM stages (`strip_repeated_appositives`, `strip_appearance_descriptors`, `lock_transition_line`,
+`repair_truncated_sentences`, `strip_internal_labels`, `dedupe_cross_beat_sentences`,
+`enforce_mc_name_budget`). Nothing may generate text after it. Two habits matter here: a defect in
+polish ships on EVERY run, so read its output rather than trusting the diff; and where a check
+cannot be made precise, say so in the docstring and pin the limit with a test rather than lowering a
+threshold until it fires (see `dedupe_cross_beat_sentences`, which deliberately does not chase
+paraphrase — the observed case scores 0.29 overlap and catching it would delete correct sentences).
+
 ### Script generation — three passes, all panel-grounded
 
 `script/generate.py::generate_script` runs synopsis → outline → narration, then lints and rewrites.
@@ -137,6 +147,24 @@ a new failure class gets a gate AND a fixture.
    if it drifts. This ordering is deliberate: it's what stops the model from narrating a later scene over
    early panels.
 3. **Narration** (`prompts/recap.txt`) — each beat is handed only its own panels' EVIDENCE lines.
+
+**Narration is ONE call for the whole chapter** (`script.narration_chunk_size: 0`). Chunking
+made each group an independent sample, so beat 17 could not know beat 18 was about to narrate the
+same gate entrance; the `running_summary` digest was far too thin to substitute for having written
+the earlier beats. The gold script in `reference/ch1_gold_script.md` was produced in one pass, which
+is why it never repeats a moment. Attached panels are subsampled round-robin across beats
+(`max_narration_images`), never truncated — head-truncation left every later beat image-blind while
+the prompt claimed it could see them.
+
+`grounding.enforce_reading_order` guarantees each beat is a CONTIGUOUS run of panels in reading
+order. Seeding by fact-to-card score does not constrain the shape of the result, and interleaved
+beats ("beat 10: p0017_01, p0018_02" / "beat 11: p0017_02, p0018_04") both narrate the overlapping
+moment and play it out of order — no amount of whole-chapter context repairs a bad partition.
+
+`corrections.json` (per project, `models.project_paths`) overlays human-verified panel facts onto
+the vision cards in `load_story_scene_cards`. Vision is non-deterministic: a gesture read correctly
+on one run comes back wrong on the next, so without this every reviewer-approved fix is re-rolled.
+Add an entry as soon as a reading is signed off.
 
 `script/lint.py` then checks banned words (`characters.ban_words`), hedging, protagonist-name spam,
 narrator-aside overuse, MC-attributed-while-off-screen, and grounding (`unsupported_grounding_keywords`:
