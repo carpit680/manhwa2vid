@@ -1364,3 +1364,36 @@ def repair_truncated_sentences(beats: list[ScriptBeat]) -> list[ScriptBeat]:
         # Never empty a beat: a beat with no narration fails beat conservation.
         out.append(beat.model_copy(update={"narration": text}) if kept and text != beat.narration else beat)
     return out
+
+
+# Script-writing vocabulary that must never reach the narrator's mouth. The prompt allows
+# "the protagonist" once as a pressure valve; it spent that budget on the opening line
+# ("Sung Jin-Woo, the protagonist and E-rank hunter, gasps..."), which is the worst
+# possible place for it. Deterministic removal costs nothing and the prompt rule stays as
+# guidance.
+_LABEL = r"the (?:protagonist|main character|MC)"
+# As an appositive the label is pure noise and comes out cleanly.
+_LABEL_APPOSITIVE_RE = re.compile(rf",\s*{_LABEL}\b(\s+and\b)?", re.I)
+# As a subject it is load-bearing: deleting it leaves a headless "walks away."
+_LABEL_SUBJECT_RE = re.compile(rf"\b{_LABEL}\b", re.I)
+
+
+def strip_internal_labels(beats: list[ScriptBeat], bible: SeriesBible | None = None) -> list[ScriptBeat]:
+    """Remove narration references to the story's own machinery."""
+    name = ""
+    if bible is not None:
+        profile = bible.characters.get(bible.protagonist_id or "")
+        if profile is not None and not is_descriptor_label(profile.canonical_name):
+            name = _short_name_form(profile.canonical_name)
+    out: list[ScriptBeat] = []
+    for beat in beats:
+        text = _LABEL_APPOSITIVE_RE.sub(lambda m: "," if m.group(1) else "", beat.narration)
+        # Whatever survived is a subject; swap in the name, or leave it rather than
+        # producing a sentence with no subject at all.
+        if name:
+            text = _LABEL_SUBJECT_RE.sub(name, text)
+        text = re.sub(r"\s*,\s*,", ",", text)
+        text = re.sub(r"\s+([,.])", r"\1", text)
+        text = re.sub(r"\s{2,}", " ", text).strip()
+        out.append(beat.model_copy(update={"narration": text}) if text and text != beat.narration else beat)
+    return out

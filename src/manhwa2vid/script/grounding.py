@@ -318,3 +318,67 @@ def unsupported_grounding_keywords(panel_ids: list[str], cards: list[SceneCard],
         return []
     supported = evidence_supports_keywords(panel_ids, cards, claimed)
     return sorted(claimed - supported)
+
+
+def enforce_reading_order(beats: list[ScriptOutlineBeat]) -> list[ScriptOutlineBeat]:
+    """Make every beat a CONTIGUOUS run of panels in reading order.
+
+    `preassign_outline_from_facts` scores each plot_fact against its best-matching scene
+    card, and continuity beats mop up whatever is left. Neither step constrains the shape
+    of the result, so a beat could hold panels that straddle another beat's panels:
+
+        beat 10: p0017_01, p0018_02, p0018_03
+        beat 11: p0017_02, p0018_04
+
+    Reading order is p0017_01, p0017_02, p0018_02, p0018_03, p0018_04 — so beat 11
+    narrated Jin-Woo ASKING for coffee after beat 10 had already walked him away from the
+    stall, and both beats narrated the refusal. That is the reported "order of narration
+    is a little messed up" and a large share of the cross-beat repetition: two beats given
+    overlapping stretches of one moment will both tell it, however the prompt is worded.
+
+    The repair keeps every beat and every panel — only the cut points move. Each beat is
+    anchored at its earliest panel; beats are then ordered by anchor and the panel
+    sequence is partitioned at those anchors, so beat N owns everything from its own
+    anchor up to the next beat's.
+    """
+    if len(beats) < 2:
+        return beats
+
+    ordered_panels = sorted(
+        {pid for beat in beats for pid in beat.panel_ids}, key=_panel_sort_key_local
+    )
+    # Fewer panels than beats makes a one-panel-per-beat partition impossible; the
+    # original bindings at least keep every beat non-empty, which conservation requires.
+    if not ordered_panels or len(beats) > len(ordered_panels):
+        return beats
+    index = {pid: i for i, pid in enumerate(ordered_panels)}
+
+    anchored = sorted(
+        beats,
+        key=lambda b: (
+            min((index[p] for p in b.panel_ids), default=len(ordered_panels)),
+            b.beat_id,
+        ),
+    )
+
+    # Anchors must be strictly increasing, or a later beat would be handed nothing.
+    anchors: list[int] = []
+    for beat in anchored:
+        start = min((index[p] for p in beat.panel_ids), default=len(ordered_panels))
+        floor = anchors[-1] + 1 if anchors else 0
+        anchors.append(max(start, floor))
+    # A beat pushed past the end of the sequence would be emptied; pull the run back so
+    # every beat keeps at least one panel. Both bounds are strictly increasing in i, so
+    # their elementwise minimum stays strictly increasing and no beat collapses.
+    for i in range(len(anchors) - 1, -1, -1):
+        anchors[i] = min(anchors[i], len(ordered_panels) - (len(anchors) - i))
+
+    out: list[ScriptOutlineBeat] = []
+    for pos, beat in enumerate(anchored):
+        start = anchors[pos]
+        end = anchors[pos + 1] if pos + 1 < len(anchors) else len(ordered_panels)
+        run = ordered_panels[start:end]
+        out.append(beat.model_copy(update={"panel_ids": run}) if run != beat.panel_ids else beat)
+
+    # Restore the caller's beat_id ordering: only the panel bindings were being repaired.
+    return sorted(out, key=lambda b: b.beat_id)

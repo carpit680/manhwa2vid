@@ -684,3 +684,40 @@ def test_strip_repeated_appositives_handles_long_intro_clauses():
     out = strip_repeated_appositives(beats, bible)
     assert out[1].narration == "Kim Sangshik grabs coffee."
     assert "a veteran hunter in a blue jacket" in out[0].narration
+
+
+def _bible_with_mc(name: str = "Sung Jin-Woo"):
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+
+    return SeriesBible(
+        series_slug="s",
+        title="S",
+        protagonist_id="char_mc",
+        characters={"char_mc": CharacterProfile(id="char_mc", canonical_name=name, tier=CharacterTier.MAIN)},
+    )
+
+
+def test_strip_internal_labels_removes_appositive():
+    """Observed opening line: 'Sung Jin-Woo, the protagonist and E-rank hunter, gasps...'"""
+    from manhwa2vid.script.lint import strip_internal_labels
+
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p"], narration="Sung Jin-Woo, the protagonist and E-rank hunter, gasps in a pool of blood.")]
+    assert strip_internal_labels(beats, _bible_with_mc())[0].narration == (
+        "Sung Jin-Woo, E-rank hunter, gasps in a pool of blood."
+    )
+
+
+def test_strip_internal_labels_keeps_the_sentence_subject():
+    """Deleting a subject leaves an unspeakable 'walks away.'"""
+    from manhwa2vid.script.lint import strip_internal_labels
+
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p"], narration="The protagonist walks away.")]
+    assert strip_internal_labels(beats, _bible_with_mc())[0].narration == "Jin-Woo walks away."
+
+
+def test_strip_internal_labels_leaves_real_role_clauses_alone():
+    from manhwa2vid.script.lint import strip_internal_labels
+
+    text = "Jin-Woo, the guild's weakest member, gasps."
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p"], narration=text)]
+    assert strip_internal_labels(beats, _bible_with_mc())[0].narration == text

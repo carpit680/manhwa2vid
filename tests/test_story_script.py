@@ -380,3 +380,64 @@ def _meta_stub():
     from manhwa2vid.models import ProjectMeta, SourceLanguage
 
     return ProjectMeta(slug="s", title="S", chapters="1", source_lang=SourceLanguage.EN)
+
+
+def test_enforce_reading_order_splits_interleaved_beats():
+    """Observed on ch1: outline seeding produced beats whose panels straddled each other.
+
+        beat 10: p0017_01, p0018_02, p0018_03
+        beat 11: p0017_02, p0018_04
+
+    Reading order is p0017_01, p0017_02, p0018_02, p0018_03, p0018_04, so beat 11
+    narrated Jin-Woo asking for coffee AFTER beat 10 walked him away from the stall, and
+    both beats narrated the refusal.
+    """
+    from manhwa2vid.models import ScriptOutlineBeat
+    from manhwa2vid.script.grounding import enforce_reading_order
+
+    beats = [
+        ScriptOutlineBeat(beat_id=10, panel_ids=["p0017_01", "p0018_02", "p0018_03"], plot_beat="a", character_ids=[]),
+        ScriptOutlineBeat(beat_id=11, panel_ids=["p0017_02", "p0018_04"], plot_beat="b", character_ids=[]),
+    ]
+    out = enforce_reading_order(beats)
+
+    assert [b.panel_ids for b in out] == [
+        ["p0017_01"],
+        ["p0017_02", "p0018_02", "p0018_03", "p0018_04"],
+    ]
+    # Panel conservation is a hard gate: nothing may be dropped or duplicated.
+    before = sorted(p for b in beats for p in b.panel_ids)
+    after = sorted(p for b in out for p in b.panel_ids)
+    assert before == after
+
+
+def test_enforce_reading_order_never_empties_a_beat():
+    """Emptying a beat fails beat conservation and kills the whole chapter.
+
+    With fewer panels than beats no partition can give each beat a panel, so the repair
+    must decline rather than emit an empty run.
+    """
+    from manhwa2vid.models import ScriptOutlineBeat
+    from manhwa2vid.script.grounding import enforce_reading_order
+
+    beats = [
+        ScriptOutlineBeat(beat_id=1, panel_ids=["p0001_01", "p0001_02"], plot_beat="a", character_ids=[]),
+        ScriptOutlineBeat(beat_id=2, panel_ids=["p0001_01"], plot_beat="b", character_ids=[]),
+        ScriptOutlineBeat(beat_id=3, panel_ids=["p0001_02"], plot_beat="c", character_ids=[]),
+    ]
+    out = enforce_reading_order(beats)
+    assert all(b.panel_ids for b in out), [b.panel_ids for b in out]
+
+
+def test_enforce_reading_order_leaves_well_formed_outlines_alone():
+    from manhwa2vid.models import ScriptOutlineBeat
+    from manhwa2vid.script.grounding import enforce_reading_order
+
+    beats = [
+        ScriptOutlineBeat(beat_id=1, panel_ids=["p0001_01", "p0001_02"], plot_beat="a", character_ids=[]),
+        ScriptOutlineBeat(beat_id=2, panel_ids=["p0002_01"], plot_beat="b", character_ids=[]),
+    ]
+    assert [b.panel_ids for b in enforce_reading_order(beats)] == [
+        ["p0001_01", "p0001_02"],
+        ["p0002_01"],
+    ]

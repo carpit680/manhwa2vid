@@ -30,6 +30,7 @@ from manhwa2vid.script.grounding import (
     evidence_for_panels,
     format_seeded_outline_for_prompt,
     preassign_outline_from_facts,
+    enforce_reading_order,
 )
 from manhwa2vid.script.lint import banned_words, lint_and_rewrite_script
 from manhwa2vid.script.synopsis import (
@@ -285,6 +286,8 @@ def _run_outline_pass(
     system = template.format(max_beats=max_beats)
 
     seeded = preassign_outline_from_facts(synopsis, cards, bible, max_beats=max_beats)
+    # Beats must be contiguous runs in reading order, or two of them narrate one moment.
+    seeded = enforce_reading_order(seeded)
     console.print(f"[dim]Seeded outline from plot_facts → {len(seeded)} panel-grounded beats[/]")
 
     llm = apply_stage_model(get_stage_llm("script", config), "script", config)
@@ -326,6 +329,7 @@ def _run_outline_pass(
                 continue
             # Prefer LLM wording but restore panel bindings from seed if LLM drifted
             outline = _reconcile_outline_panels(seeded, outline)
+            outline = enforce_reading_order(outline)
             if outline:
                 return str(data.get("hook", synopsis.logline)), outline
         except Exception as exc:
@@ -967,6 +971,7 @@ def generate_script(
         strip_repeated_appositives,
         trim_overlong_beats,
         repair_truncated_sentences,
+        strip_internal_labels,
     )
 
     beats = strip_repeated_appositives(beats, bible)
@@ -984,6 +989,7 @@ def generate_script(
     beats = strip_duplicate_transitions(beats, transition_panel)
     beats = repair_malformed_openings(beats)
     beats = repair_truncated_sentences(beats)
+    beats = strip_internal_labels(beats, bible)
     beats = dedupe_intra_beat_sentences(beats)
     beats = trim_overlong_beats(beats, config)
     beats = enforce_mc_name_budget(beats, bible, config)
