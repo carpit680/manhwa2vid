@@ -479,7 +479,20 @@ def _narration_chunk_user(
     *,
     introduced: list[str],
     running_summary: list[str],
+    whole_script: bool = False,
 ) -> str:
+    # Writing every beat in one context is the biggest quality lever available: a model
+    # can only guarantee "each moment lands once" when it is the author of all of them.
+    # Say so explicitly, or it treats the batch as just another chunk.
+    scope_note = (
+        f"\nYou are writing the ENTIRE recap in this one response - all {len(chunk)} beats, "
+        "start to finish. Compose it as a single continuous script, not as independent "
+        "summaries: every fact, exchange, and reaction appears in exactly ONE beat, each "
+        "beat picks up where the last left off, and the arc builds to the closer. You "
+        "already know what the earlier beats said, because you wrote them.\n"
+        if whole_script
+        else ""
+    )
     closer_note = ""
     if any(b.is_closer for b in chunk):
         closer_ids = [b.beat_id for b in chunk if b.is_closer]
@@ -492,7 +505,7 @@ def _narration_chunk_user(
         )
     return (
         f"Title: {meta.title}\nChapters: {meta.chapters}\nHook: {hook}\n"
-        f"{closer_note}\n"
+        f"{scope_note}{closer_note}\n"
         f"Already introduced (never repeat their intro clause): "
         f"{', '.join(introduced) or '(nobody yet — this chunk contains the first beats)'}\n\n"
         f"{naming_priority_rules(bible, config)}\n\n"
@@ -519,7 +532,7 @@ def _sighted_complete_json(
     beats: list[ScriptOutlineBeat],
     paths: dict[str, Path] | None,
     config: dict[str, Any],
-    max_images: int = 12,
+    max_images: int | None = None,
 ) -> dict[str, Any]:
     """Narration call with the beats' own panels attached.
 
@@ -549,9 +562,26 @@ def _sighted_complete_json(
                     labeled.append((f"BEAT {ob.beat_id} / PANEL {pid}:", path))
         if not labeled:
             return _complete_json(llm, system, user)
-        # A chunk can carry more panels than is useful to attach; the text evidence still
-        # covers every panel, so cap the images rather than the beats.
-        labeled = labeled[:max_images]
+        # Cap images, not beats — the text evidence still covers every panel. But cap by
+        # SUBSAMPLING round-robin across beats, never by truncation: a whole-chapter pass
+        # carries every beat's panels, and slicing the head left every beat after the
+        # fifth image-blind while the prompt still claimed it could see them.
+        if max_images is None:
+            max_images = int(get_nested(config, "script", "max_narration_images", default=60))
+        if len(labeled) > max_images:
+            by_beat: dict[int, list[tuple[str, Path]]] = {}
+            for ob in beats:
+                by_beat[ob.beat_id] = [x for x in labeled if x[0].startswith(f"BEAT {ob.beat_id} /")]
+            kept: list[tuple[str, Path]] = []
+            depth = 0
+            while len(kept) < max_images and any(len(v) > depth for v in by_beat.values()):
+                for bid in by_beat:
+                    if len(kept) >= max_images:
+                        break
+                    if len(by_beat[bid]) > depth:
+                        kept.append(by_beat[bid][depth])
+                depth += 1
+            labeled = [x for x in labeled if x in kept]
         prompt = (
             f"{system}\n\n"
             # VERIFICATION stance, not description. The first wording ("narrate what you
@@ -592,7 +622,14 @@ def _run_narration_pass(
     commentary = meta.commentary_level or get_nested(config, "script", "commentary_level", default="light")
     genz_level = get_nested(config, "script", "genz_level", default="medium")
     ban = ", ".join(banned_words(config))
-    chunk_size = max(1, int(get_nested(config, "script", "narration_chunk_size", default=5)))
+    # 0 (the default) = ONE pass over the whole chapter. The gold-standard script was
+    # written that way — one context holding every beat — and that is precisely why it
+    # never repeated a moment or contradicted itself across beats. Chunking made each
+    # group an independent sample: beat 17 could not know beat 18 was about to narrate
+    # the same gate entrance, and `running_summary` (a 180-char digest) was too thin to
+    # substitute for having actually written the earlier beats.
+    configured = int(get_nested(config, "script", "narration_chunk_size", default=0))
+    chunk_size = len(outline_beats) if configured <= 0 else max(1, configured)
 
     # Name the beat that owns the rewind, so the line is spoken WHILE the transition
     # panel is on screen rather than a beat early over the previous scene's art.
@@ -638,6 +675,7 @@ def _run_narration_pass(
         user = _narration_chunk_user(
             meta, chunk, hook, bible, attribution, synopsis, config, cards,
             introduced=introduced, running_summary=running_summary,
+            whole_script=len(chunk) == len(outline_beats) and len(chunk) > 1,
         )
         got: dict[int, str] = {}
         try:
@@ -928,6 +966,7 @@ def generate_script(
         strip_duplicate_transitions,
         strip_repeated_appositives,
         trim_overlong_beats,
+        repair_truncated_sentences,
     )
 
     beats = strip_repeated_appositives(beats, bible)
@@ -944,6 +983,7 @@ def generate_script(
         transition_panel = ""
     beats = strip_duplicate_transitions(beats, transition_panel)
     beats = repair_malformed_openings(beats)
+    beats = repair_truncated_sentences(beats)
     beats = dedupe_intra_beat_sentences(beats)
     beats = trim_overlong_beats(beats, config)
     beats = enforce_mc_name_budget(beats, bible, config)

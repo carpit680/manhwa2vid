@@ -193,9 +193,47 @@ def load_story_panels(paths: dict[str, Path]) -> list[Panel]:
     return [Panel.model_validate(p) for p in json.loads(paths["panels_json"].read_text())]
 
 
+def apply_corrections(paths: dict[str, Path], cards: list[SceneCard]) -> list[SceneCard]:
+    """Overlay human-verified panel facts onto the vision pass's cards.
+
+    Vision is re-run whenever perception changes, and it is non-deterministic: a gesture
+    read correctly on one run ("Bak points at Jin-Woo") comes back wrong on the next
+    ("Bak gives a thumbs up"). Without this file, every fix the reviewer signs off on is
+    a fresh coin-flip on the following run, and the same note gets written twice.
+
+    corrections.json is hand-maintained and authoritative:
+
+        {"panels": {"p0015_01": {"action": "...", "source_text": "...", "note": "why"}}}
+
+    Only the fields present are overridden; "note" is documentation and never reaches a
+    prompt. A panel id that no longer exists is ignored rather than raising, so a re-split
+    cannot break the build.
+    """
+    if not paths["corrections_json"].exists():
+        return cards
+    try:
+        data = json.loads(paths["corrections_json"].read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return cards
+    by_panel = data.get("panels", {})
+    if not isinstance(by_panel, dict) or not by_panel:
+        return cards
+    fields = {"action", "source_text", "dialogue_summary", "mood"}
+    out: list[SceneCard] = []
+    for card in cards:
+        patch: dict[str, object] = {}
+        for pid in card.panel_ids:
+            entry = by_panel.get(pid)
+            if isinstance(entry, dict):
+                patch.update({k: v for k, v in entry.items() if k in fields and isinstance(v, str)})
+        out.append(card.model_copy(update=patch) if patch else card)
+    return out
+
+
 def load_story_scene_cards(paths: dict[str, Path]) -> list[SceneCard]:
     source = paths["scene_enriched_json"] if paths["scene_enriched_json"].exists() else paths["scene_json"]
     cards = [SceneCard.model_validate(s) for s in json.loads(source.read_text(encoding="utf-8"))]
+    cards = apply_corrections(paths, cards)
     if not paths["excluded_panels_json"].exists():
         return cards
     excluded = set(json.loads(paths["excluded_panels_json"].read_text()).keys())

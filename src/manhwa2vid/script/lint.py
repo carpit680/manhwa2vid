@@ -378,7 +378,7 @@ def strip_repeated_appositives(
             continue
         patterns.append(
             (name, re.compile(
-                rf"(\b{re.escape(name)}),\s+(?:a|an|the)\s+(?:[\w''-]+\s+){{0,8}}[\w''-]+,",
+                rf"(\b{re.escape(name)}),\s+(?:a|an|the)\s+(?:[\w''-]+\s+){{0,16}}[\w''-]+,",
                 re.I,
             ))
         )
@@ -1330,3 +1330,37 @@ def lint_and_rewrite_script(
     if remaining:
         console.print(f"[yellow]Script lint:[/] {len(remaining)} beat(s) still flagged after rewrite")
     return fixed
+
+
+# Function words a sentence can never legitimately end on. Vision captures bubbles that
+# run across panel borders as fragments ("THE JOB WHERE YOUR LIFE'S ON THE"), and the
+# writer reproduces the cut faithfully — "hunting is a job that puts his life on the...".
+# A genuine cliffhanger ends on a COPULA ("his nickname is..."), which the manhwa itself
+# punctuates with an ellipsis; that form is deliberate and stays.
+_DANGLING_TAIL = {
+    "the", "a", "an", "and", "or", "but", "of", "on", "in", "at", "to", "for", "with",
+    "from", "into", "onto", "about", "as", "by", "that", "his", "her", "their", "its",
+    "my", "your", "our", "this", "these", "those", "than", "then", "so", "because",
+}
+
+
+def repair_truncated_sentences(beats: list[ScriptBeat]) -> list[ScriptBeat]:
+    """Drop narration sentences that end mid-clause on a dangling function word.
+
+    These are not style problems — they are unspeakable. The line goes to TTS and the
+    narrator reads "puts his life on the" into silence. Dropping the sentence is always
+    safe: every other sentence in the beat is independently grounded.
+    """
+    out: list[ScriptBeat] = []
+    for beat in beats:
+        sentences = [x for x in _SENTENCE_SPLIT_RE.split(beat.narration.strip()) if x.strip()]
+        kept = []
+        for sent in sentences:
+            words = re.findall(r"[\w'’-]+", sent.lower())
+            if words and words[-1] in _DANGLING_TAIL:
+                continue
+            kept.append(sent)
+        text = " ".join(kept).strip()
+        # Never empty a beat: a beat with no narration fails beat conservation.
+        out.append(beat.model_copy(update={"narration": text}) if kept and text != beat.narration else beat)
+    return out

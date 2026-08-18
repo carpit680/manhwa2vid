@@ -109,7 +109,9 @@ script:
   # names for the whole script) shipped a video where the MC was 'he' for fifteen
   # straight beats — 21:1 pronouns-to-names vs the reference channel's ~6:1.
   mc_anchor_every_beats: 2
-  narration_chunk_size: 5   # beats per narration LLM call — small outputs can't drop beats
+  narration_chunk_size: 0   # 0 = whole script in ONE call (how the gold script was written);
+                            # >0 chunks it, which reintroduces cross-beat repetition
+  max_narration_images: 60  # panels attached to the whole-chapter narration call
   # Attach each chunk's actual panels to the narration call. The writer used to compose
   # from text cards while the alignment audit judged it against images — an image-blind
   # author checked by a sighted critic. Requires a multimodal script model.

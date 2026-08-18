@@ -1484,3 +1484,46 @@ def test_panel_ref_normalized_from_a_page_number() -> None:
     assert _normalize_panel_ref("page 7", panels) == "p0007_04"
     assert _normalize_panel_ref("", panels) == ""
     assert _normalize_panel_ref("p9999_99", panels) == "", "no half-matching"
+
+
+def test_corrections_override_vision_cards(tmp_path):
+    """A reviewer-verified panel fact must survive vision re-runs.
+
+    Vision is non-deterministic: p0015_01 came back "Bak gives a thumbs up" on one run
+    and "Bak points at Jin-Woo" on the next, so the same correction was reported twice.
+    corrections.json makes a signed-off reading permanent.
+    """
+    import json
+
+    from manhwa2vid.models import SceneCard, project_paths
+    from manhwa2vid.panels.filter import apply_corrections
+
+    paths = project_paths(tmp_path)
+    cards = [SceneCard(panel_ids=["p0015_01"], action="Bak gives a thumbs up.", source_text="x")]
+
+    assert apply_corrections(paths, cards)[0].action == "Bak gives a thumbs up."
+
+    paths["corrections_json"].write_text(
+        json.dumps({"panels": {"p0015_01": {"action": "Bak points at Jin-Woo.", "note": "reviewer"}}})
+    )
+    out = apply_corrections(paths, cards)
+    assert out[0].action == "Bak points at Jin-Woo."
+    assert out[0].source_text == "x"  # untouched fields survive
+    assert not hasattr(out[0], "note")  # documentation never reaches a prompt
+
+
+def test_corrections_tolerate_stale_panel_ids_and_bad_json(tmp_path):
+    """A re-split renames panels; that must not break the build."""
+    import json
+
+    from manhwa2vid.models import SceneCard, project_paths
+    from manhwa2vid.panels.filter import apply_corrections
+
+    paths = project_paths(tmp_path)
+    cards = [SceneCard(panel_ids=["p0001_01"], action="original", source_text="")]
+
+    paths["corrections_json"].write_text(json.dumps({"panels": {"p9999_99": {"action": "ghost"}}}))
+    assert apply_corrections(paths, cards)[0].action == "original"
+
+    paths["corrections_json"].write_text("{not json")
+    assert apply_corrections(paths, cards)[0].action == "original"

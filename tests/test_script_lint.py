@@ -630,3 +630,57 @@ def test_transition_falls_back_to_first_when_panel_unknown() -> None:
     out = strip_duplicate_transitions(beats, transition_panel="")
     assert "hours earlier" in out[0].narration
     assert "hours earlier" not in out[1].narration
+
+
+def test_repair_truncated_sentences_drops_dangling_fragment():
+    """A bubble captured across a panel border ends mid-clause; the writer reproduces the
+    cut and TTS reads it into silence. Observed: 'puts his life on the...' (p0009_01)."""
+    from manhwa2vid.script.lint import repair_truncated_sentences
+
+    beats = [
+        ScriptBeat(
+            beat_id=1,
+            panel_ids=["p1"],
+            narration="Jin-Woo crosses the street. He thinks how hunting puts his life on the... Nearby, a gate hums.",
+        )
+    ]
+    out = repair_truncated_sentences(beats)
+    assert "life on the" not in out[0].narration
+    assert "Jin-Woo crosses the street." in out[0].narration
+    assert "Nearby, a gate hums." in out[0].narration
+
+
+def test_repair_truncated_sentences_keeps_deliberate_cliffhanger():
+    """'HIS NICKNAME IS...' is the manhwa's own reveal boundary — never a capture bug."""
+    from manhwa2vid.script.lint import repair_truncated_sentences
+
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p1"], narration="Kim tells Bak that his nickname is...")]
+    assert repair_truncated_sentences(beats)[0].narration == "Kim tells Bak that his nickname is..."
+
+
+def test_repair_truncated_sentences_never_empties_a_beat():
+    """An empty narration fails beat conservation and kills the whole chapter."""
+    from manhwa2vid.script.lint import repair_truncated_sentences
+
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p1"], narration="He reaches for the...")]
+    assert repair_truncated_sentences(beats)[0].narration.strip()
+
+
+def test_strip_repeated_appositives_handles_long_intro_clauses():
+    """The second intro ran 13 words; the pattern capped at 9 and let it through."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import strip_repeated_appositives
+
+    bible = SeriesBible(
+        series_slug="s",
+        title="S",
+        protagonist_id="char_mc",
+        characters={"char_kim": CharacterProfile(id="char_kim", canonical_name="Kim Sangshik", tier=CharacterTier.MAIN)},
+    )
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p1"], narration="A vendor tells Kim Sangshik, a veteran hunter in a blue jacket, good luck."),
+        ScriptBeat(beat_id=2, panel_ids=["p2"], narration="Kim Sangshik, a veteran hunter with short greyish-blue hair and a goatee in a blue jacket, grabs coffee."),
+    ]
+    out = strip_repeated_appositives(beats, bible)
+    assert out[1].narration == "Kim Sangshik grabs coffee."
+    assert "a veteran hunter in a blue jacket" in out[0].narration
