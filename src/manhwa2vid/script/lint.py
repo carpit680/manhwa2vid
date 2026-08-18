@@ -68,7 +68,10 @@ _ART_RE = re.compile(
 # Internal pipeline vocabulary leaking into spoken narration.
 _LEAK_RE = re.compile(
     r"\b(referred to as|beat_id|panel_ids?|character_ids?|char_[a-z_]+|"
-    r"now referred to|naming priority)\b",
+    r"now referred to|naming priority|"
+    # The writer describing the STORYTELLING MECHANISM instead of telling the story:
+    # "while narration explains that..." appeared once the inner-monologue rule landed.
+    r"narration (?:explains|says|states|tells|reveals)|a caption (?:explains|reads)|the (?:caption|text|narration) (?:explains|reads|says))\b",
     re.I,
 )
 
@@ -420,16 +423,46 @@ _REWIND_CLAUSE_RE = re.compile(
 )
 
 
-def strip_duplicate_transitions(beats: list[ScriptBeat]) -> list[ScriptBeat]:
-    """Keep the FIRST temporal rewind in a script; delete later restatements.
+def strip_duplicate_transitions(
+    beats: list[ScriptBeat],
+    transition_panel: str = "",
+) -> list[ScriptBeat]:
+    """Keep the rewind on the beat whose PANELS show the time shift; delete the rest.
+
+    "Keep the first mention" was wrong and shipped the defect it was meant to fix: the
+    rewind landed in beat 1, spoken over dungeon art before anything changed, while the
+    beat actually containing the present-day establishing shot narrated the killing blow
+    and let the transition panel pass in silence. The gold script gives that panel its
+    own beat ("Then the sky clears, over present-day Seoul"). `transition_panel` comes
+    from the chapter read; without it we fall back to first-wins.
 
     A sentence is removed only if it is transition-only — it carries a marker and no
     other event. A sentence that both transitions AND advances the story is kept, and a
     beat is never emptied.
     """
+    # The beat that OWNS the rewind: the one whose panels include the transition panel.
+    owner_id: int | None = None
+    if transition_panel:
+        for beat in beats:
+            if transition_panel in beat.panel_ids:
+                owner_id = beat.beat_id
+                break
+
     seen_transition = False
     out: list[ScriptBeat] = []
     for beat in beats:
+        # With a known owner, every other beat loses its transition outright.
+        if owner_id is not None and beat.beat_id != owner_id:
+            sentences = [x for x in _SENTENCE_SPLIT_RE.split(beat.narration.strip()) if x.strip()]
+            kept_here = [
+                x for x in sentences
+                if not (_TRANSITION_RE.search(x) and _REWIND_CLAUSE_RE.search(x))
+            ]
+            if kept_here and len(kept_here) < len(sentences):
+                out.append(beat.model_copy(update={"narration": " ".join(kept_here).strip()}))
+            else:
+                out.append(beat)
+            continue
         sentences = _SENTENCE_SPLIT_RE.split(beat.narration)
         kept: list[str] = []
         for sentence in sentences:

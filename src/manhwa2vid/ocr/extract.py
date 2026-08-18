@@ -515,6 +515,31 @@ def _card_from_entry(
     )
 
 
+def _normalize_panel_ref(value: Any, panels: list[Panel]) -> str:
+    """Coerce a model-reported panel reference to a real panel id, else "".
+
+    The chapter read answered "11" for present_starts_at_panel — a page number, not an
+    id — so the panel-aware lookup silently found no owner. Match exact ids first, then a
+    bare page number, and give up honestly rather than half-matching.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    ids = [p.id for p in panels]
+    if text in ids:
+        return text
+    import re as _re
+
+    digits = _re.sub(r"\D", "", text)
+    if digits:
+        page = int(digits)
+        for pid in ids:
+            m = _re.match(r"p(\d+)_", pid)
+            if m and int(m.group(1)) == page:
+                return pid
+    return ""
+
+
 def _run_chapter_scene_pass(
     analysis_panels: list[Panel],
     paths: dict[str, Path],
@@ -554,6 +579,17 @@ def _run_chapter_scene_pass(
         story_map = {
             "summary": str(read.get("summary", "")),
             "temporal_devices": str(read.get("temporal_devices", "")),
+            # WHERE the present begins, not just that it does. The rewind line has to be
+            # spoken while the transition panel is on screen; announced a beat early it
+            # plays over dungeon art, and the panel that actually shows the shift passes
+            # in silence.
+            # The END of the flashforward, not the start of the present: asked the
+            # other way the model named a construction site two beats into the present
+            # day, which moved the rewind line after the story had already returned.
+            # "Last panel of the opening flashforward" is a boundary it can see.
+            "last_flashforward_panel": _normalize_panel_ref(
+                read.get("last_flashforward_panel", ""), analysis_panels
+            ),
         }
         roster = read.get("roster") or []
         roster_text = "\n".join(
@@ -692,6 +728,11 @@ def _build_chapter_read_prompt(panels: list[Panel]) -> str:
         'Return ONE JSON object:\n'
         '{"summary": "what happens in this chapter, in order", '
         '"temporal_devices": "devices used and where they shift, or empty string", '
+        '"last_flashforward_panel": "the id of the LAST panel that still belongs to the '
+        'opening flashforward — the final image before the story returns to the present. '
+        'A wide establishing shot of the city that follows the flashforward IS the '
+        'return, so the panel BEFORE it is the answer. Empty string if the chapter is '
+        'strictly chronological", '
         '"roster": [{"who": "name if the chapter names them, else a stable visual label", '
         '"looks": "the features that identify them across panels", '
         '"first_seen": "roughly where they first appear"}]}'

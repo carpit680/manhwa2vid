@@ -25,10 +25,11 @@ THE TEN RULES:
    - it is aimed at its Listener — "you" means that person, and a name in the words
      ("MR. SONG, take care of us") names who is being spoken to;
    - when a line has no Speaker shown, write it without an owner rather than assigning one;
-   - a line with a Speaker but NO Listener is inner monologue or narration: it is that
-     person's THOUGHT, wherever the camera happens to be. Never hand it to whoever is
-     visible in the panel (Jin-Woo's worry about his mother's hospital bills is his,
-     even while we are looking at Kim at the food truck).
+   - a line with a Speaker but NO Listener is inner monologue: VOICE it as that
+     person's thought, never describe the device. Write "Jin-Woo needs the guild pay
+     for his mother's hospital bills" — never "narration explains that...", never
+     "a caption reads...". And never hand the thought to whoever is merely visible
+     in the panel (it is his worry even while we are looking at Kim).
 3. Never caption. Banned: "is visible", "can be seen", "in the foreground/background",
    "with a ... expression", objects resting/sitting anywhere, "wearing ..." after intro.
    If a sentence would work as image alt-text, replace it with what HAPPENS.
@@ -53,10 +54,12 @@ THE TEN RULES:
    The phrase "the protagonist" at most once per script. FORBIDDEN words: {ban_words}.
    No hedging: possibly, likely, maybe, seems, appears. Slang level: {genz_level}.
    Commentary: {commentary_level} — plot-forward, no essays.
-10. TEMPORAL FRAMING: speak every frame shift ONCE. A flashforward cold open rewinds in
-    EXACTLY ONE beat — the last flashforward beat — with one explicit line ("that is where
-    this day is headed, but it starts hours earlier"). Every beat after that is already in
-    the present and simply continues; never rewind twice, and never re-announce the time.
+10. TEMPORAL FRAMING: mark every frame shift ONCE, as an IMAGE CHANGE rather than an
+    announcement. A flashforward cold open returns to the present in EXACTLY ONE beat —
+    the last flashforward beat — closing it the way the gold does: "Then the sky clears,
+    over present-day Seoul." Beats before it are inside the flashforward and never
+    mention the shift; beats after it are simply in the present and never re-announce
+    the time. Never rewind twice.
     The CLOSER lands deliberately: tie to the chapter's core tension, end on a concrete
     forward hook. No trailing off.
 

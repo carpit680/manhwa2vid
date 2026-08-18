@@ -1466,3 +1466,21 @@ def test_empty_vision_pass_fails_loudly(tmp_path) -> None:
             {"root": tmp_path, "scene_partial_json": tmp_path / "p.json"},
             {}, {}, SeriesBible(series_slug="s", title="S"), _EmptyLLM(), {},
         )
+
+
+def test_panel_ref_normalized_from_a_page_number() -> None:
+    """The chapter read answered "11" for present_starts_at_panel — a page number, not
+    an id — so the panel-aware transition lookup silently found no owner."""
+    from manhwa2vid.models import Panel, PanelBBox
+    from manhwa2vid.ocr.extract import _normalize_panel_ref
+
+    panels = [
+        Panel(id=pid, page_num=int(pid[1:5]), image_path=f"{pid}.png",
+              bbox=PanelBBox(x=0, y=0, width=10, height=10))
+        for pid in ("p0007_04", "p0011_01", "p0011_02")
+    ]
+    assert _normalize_panel_ref("p0007_04", panels) == "p0007_04"
+    assert _normalize_panel_ref("11", panels) == "p0011_01"
+    assert _normalize_panel_ref("page 7", panels) == "p0007_04"
+    assert _normalize_panel_ref("", panels) == ""
+    assert _normalize_panel_ref("p9999_99", panels) == "", "no half-matching"

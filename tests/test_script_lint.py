@@ -588,3 +588,45 @@ def test_overlong_beat_trimmed_to_its_word_cap() -> None:
     assert out[0].narration.startswith("Jin-Woo walks past"), "the beat's point is kept"
     assert len(out[0].narration.split(".")) >= 3, "never gutted below two sentences"
     assert out[1].narration == "He asks for coffee.", "short beats untouched"
+
+
+def test_rewind_kept_on_the_beat_that_shows_the_shift() -> None:
+    """"Keep the first mention" shipped the very defect it was meant to fix.
+
+    The rewind landed in beat 1 — spoken over dungeon art before anything changed —
+    while the beat containing the present-day establishing shot (p0007_04) narrated the
+    killing blow and let the transition panel pass in silence. The gold gives that panel
+    its own beat: "Then the sky clears, over present-day Seoul."
+    """
+    from manhwa2vid.script.lint import strip_duplicate_transitions
+
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p0002_01", "p0003_01"],
+                   narration="He lies in his own blood. He never expected this fate, "
+                             "though this day actually began hours earlier."),
+        ScriptBeat(beat_id=2, panel_ids=["p0006_01", "p0007_04"],
+                   narration="The spear plunges down in a spray of blood. That is where "
+                             "this day is headed, but it starts hours earlier."),
+        ScriptBeat(beat_id=3, panel_ids=["p0008_01"],
+                   narration="He walks the morning streets, just another commuter."),
+    ]
+    out = strip_duplicate_transitions(beats, transition_panel="p0007_04")
+
+    assert "hours earlier" not in out[0].narration, "beat 1 is still inside the flashforward"
+    assert "He lies in his own blood." in out[0].narration
+    assert "hours earlier" in out[1].narration, "the beat showing the shift keeps it"
+    assert "commuter" in out[2].narration
+
+
+def test_transition_falls_back_to_first_when_panel_unknown() -> None:
+    """Chronological chapters and older story maps have no transition panel."""
+    from manhwa2vid.script.lint import strip_duplicate_transitions
+
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p1"], narration="It starts hours earlier."),
+        ScriptBeat(beat_id=2, panel_ids=["p2"],
+                   narration="The day begins hours earlier again. He walks on."),
+    ]
+    out = strip_duplicate_transitions(beats, transition_panel="")
+    assert "hours earlier" in out[0].narration
+    assert "hours earlier" not in out[1].narration

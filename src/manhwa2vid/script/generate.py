@@ -584,7 +584,7 @@ def _run_narration_pass(
     config: dict[str, Any],
     cards: list[SceneCard] | None = None,
     paths: dict[str, Path] | None = None,
-) -> tuple[list[ScriptBeat], list[int]]:
+) -> tuple[list[ScriptBeat], list[int], list[int]]:
     """Chunked narration: outline beat_ids/panel_ids are authoritative; the LLM only
     supplies narration text. Returns (beats, beat_ids_missing_after_retry)."""
     template = _load_prompt_template("recap.txt")
@@ -594,13 +594,37 @@ def _run_narration_pass(
     ban = ", ".join(banned_words(config))
     chunk_size = max(1, int(get_nested(config, "script", "narration_chunk_size", default=5)))
 
+    # Name the beat that owns the rewind, so the line is spoken WHILE the transition
+    # panel is on screen rather than a beat early over the previous scene's art.
+    transition_note = ""
+    try:
+        if paths is not None and paths["scene_story_map_json"].exists():
+            tp = str(
+                json.loads(paths["scene_story_map_json"].read_text()).get(
+                    "last_flashforward_panel", ""
+                )
+            ).strip()
+            if tp:
+                owner = next((b.beat_id for b in outline_beats if tp in b.panel_ids), None)
+                if owner is not None:
+                    transition_note = (
+                        f"\n\nTEMPORAL PLACEMENT: the opening flashforward ENDS at panel {tp}, "
+                        f"in BEAT {owner}. Close THAT beat by marking the return to the "
+                        "present as an image change — the gold does it in one line: "
+                        "\"Then the sky clears, over present-day Seoul.\" Beats before it "
+                        "are inside the flashforward and never mention the shift; beats "
+                        "after it are simply in the present and never re-announce it.\n"
+                    )
+    except Exception:
+        transition_note = ""
+
     system = template.format(
         target_wpm=target_wpm,
         commentary_level=commentary,
         genz_level=genz_level,
         ban_words=ban,
         naming_priority_rules=naming_priority_rules(bible, config),
-    )
+    ) + transition_note
 
     llm = apply_stage_model(get_stage_llm("script", config), "script", config)
 
@@ -608,6 +632,7 @@ def _run_narration_pass(
     running_summary: list[str] = []
     beats_out: list[ScriptBeat] = []
     missing: list[int] = []
+    narration_fallbacks: list[int] = []
 
     for chunk in _chunked(outline_beats, chunk_size):
         user = _narration_chunk_user(
@@ -631,6 +656,19 @@ def _run_narration_pass(
                     introduced=introduced, running_summary=running_summary, paths=paths,
                 )
             if not narration:
+                # Last resort: the outline's own plot_beat, which is deterministic and
+                # panel-grounded. Losing ONE beat failed the whole chapter at the
+                # beat-conservation gate — a whole re-run (and a full vision pass) for a
+                # single empty completion. Terse-but-true beats dropping the beat, and
+                # the beat is still recorded as a fallback so it shows up in QA.
+                from manhwa2vid.script.lint import local_sanitize_narration
+
+                narration = local_sanitize_narration(
+                    (ob.plot_beat or "").split("/ CLOSER")[0].strip()
+                )
+                if narration:
+                    narration_fallbacks.append(ob.beat_id)
+            if not narration:
                 missing.append(ob.beat_id)
                 continue
             beat = ScriptBeat(
@@ -645,7 +683,7 @@ def _run_narration_pass(
                 if name not in introduced:
                     introduced.append(name)
 
-    return beats_out, missing
+    return beats_out, missing, narration_fallbacks
 
 
 def _retry_single_beat(
@@ -730,7 +768,7 @@ def generate_script(
         {"hook": hook, "beats": [b.model_dump(mode="json") for b in outline_beats]},
     )
 
-    beats, missing_beats = _run_narration_pass(
+    beats, missing_beats, narration_fallbacks = _run_narration_pass(
         meta, outline_beats, hook, bible, attribution, synopsis, config, cards, paths=paths
     )
 
@@ -739,6 +777,13 @@ def generate_script(
     report = QAReport(stage="script")
     outline_ids = [b.beat_id for b in outline_beats]
     script_ids = [b.beat_id for b in beats]
+    report.add(
+        "narration-complete",
+        "warn" if narration_fallbacks else True,
+        f"beat(s) {narration_fallbacks} fell back to outline text (empty completion)"
+        if narration_fallbacks else "",
+        fallbacks=narration_fallbacks,
+    )
     empty_beats = [b.beat_id for b in beats if not b.narration.strip()]
     report.add(
         "beats-nonempty",
@@ -887,7 +932,17 @@ def generate_script(
 
     beats = strip_repeated_appositives(beats, bible)
     beats = strip_caption_sentences(beats, bible)
-    beats = strip_duplicate_transitions(beats)
+    transition_panel = ""
+    try:
+        if paths["scene_story_map_json"].exists():
+            transition_panel = str(
+                json.loads(paths["scene_story_map_json"].read_text()).get(
+                    "last_flashforward_panel", ""
+                )
+            ).strip()
+    except Exception:
+        transition_panel = ""
+    beats = strip_duplicate_transitions(beats, transition_panel)
     beats = repair_malformed_openings(beats)
     beats = dedupe_intra_beat_sentences(beats)
     beats = trim_overlong_beats(beats, config)
