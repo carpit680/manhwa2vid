@@ -590,6 +590,13 @@ def _run_chapter_scene_pass(
             "last_flashforward_panel": _normalize_panel_ref(
                 read.get("last_flashforward_panel", ""), analysis_panels
             ),
+            # Written once, from whole-chapter context, then locked deterministically so
+            # the narration pass cannot embellish it. Asking the writer for this line in
+            # the same breath as 18 beats produced "Away from the trials of him, the sky
+            # clears over the peaceful bridges of present-day Seoul."
+            "return_to_present_line": " ".join(
+                str(read.get("return_to_present_line", "") or "").split()
+            )[:160],
         }
         roster = read.get("roster") or []
         roster_text = "\n".join(
@@ -733,6 +740,10 @@ def _build_chapter_read_prompt(panels: list[Panel]) -> str:
         'A wide establishing shot of the city that follows the flashforward IS the '
         'return, so the panel BEFORE it is the answer. Empty string if the chapter is '
         'strictly chronological", '
+        '"return_to_present_line": "ONE short present-tense sentence, in recap-narration '
+        'voice, marking the return from that flashforward as an IMAGE CHANGE rather than '
+        'an announcement — name the place the story returns to. Empty string if the '
+        'chapter is strictly chronological", '
         '"roster": [{"who": "name if the chapter names them, else a stable visual label", '
         '"looks": "the features that identify them across panels", '
         '"first_seen": "roughly where they first appear"}]}'
@@ -856,7 +867,7 @@ def _build_scene_prompt(
         "ref=known char_id from the cast list below OR ref='new'; "
         "descriptor = appearance you can see; visibility=face|back_turned|partial|crowd; "
         "basis = the SPECIFIC visual evidence in THIS image that identifies the person "
-        "(e.g. 'green backpack', 'long orange hair clearly visible') — required whenever "
+        "(e.g. 'the scar across his left cheek', 'the red armband, clearly visible') — required whenever "
         "ref is not 'new' or name_used is set; "
         "confidence = number 0.0-1.0, how certain you are this is that SPECIFIC named cast "
         "member. Use 0.9+ only when the face is clear and unmistakable, 0.6-0.8 when "
@@ -879,7 +890,7 @@ def _build_scene_prompt(
         "key_terms, panel_ids, panel_type, is_story, exclude_reason.\n"
         "CRITICAL naming rules for action and dialogue_summary:\n"
         "- NEVER write 'a character', 'two characters', 'unnamed character', or 'the character'\n"
-        "- Use canonical names, role descriptors (the E-Rank hunter), or visual tags (guy in green backpack)\n"
+        "- Use canonical names, role descriptors (the caravan medic), or visual tags (the man with the red armband)\n"
         "panel_type=title_splash: large decorative/Korean chapter title, no plot.\n"
         "Set is_story=false for title_splash, credit, ad, or non-plot images.\n"
         f"{cast_context}\n"

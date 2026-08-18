@@ -144,7 +144,11 @@ def test_bible_role_grounds_intro_clause() -> None:
         ScriptBeat,
         SeriesBible,
     )
+    from manhwa2vid.script import grounding
     from manhwa2vid.script.lint import lint_panel_grounding
+
+    # The keyword pre-filter has no built-in list — it is per-series data.
+    grounding.configure_grounding_keywords({"script": {"grounding_keywords": {"healer": ["healer", "healers"]}}})
 
     bible = SeriesBible(series_slug="s", title="S")
     bible.characters["char_joo"] = CharacterProfile(
@@ -174,7 +178,11 @@ def test_invented_healer_still_flagged_when_absent() -> None:
         ScriptBeat,
         SeriesBible,
     )
+    from manhwa2vid.script import grounding
     from manhwa2vid.script.lint import lint_panel_grounding
+
+    # The keyword pre-filter has no built-in list — it is per-series data.
+    grounding.configure_grounding_keywords({"script": {"grounding_keywords": {"healer": ["healer", "healers"]}}})
 
     bible = SeriesBible(series_slug="s", title="S")
     bible.characters["char_mc"] = CharacterProfile(

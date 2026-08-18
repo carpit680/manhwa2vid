@@ -11,7 +11,7 @@ import httpx
 
 from manhwa2vid.characters.bible import slugify_char_id
 from manhwa2vid.config import get_nested
-from manhwa2vid.models import CharacterProfile, CharacterTier, VisualProfile
+from manhwa2vid.models import CharacterProfile, CharacterTier
 
 _USER_AGENT = "manhwa2vid/1.0 (character scout)"
 
@@ -65,44 +65,15 @@ def fetch_wiki_cast(title: str, config: dict[str, Any]) -> list[CharacterProfile
 
 
 def _fetch_wiki_fallback(title: str, config: dict[str, Any]) -> list[CharacterProfile]:
-    """Try MediaWiki search on solo-leveling fandom as common case."""
-    if "solo" in title.lower() and "level" in title.lower():
-        return _fetch_solo_leveling_known_cast()
+    """No cast when the wiki is unavailable.
+
+    This used to return a curated Solo Leveling roster whenever the lookup failed, which
+    only ever worked for one series and silently seeded the wrong cast for any other. The
+    per-project glossary.json is the correct place to record characters by hand — it is
+    human-editable, series-agnostic, and already feeds the bible through
+    profiles_from_glossary.
+    """
     return []
-
-
-def _fetch_solo_leveling_known_cast() -> list[CharacterProfile]:
-    """Curated fallback when API unavailable."""
-    return [
-        CharacterProfile(
-            id=slugify_char_id("Sung Jin-Woo"),
-            canonical_name="Sung Jin-Woo",
-            tier=CharacterTier.MAIN,
-            aliases=["Jin-Woo", "Sung"],
-            role="protagonist",
-            pronoun="he",
-            descriptors=["E-Rank hunter", "black hair"],
-            visual=VisualProfile(hair="black", outfit="casual hunter gear"),
-            confidence=0.9,
-            narration_labels=["MC", "Sung Jin-Woo", "the E-Rank hunter"],
-        ),
-        CharacterProfile(
-            id=slugify_char_id("Song Chi-yul"),
-            canonical_name="Song Chi-yul",
-            tier=CharacterTier.SUPPORTING,
-            aliases=["Mr. Song"],
-            pronoun="he",
-            confidence=0.7,
-        ),
-        CharacterProfile(
-            id=slugify_char_id("Cha Hae-In"),
-            canonical_name="Cha Hae-In",
-            tier=CharacterTier.SUPPORTING,
-            pronoun="she",
-            visual=VisualProfile(hair="blonde"),
-            confidence=0.7,
-        ),
-    ]
 
 
 def wiki_protagonist_hint(profiles: list[CharacterProfile]) -> str | None:

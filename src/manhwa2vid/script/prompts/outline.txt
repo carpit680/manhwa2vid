@@ -15,7 +15,7 @@ Return JSON:
       "beat_id": 1,
       "panel_ids": ["p0002_01", "p0003_01"],
       "character_ids": ["char_sung_jin_woo"],
-      "plot_beat": "Weakest E-Rank hunter Sung Jin-Woo crawls out injured after a gate fight"
+      "plot_beat": "<who does what, in one line, using names from the bible>"
     }}
   ]
 }}

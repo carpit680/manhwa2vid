@@ -28,7 +28,8 @@ Rules:
 - Pick one canonical English name per character (full name preferred for main characters).
 - Include obvious aliases: nicknames, surname-only, honorifics, OCR misspellings.
 - Do NOT merge different characters.
-- Main character examples for Solo Leveling: Sung Jin-Woo = Jin-Woo = Sung = Mr. Sung.
+- Group a character's full name, given name, surname and honorific forms under ONE
+  canonical entry (Family Given = Given = Family = Mr. Family are the same person).
 """
 
 

@@ -205,8 +205,8 @@ def naming_priority_rules(bible: SeriesBible | None = None, config: dict | None 
         "  - Never describe the protagonist by clothing or gear as if a different person "
         "('the man with the backpack' is FORBIDDEN when it is him).\n"
         "Supporting cast:\n"
-        "  - FIRST mention in the script: name + one short intro clause from the bible "
-        "(role or look): 'Lee Joo-hee, the party's rookie healer, ...'.\n"
+        "  - FIRST mention in the script: name + one short ROLE clause from the bible "
+        "(what they do, never what they wear): '<name>, the party's field medic, ...'.\n"
         "  - Every later mention: name or pronoun. Never repeat the intro clause.\n"
         "Unnamed people: a short role phrase (the guild clerk, a veteran hunter) — "
         "NEVER 'character', 'someone', 'a man', 'two people'.\n"
@@ -227,21 +227,21 @@ def rebuild_bible_from_glossary(
     if chapter_summaries:
         bible.chapter_summaries = chapter_summaries
 
-    for profile in profiles_from_glossary(glossary):
-        if normalize_name(profile.canonical_name) == normalize_name("Sung Jin-Woo"):
+    # Which character is the protagonist comes from the glossary, never from a name
+    # hardcoded here. glossary.json may say so explicitly:
+    #     {"protagonist": "Sung Jin-Woo", "characters": {...}}
+    # and otherwise the first entry wins, since a reader writing a glossary by hand lists
+    # the lead first. Their descriptors are simply their glossary aliases — the same place
+    # the hardcoded list used to duplicate ("man with green backpack", "E-Rank hunter").
+    declared = normalize_name(str(glossary.get("protagonist", "") or "")) if isinstance(glossary, dict) else ""
+    profiles = list(profiles_from_glossary(glossary))
+    for index, profile in enumerate(profiles):
+        is_protagonist = (
+            normalize_name(profile.canonical_name) == declared if declared else index == 0
+        )
+        if is_protagonist:
             profile.tier = CharacterTier.MAIN
-            profile.role = "protagonist"
-            profile.pronoun = "he"
-            profile.descriptors = [
-                "man with green backpack",
-                "E-Rank hunter",
-                "guy with green backpack",
-            ]
-            profile.visual = VisualProfile(
-                hair="black",
-                outfit="green backpack / green hood",
-                accessories=["green backpack"],
-            )
+            profile.role = profile.role or "protagonist"
             bible.protagonist_id = profile.id
         merge_profile(bible, profile)
 

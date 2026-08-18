@@ -21,6 +21,7 @@ from manhwa2vid.characters.bible import (
 from manhwa2vid.characters.consolidate import apply_id_redirects, consolidate_profiles
 from manhwa2vid.characters.resolve import (
     is_mc_visual_signal,
+    mc_signals,
     normalize_descriptor,
     resolve_character_ref,
 )
@@ -38,25 +39,44 @@ from manhwa2vid.models import (
 )
 console = Console()
 
-_LINK_PROMPT = """You are linking manhwa panel identities across a chapter.
+_LINK_PROMPT_TEMPLATE = """You are linking manhwa panel identities across a chapter.
 
 Given scene summaries with people descriptors and a character bible, merge duplicate identities.
 Return JSON:
-{{
+{
   "merges": [
-    {{"descriptor_or_name": "guy in green backpack", "char_id": "char_sung_jin_woo", "reason": "same person"}}
+    {"descriptor_or_name": "<a descriptor seen in the cards>", "char_id": "<id from the bible>", "reason": "same person"}
   ],
   "panel_updates": [
-    {{"panel_id": "p0012_01", "people": [{{"ref": "char_sung_jin_woo", "name_used": "Sung Jin-Woo", "visibility": "back_turned", "notes": ""}}]}}
+    {"panel_id": "<panel id>", "people": [{"ref": "<id from the bible>", "name_used": "<their name>", "visibility": "back_turned", "notes": ""}]}
   ]
-}}
+}
 
 Rules:
 - Link back-turned / partial views to known cast when context implies same person
 - Do NOT merge different named characters
-- Do NOT assign protagonist id to generic descriptors like "guy with black hair" unless green backpack / Jin-Woo signals are present
+- Do NOT assign the protagonist's id to a generic descriptor (hair colour, build, clothing
+  colour alone). Those describe half a cast. Assign it only when the reference carries one
+  of the protagonist's OWN identifying marks, listed here:
+%s
 - Prefer bible char_id when confident
 """
+
+
+def _link_prompt(bible: SeriesBible) -> str:
+    """The link prompt with this series' protagonist marks injected.
+
+    The marks used to be written into the prompt as literal text from one title ("green
+    backpack / Jin-Woo signals"), which told the model nothing for any other series and
+    invited it to look for that title's props. They now come from the bible, which in
+    turn comes from the per-project glossary.
+    """
+    signals = mc_signals(bible)
+    if signals:
+        listed = "\n".join(f"    - {sig}" for sig in signals[:12])
+    else:
+        listed = "    - (none recorded — do not assign the protagonist id from a descriptor at all)"
+    return _LINK_PROMPT_TEMPLATE % listed
 
 
 def _speaker_for_card(card: SceneCard) -> str:
@@ -501,7 +521,7 @@ def _llm_link_pass(
         f"Chapter scenes:\n" + "\n".join(evidence_lines[:80])
     )
     try:
-        raw = llm.complete(_LINK_PROMPT, user, json_mode=True)
+        raw = llm.complete(_link_prompt(bible), user, json_mode=True)
         data = json.loads(raw)
     except Exception:
         return {}, []

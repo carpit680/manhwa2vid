@@ -143,6 +143,12 @@ def test_preassign_binds_coffee_fact_to_barista_panel() -> None:
 
 
 def test_ungrounded_coffee_on_street_panel() -> None:
+    from manhwa2vid.script import grounding
+
+    # The keyword pre-filter has no built-in list — it is per-series data, supplied here.
+    grounding.configure_grounding_keywords(
+        {"script": {"grounding_keywords": {"coffee": ["coffee", "barista", "cafe"]}}}
+    )
     cards = [
         SceneCard(
             panel_ids=["p0008_01"],

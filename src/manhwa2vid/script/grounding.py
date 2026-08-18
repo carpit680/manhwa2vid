@@ -18,31 +18,43 @@ _STOP = frozenset(
 # These defaults are Solo Leveling ch.1 specifics; override per series/chapter via
 # config script.grounding_keywords: {key: [phrase, ...]} — the adversarial frame audit
 # (script/verify.py) is the general mechanism, this list is just a fast pre-filter.
-_DEFAULT_GROUNDING_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "coffee": ("coffee", "barista", "cafe", "café"),
-    "food_truck": ("food truck", "medical bill", "medical bills", "guild pay", "hunter's guild pay"),
-    "healer": ("healer", "healers"),
-    "portal": ("portal", "gate", "dungeon entrance", "blue-lit", "blue lit"),
-    "injured": ("injured", "bleeding", "blood", "wound", "wounds", "bandage"),
-    "eaten": ("eaten", "have you eaten", "food"),
-    "raid_lead": ("volunteer", "lead the raid", "lead a raid"),
-}
+# Concrete nouns whose presence in narration must be backed by panel evidence. This is a
+# fast PRE-FILTER only; the adversarial VLM pass (script/verify.py) is the general
+# mechanism and does not depend on it.
+#
+# There is no built-in list, because any list is a list about ONE series: the defaults
+# here used to be coffee / food truck / healer / portal, which are Solo Leveling's props
+# and meaningless for another title. The terms come from the project's own
+# glossary.json ("terms": {"E-Rank": ["E Rank"], ...}) — human-editable, per-series — or
+# from script.grounding_keywords in config. With neither, the pre-filter is empty and
+# grounding rests entirely on the verifier, which is the correct fallback rather than
+# flagging another series' narration against this one's furniture.
+GROUNDING_KEYWORDS: dict[str, tuple[str, ...]] = {}
 
-GROUNDING_KEYWORDS: dict[str, tuple[str, ...]] = dict(_DEFAULT_GROUNDING_KEYWORDS)
 
+def configure_grounding_keywords(config: dict, glossary: dict | None = None) -> None:
+    """Set the keyword pre-filter from config, else from the project glossary's terms."""
+    GROUNDING_KEYWORDS.clear()
 
-def configure_grounding_keywords(config: dict) -> None:
-    """Replace the keyword set from config (script.grounding_keywords); reset when absent."""
     override = None
     if isinstance(config, dict):
         override = (config.get("script") or {}).get("grounding_keywords")
-    GROUNDING_KEYWORDS.clear()
     if isinstance(override, dict) and override:
         for key, phrases in override.items():
             if isinstance(phrases, (list, tuple)) and phrases:
                 GROUNDING_KEYWORDS[str(key)] = tuple(str(p) for p in phrases)
-    if not GROUNDING_KEYWORDS:
-        GROUNDING_KEYWORDS.update(_DEFAULT_GROUNDING_KEYWORDS)
+        return
+
+    terms = (glossary or {}).get("terms") if isinstance(glossary, dict) else None
+    if isinstance(terms, dict):
+        for key, aliases in terms.items():
+            key = str(key).strip()
+            if not key:
+                continue
+            phrases = {key.lower()}
+            if isinstance(aliases, (list, tuple)):
+                phrases.update(str(a).lower() for a in aliases if str(a).strip())
+            GROUNDING_KEYWORDS[key.lower().replace(" ", "_")] = tuple(sorted(phrases))
 
 
 def _tokenize(text: str) -> set[str]:

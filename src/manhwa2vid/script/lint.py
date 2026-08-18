@@ -1519,6 +1519,7 @@ def lock_transition_line(
     beats: list[ScriptBeat],
     transition_panel: str,
     config: dict[str, Any],
+    chapter_line: str = "",
 ) -> list[ScriptBeat]:
     """Replace the flashforward's closing sentence with the approved wording.
 
@@ -1534,10 +1535,15 @@ def lock_transition_line(
     (strip_duplicate_transitions picks the beat whose panels show the shift); this locks
     the wording too, so the line stops being re-rolled every run.
 
-    Series-specific by nature — `script.transition_line` is empty by default and nothing
-    happens until a series sets it.
+    The wording comes from the chapter itself: the whole-chapter read writes
+    `return_to_present_line` once, with the entire chapter in view, and this locks that
+    sentence in place. Nothing here is series-specific — an earlier version hardcoded one
+    title's line in config.yaml, which would have injected that city's name into every
+    other series. `script.transition_line` survives only as a manual override.
     """
     line = str(get_nested(config, "script", "transition_line", default="") or "").strip()
+    if not line:
+        line = " ".join(str(chapter_line or "").split())
     if not line or not transition_panel:
         return beats
     out: list[ScriptBeat] = []
@@ -1559,8 +1565,10 @@ def lock_transition_line(
         # The model often writes the shift twice, e.g. "Quiet bridges now span the wide
         # river under the distant skyline of Seoul." right before the locked line. Any
         # EARLIER sentence naming the destination is that same restatement.
+        # The place named at the end of the locked line ("...over present-day Seoul.") is
+        # what an earlier restatement would also name.
         destination = line.rsplit(" ", 1)[-1].strip(".,").lower()
-        if destination:
+        if destination and len(destination) > 3:
             sentences = [
                 s for i, s in enumerate(sentences)
                 if i == len(sentences) - 1 or destination not in s.lower()

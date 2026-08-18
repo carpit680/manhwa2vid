@@ -44,10 +44,9 @@ severity=major ONLY for story-breaking errors:
 - an action or line attributed to a person who contradicts that person's description
 - a named person claimed ON-SCREEN when NOBODY matching their description is visible.
   NOT a finding when the beat reports what that person THINKS or SAYS: a manhwa runs
-  inner monologue over whatever art it likes, so a panel showing Kim while Jin-Woo's
-  bubble reads "MY SICK MOTHER'S MEDICAL BILLS" is Jin-Woo's thought, correctly
-  attributed, and the narration is SUPPORTED. Attribution follows the bubble, never
-  who happens to be drawn.
+  inner monologue over whatever art it likes, so a panel drawn on one character while
+  another character's bubble carries first-person thought belongs to whoever SAYS it,
+  and the narration is SUPPORTED. Attribution follows the bubble, never who is drawn.
 - an event, object handoff, or location that does not appear at all
 - a reported line given to the WRONG SPEAKER, or aimed at the WRONG LISTENER —
   read the bubble text in the panels: its tail points at the speaker, a name in

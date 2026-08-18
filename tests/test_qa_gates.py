@@ -311,9 +311,17 @@ def test_grounding_keywords_configurable() -> None:
     try:
         assert set(grounding.GROUNDING_KEYWORDS) == {"frost"}
         assert grounding.narration_grounding_keywords("He shatters the ice wall.") == {"frost"}
+        # Terms come from the project glossary when config says nothing.
+        grounding.configure_grounding_keywords(
+            {}, {"terms": {"Frozen Gate": ["ice gate"], "Mana": []}}
+        )
+        assert set(grounding.GROUNDING_KEYWORDS) == {"frozen_gate", "mana"}
+        assert grounding.GROUNDING_KEYWORDS["frozen_gate"] == ("frozen gate", "ice gate")
     finally:
         grounding.configure_grounding_keywords({})
-        assert "coffee" in grounding.GROUNDING_KEYWORDS
+        # No built-in list: any default would be one series' props. With neither config
+        # nor glossary the pre-filter is empty and grounding rests on the VLM verifier.
+        assert grounding.GROUNDING_KEYWORDS == {}
 
 
 # --- Scene stage: panel_ids clamp + cards-coverage (5-vanished-panels bug) -----------------

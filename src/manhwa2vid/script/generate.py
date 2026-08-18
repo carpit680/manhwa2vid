@@ -651,10 +651,12 @@ def _run_narration_pass(
                     transition_note = (
                         f"\n\nTEMPORAL PLACEMENT: the opening flashforward ENDS at panel {tp}, "
                         f"in BEAT {owner}. Close THAT beat by marking the return to the "
-                        "present as an image change — the gold does it in one line: "
-                        "\"Then the sky clears, over present-day Seoul.\" Beats before it "
-                        "are inside the flashforward and never mention the shift; beats "
-                        "after it are simply in the present and never re-announce it.\n"
+                        "present as an image change: ONE short sentence naming where the "
+                        "story now is, the way a cut does — no announcement, no "
+                        "\"meanwhile\", no explaining that time has moved. Beats before "
+                        "it are inside the flashforward and never mention the shift; "
+                        "beats after it are simply in the present and never re-announce "
+                        "it.\n"
                     )
     except Exception:
         transition_note = ""
@@ -773,7 +775,13 @@ def generate_script(
 
     from manhwa2vid.script.grounding import configure_grounding_keywords
 
-    configure_grounding_keywords(config)
+    glossary: dict = {}
+    if paths["glossary"].exists():
+        try:
+            glossary = json.loads(paths["glossary"].read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            glossary = {}
+    configure_grounding_keywords(config, glossary)
 
     if not paths["scene_enriched_json"].exists() or force:
         run_cast_linking(meta, paths, config, force=force)
@@ -980,17 +988,19 @@ def generate_script(
     beats = strip_repeated_appositives(beats, bible)
     beats = strip_caption_sentences(beats, bible)
     transition_panel = ""
+    transition_line = ""
     try:
         if paths["scene_story_map_json"].exists():
-            transition_panel = str(
-                json.loads(paths["scene_story_map_json"].read_text()).get(
-                    "last_flashforward_panel", ""
-                )
-            ).strip()
+            story_map = json.loads(paths["scene_story_map_json"].read_text())
+            transition_panel = str(story_map.get("last_flashforward_panel", "")).strip()
+            # Written once by the whole-chapter read; locked here so the narration pass
+            # cannot embellish the most audible line in the recap.
+            transition_line = str(story_map.get("return_to_present_line", "")).strip()
     except Exception:
         transition_panel = ""
+        transition_line = ""
     beats = strip_duplicate_transitions(beats, transition_panel)
-    beats = lock_transition_line(beats, transition_panel, config)
+    beats = lock_transition_line(beats, transition_panel, config, transition_line)
     beats = repair_malformed_openings(beats)
     beats = repair_truncated_sentences(beats)
     beats = strip_internal_labels(beats, bible)

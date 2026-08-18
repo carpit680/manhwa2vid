@@ -112,10 +112,10 @@ script:
   narration_chunk_size: 0   # 0 = whole script in ONE call (how the gold script was written);
                             # >0 chunks it, which reintroduces cross-beat repetition
   max_narration_images: 60  # panels attached to the whole-chapter narration call
-  # Series-specific: the approved wording for the return from a cold-open flashforward.
-  # Locked because it is the most audible line in the recap and the model keeps
-  # rewriting it into worse English. Empty disables the lock.
-  transition_line: "Then the sky clears, over present-day Seoul."
+  # Optional manual override for the return-from-flashforward line. Normally left EMPTY:
+  # the whole-chapter read writes `return_to_present_line` per chapter and the polish
+  # locks that, so nothing here is tied to one series. Set only to force exact wording.
+  transition_line: ""
   # Attach each chunk's actual panels to the narration call. The writer used to compose
   # from text cards while the alignment audit judged it against images — an image-blind
   # author checked by a sighted critic. Requires a multimodal script model.

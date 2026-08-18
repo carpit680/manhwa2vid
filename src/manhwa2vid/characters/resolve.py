@@ -8,17 +8,16 @@ from manhwa2vid.characters.bible import is_junk_alias, normalize_name, slugify_c
 from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
 
 _STOPWORDS = frozenset({"a", "an", "the", "guy", "girl", "man", "woman", "person", "with", "in", "on", "and"})
-_MC_STRONG_SIGNALS = (
-    "green backpack",
-    "green hood",
-    "man with green backpack",
-    "guy in green backpack",
-    "guy with green backpack",
-    "jin-woo",
-    "jin woo",
-    "sung jin",
-    "sung jin-woo",
-    "e-rank hunter",
+# Words that identify nobody: function words plus the generic person and appearance
+# vocabulary every character description shares. A signal built from these would promote
+# every "man with black hair" to protagonist, the failure this gate exists to prevent.
+_UNINFORMATIVE = frozenset(
+    """
+    a an the and or of with in on at to for from his her their its
+    man woman guy girl person boy youth kid hunter figure people someone character
+    black white grey gray brown blonde blond short long tall young old big small
+    hair eyes face head body wearing worn dark light messy straight curly
+    """.split()
 )
 
 
@@ -75,9 +74,88 @@ def _descriptor_match_score(descriptor: str, profile: CharacterProfile) -> float
     return best
 
 
-def is_mc_visual_signal(name: str, descriptor: str, speaker: str = "") -> bool:
+def mc_signals(bible: SeriesBible) -> tuple[str, ...]:
+    """Phrases that identify the protagonist strongly enough to promote a reference.
+
+    Derived from the protagonist's own bible entry rather than a hardcoded list, so this
+    works for any series. Those fields originate in the per-project glossary.json, which
+    is where a reader records "this is what he is called".
+
+    Two kinds of signal, because they come from different places:
+      - NAME signals: the canonical name and aliases, plus their individual tokens. A name
+        is identifying on its own.
+      - VISUAL signals: 2-3 word n-grams from descriptors and the visual profile, kept
+        only when EVERY word is distinctive. "green backpack" survives; "messy black
+        hair" does not, because a descriptor built from generic words describes half a
+        cast and promoting it to protagonist is the exact bug this gate exists to stop.
+
+    Single visual tokens are deliberately excluded: "green" or "hoodie" alone match far
+    too much. An earlier draft admitted them along with stopwords, which made "with" a
+    signal and matched literally every reference.
+    """
+    profile = bible.characters.get(bible.protagonist_id or "")
+    if profile is None:
+        return ()
+
+    def _words(text: str) -> list[str]:
+        return [w for w in re.split(r"[^a-z0-9'-]+", normalize_name(str(text or ""))) if w]
+
+    signals: set[str] = set()
+
+    visual_sources = list(profile.descriptors)
+
+    for item in (profile.canonical_name, *profile.aliases):
+        words = _words(item)
+        if not words or all(w in _UNINFORMATIVE for w in words):
+            continue
+        # An alias is supposed to be a NAME. Bibles drift, and this protagonist's alias
+        # list had accumulated whole descriptor sentences; taking their tokens made
+        # "green" a signal on its own, which then matched a different character's green
+        # jacket. Anything longer than a name goes through the visual path instead, where
+        # every word of an n-gram must be distinctive.
+        if len(words) > 3:
+            visual_sources.append(item)
+            continue
+        signals.add(" ".join(words))
+        for word in words:
+            if len(word) > 2 and word not in _UNINFORMATIVE:
+                signals.add(word)
+
+    if profile.visual is not None:
+        visual_sources.extend(
+            [profile.visual.hair or "", profile.visual.outfit or "", *(profile.visual.accessories or [])]
+        )
+    for item in visual_sources:
+        words = _words(item)
+        for size in (2, 3):
+            for i in range(len(words) - size + 1):
+                gram = words[i : i + size]
+                if any(w in _UNINFORMATIVE for w in gram):
+                    continue
+                signals.add(" ".join(gram))
+
+    # Longest first: a specific phrase should be tested before a token inside it.
+    return tuple(sorted(signals, key=lambda x: (-len(x.split()), -len(x), x)))
+
+
+def is_mc_visual_signal(
+    name: str,
+    descriptor: str,
+    speaker: str = "",
+    bible: SeriesBible | None = None,
+) -> bool:
+    """True when the reference carries a phrase unique to the protagonist.
+
+    `bible` is required to mean anything; without it there is nothing to compare against
+    and the answer is False, which is the safe direction (no promotion).
+    """
+    if bible is None:
+        return False
+    signals = mc_signals(bible)
+    if not signals:
+        return False
     blob = normalize_name(f"{name} {descriptor} {speaker}")
-    return any(signal in blob for signal in _MC_STRONG_SIGNALS)
+    return any(signal in blob for signal in signals)
 
 
 def score_character_match(
@@ -126,7 +204,7 @@ def resolve_character_ref(
             continue
         score = score_character_match(name, descriptor, profile)
         if profile.id == protagonist_id and protagonist_profile:
-            if not is_mc_visual_signal(name, descriptor, speaker) and _name_match_score(name, protagonist_profile) < 0.85:
+            if not is_mc_visual_signal(name, descriptor, speaker, bible) and _name_match_score(name, protagonist_profile) < 0.85:
                 if descriptor.strip() and score < 0.9:
                     continue
         if score >= min_score:
