@@ -378,7 +378,7 @@ def strip_repeated_appositives(
             continue
         patterns.append(
             (name, re.compile(
-                rf"(\b{re.escape(name)}),\s+(?:a|an|the)\s+(?:[\w''-]+\s+){{0,16}}[\w''-]+,",
+                rf"(\b{re.escape(name)}),\s+(?:a|an|the)\s+(?:[\w''-]+\s+){{0,16}}[\w''-]+(,|(?=\.))",
                 re.I,
             ))
         )
@@ -917,7 +917,36 @@ def fix_pronoun_case(text: str, bible: SeriesBible) -> str:
             return f"{m.group(1)}{m.group(2)}{objective}"
         return m.group(0)
 
-    return pattern.sub(_sub, text)
+    text = pattern.sub(_sub, text)
+    return _fix_object_pronoun_subjects(text)
+
+
+# The other direction, which nothing caught: an OBJECT pronoun sitting in SUBJECT
+# position. Observed: "warns Bak to stop before him hears". A subordinating conjunction
+# opens a clause, so the pronoun immediately after it is a subject; if a finite verb
+# follows, the objective form is simply wrong. Restricted to that frame because the same
+# words are prepositions elsewhere ("after him", "before her") where the object IS
+# correct — hence the required following verb.
+_SUBORDINATORS = r"before|after|while|when|until|since|because|if|though|although|unless|whether|as"
+_OBJECT_AS_SUBJECT_RE = re.compile(
+    rf"\b({_SUBORDINATORS})\s+(him|her|them)\s+([\w'’-]+)",
+    re.I,
+)
+_SUBJECT_FORM = {"him": "he", "her": "she", "them": "they"}
+
+
+def _fix_object_pronoun_subjects(text: str) -> str:
+    def _sub(m: re.Match) -> str:
+        following = m.group(3)
+        if not _looks_like_verb(following):
+            return m.group(0)
+        # "her" is also a possessive determiner ("before her hands shake"), where the
+        # objective form is correct and the next word only looks like a verb.
+        if m.group(2).lower() == "her":
+            return m.group(0)
+        return f"{m.group(1)} {_SUBJECT_FORM[m.group(2).lower()]} {following}"
+
+    return _OBJECT_AS_SUBJECT_RE.sub(_sub, text)
 
 
 def _short_name_form(name: str) -> str:
@@ -1549,7 +1578,10 @@ _ANON_APPEARANCE_RE = re.compile(
     rf"(?:with|in|wearing)\s+"
     rf"(?:a|an|the)?\s*"
     rf"(?:[\w'’-]+\s+){{0,3}}"
-    rf"(?:{_GARMENT})\b",
+    rf"(?:{_GARMENT})\b"
+    # ...plus any further descriptors chained onto it ("and a goatee", "and grey hair"),
+    # or the strip leaves a dangling conjunction behind.
+    rf"(?:\s*,?\s*and\s+(?:a|an|the)?\s*(?:[\w'’-]+\s+){{0,3}}(?:{_GARMENT})\b)*",
     re.I,
 )
 

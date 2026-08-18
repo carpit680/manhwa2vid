@@ -880,3 +880,53 @@ def test_lock_transition_line_removes_a_second_rewind_sentence():
     assert lock_transition_line(beats, "p1", config)[0].narration == (
         "A blinding flash erupts. Then the sky clears, over present-day Seoul."
     )
+
+
+def test_strip_appearance_descriptors_consumes_chained_descriptors():
+    """Stripping only the first garment phrase left a dangling conjunction: "a supporting
+    hunter with a goatee and grey hair" -> "a supporting hunter and grey hair"."""
+    from manhwa2vid.script.lint import strip_appearance_descriptors
+
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p"], narration="Kim Sangshik, a supporting hunter with a goatee and grey hair, waits.")]
+    assert strip_appearance_descriptors(beats)[0].narration == "Kim Sangshik, a supporting hunter, waits."
+
+
+def test_strip_repeated_appositives_catches_sentence_final_intros():
+    """An appositive ending a SENTENCE has no trailing comma, so a second introduction
+    survived: "Bak waves to Kim Sangshik, a middle-aged hunter."."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import strip_repeated_appositives
+
+    bible = SeriesBible(
+        series_slug="s",
+        title="S",
+        protagonist_id="char_mc",
+        characters={"char_kim": CharacterProfile(id="char_kim", canonical_name="Kim Sangshik", tier=CharacterTier.MAIN)},
+    )
+    beats = [
+        ScriptBeat(beat_id=4, panel_ids=["a"], narration="Kim Sangshik, a supporting hunter, waits near a food truck."),
+        ScriptBeat(beat_id=6, panel_ids=["b"], narration="Bak waves enthusiastically to Kim Sangshik, a middle-aged hunter."),
+    ]
+    out = strip_repeated_appositives(beats, bible)
+    assert out[1].narration == "Bak waves enthusiastically to Kim Sangshik."
+
+
+def test_fix_pronoun_case_repairs_object_pronoun_in_subject_position():
+    """Observed: "warns Bak to stop before him hears"."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import fix_pronoun_case
+
+    bible = SeriesBible(
+        series_slug="s",
+        title="S",
+        protagonist_id="char_mc",
+        characters={"char_mc": CharacterProfile(id="char_mc", canonical_name="Sung Jin-Woo", tier=CharacterTier.MAIN)},
+    )
+    assert fix_pronoun_case("Kim warns Bak to stop before him hears.", bible) == (
+        "Kim warns Bak to stop before he hears."
+    )
+    # The same words are prepositions elsewhere, where the object form is correct.
+    assert fix_pronoun_case("He walks away after her.", bible) == "He walks away after her."
+    assert fix_pronoun_case("Jin-Woo leaves before him.", bible) == "Jin-Woo leaves before him."
+    # "her" doubles as a possessive determiner, so it is left alone entirely.
+    assert fix_pronoun_case("He grins while her hands shake.", bible) == "He grins while her hands shake."
