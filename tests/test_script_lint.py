@@ -930,3 +930,44 @@ def test_fix_pronoun_case_repairs_object_pronoun_in_subject_position():
     assert fix_pronoun_case("Jin-Woo leaves before him.", bible) == "Jin-Woo leaves before him."
     # "her" doubles as a possessive determiner, so it is left alone entirely.
     assert fix_pronoun_case("He grins while her hands shake.", bible) == "He grins while her hands shake."
+
+
+def test_fix_pronoun_case_handles_base_form_verbs():
+    """"the youth joined right after him quit" — a base-form verb has no suffix for
+    _looks_like_verb to see, so the subject-position repair missed it."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import fix_pronoun_case
+
+    bible = SeriesBible(
+        series_slug="s",
+        title="S",
+        protagonist_id="char_mc",
+        characters={"char_mc": CharacterProfile(id="char_mc", canonical_name="Sung Jin-Woo", tier=CharacterTier.MAIN)},
+    )
+    assert fix_pronoun_case("He tells Bak the youth joined right after him quit.", bible) == (
+        "He tells Bak the youth joined right after he quit."
+    )
+    assert fix_pronoun_case("Jin-Woo leaves before him.", bible) == "Jin-Woo leaves before him."
+
+
+def test_strip_appearance_descriptors_covers_definite_phrases():
+    """"Song Chi-yul, the veteran party leader with short gray hair" kept its hair: only
+    indefinite phrases matched, and "leader" was missing from the person nouns."""
+    from manhwa2vid.script.lint import strip_appearance_descriptors
+
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p"], narration="Song Chi-yul, the veteran party leader with short gray hair, calls for attention."),
+        ScriptBeat(beat_id=2, panel_ids=["q"], narration="Jin-Woo asks the coffee vendor in a blue cap for a warm drink."),
+    ]
+    out = strip_appearance_descriptors(beats)
+    assert out[0].narration == "Song Chi-yul, the veteran party leader, calls for attention."
+    assert out[1].narration == "Jin-Woo asks the coffee vendor for a warm drink."
+
+
+def test_strip_appearance_descriptors_keeps_role_clauses():
+    """Rule 4's role clause is the target format, not collateral damage."""
+    from manhwa2vid.script.lint import strip_appearance_descriptors
+
+    text = "Lee Joo-hee, the party's rookie healer, rushes over."
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p"], narration=text)]
+    assert strip_appearance_descriptors(beats)[0].narration == text

@@ -933,12 +933,22 @@ _OBJECT_AS_SUBJECT_RE = re.compile(
     re.I,
 )
 _SUBJECT_FORM = {"him": "he", "her": "she", "them": "they"}
+# Base-form verbs carry no suffix, so _looks_like_verb cannot see them and
+# "after him quit" survived into a shipped draft. Narration verbs only — kept short and
+# explicit rather than reaching for a part-of-speech tagger.
+_BASE_VERBS = frozenset(
+    """
+    quit leave enter arrive speak hear see go come run walk talk know say tell ask
+    answer reply shout call wait stand sit fall die win lose fight join return begin
+    """.split()
+)
 
 
 def _fix_object_pronoun_subjects(text: str) -> str:
     def _sub(m: re.Match) -> str:
         following = m.group(3)
-        if not _looks_like_verb(following):
+        bare = following.strip(".,!?;:'\u2019\"").lower()
+        if not _looks_like_verb(following) and bare not in _BASE_VERBS:
             return m.group(0)
         # "her" is also a possessive determiner ("before her hands shake"), where the
         # objective form is correct and the next word only looks like a verb.
@@ -1565,7 +1575,10 @@ def lock_transition_line(
 # rule 5 bans scenery people; both keep being violated for extras specifically, because
 # the evidence names them that way ("woman with fur collar -> Song Chi-yul: ...") and the
 # writer passes the label straight through.
-_ANON_NOUN = r"hunter|man|woman|guy|person|figure|worker|vendor|bystander|onlooker|passerby|newcomer"
+_ANON_NOUN = (
+    r"hunter|man|woman|guy|person|figure|worker|vendor|bystander|onlooker|passerby|"
+    r"newcomer|leader|healer|veteran|fighter|mage|kid|youth|boy|girl|stranger"
+)
 _GARMENT = (
     r"collar|jacket|cap|hat|coat|shirt|hoodie|glasses|hair|beard|goatee|backpack|"
     r"uniform|vest|scarf|boots|gloves|mask"
@@ -1573,7 +1586,7 @@ _GARMENT = (
 _ANON_APPEARANCE_RE = re.compile(
     # "a/an/another/one" + optional adjectives + optional noun, then a garment phrase.
     # The noun is optional so "another in a green jacket" collapses too.
-    rf"\b(a|an|another|one)\s+"
+    rf"\b(a|an|the|another|one)\s+"
     rf"((?:[\w'’-]+\s+){{0,2}}(?:{_ANON_NOUN})\s+|)"
     rf"(?:with|in|wearing)\s+"
     rf"(?:a|an|the)?\s*"
