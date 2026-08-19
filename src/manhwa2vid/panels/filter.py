@@ -98,7 +98,15 @@ def is_blank_panel(panel: Panel, config: dict[str, Any]) -> bool:
         return False
     max_ink = float(get_nested(config, "panels", "blank_max_ink_ratio", default=0.30))
     max_dark = float(get_nested(config, "panels", "blank_max_dark_ratio", default=0.10))
-    return panel.ink_ratio < max_ink and panel.dark_ratio < max_dark
+    if panel.ink_ratio < max_ink and panel.dark_ratio < max_dark:
+        return True
+    # The symmetric case: a solid BLACK transition sliver. Dark-page titles separate
+    # panels with black bands, and by the ink definition (gray < 245) solid black scores
+    # ink = 1.0 — the opposite of what "blank" was tuned for. Pure black is ink ≈ 1.0 AND
+    # dark ≈ 1.0 simultaneously; a black CAPTION panel keeps white text pixels, which pull
+    # ink measurably below 1.0, so the thresholds sit deliberately high — wrongly keeping
+    # a blank sliver costs tokens, wrongly dropping a caption panel loses story.
+    return panel.ink_ratio > 0.995 and panel.dark_ratio > 0.995
 
 
 def build_exclusion_map(

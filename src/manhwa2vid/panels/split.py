@@ -33,10 +33,31 @@ def _load_manifest(pages_dir: Path) -> list[PageInfo]:
 
 
 def _find_gutter_rows(gray: np.ndarray, threshold_ratio: float, min_gap: int) -> list[int]:
-    """Return y-coordinates of horizontal gutters (low-ink rows)."""
+    """Return y-coordinates of horizontal gutters.
+
+    A gutter is a UNIFORM band between panels — not necessarily a white one. The first
+    version defined gutters as low-ink (near-white) rows, which worked until a title
+    drew its pages on black: panels separated by black gutters scored as maximum ink,
+    no gutter was ever found, and a 10,800px page shipped as a single scroll strip.
+
+    A row is a gutter candidate when it is uniform two ways:
+      - internally: low variance across the row (one flat color, any color), and
+      - vertically: its mean barely differs from its neighbor row's.
+    The ink-based test is kept as the light-page fast path; the variance test extends
+    the same idea to dark and colored gutters without any per-title configuration.
+    """
     row_density = 1.0 - (gray.mean(axis=1) / 255.0)
     threshold = row_density.max() * (1.0 - threshold_ratio)
     low = row_density < max(threshold, 0.02)
+
+    # Uniformity path: flat rows (std within the row ~0) whose brightness also barely
+    # changes row-to-row. Art regions — even dark ones — have texture and edges; a
+    # printed gutter has neither.
+    row_std = gray.std(axis=1)
+    row_mean = gray.mean(axis=1)
+    step = np.abs(np.diff(row_mean, prepend=row_mean[:1]))
+    uniform = (row_std < 6.0) & (step < 2.0)
+    low = low | uniform
 
     gutters: list[int] = []
     in_gap = False

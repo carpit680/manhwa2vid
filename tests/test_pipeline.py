@@ -149,3 +149,24 @@ def test_split_thresholds_scale_with_page_width():
     assert _px(config, 1080, "panels", "min_panel_height", default=120) == 120
     assert _px(config, 800, "panels", "min_panel_height", default=120) == 89
     assert _px(config, 2160, "panels", "min_panel_height", default=120) == 240
+
+
+def test_blank_panel_detection_is_color_symmetric():
+    """A solid BLACK transition sliver is as blank as a white one. Observed on a
+    dark-page title: black inter-panel bands scored ink=1.0 and sailed through the
+    near-white blank filter into the story surface."""
+    from manhwa2vid.models import Panel, PanelBBox
+    from manhwa2vid.panels.filter import is_blank_panel
+
+    def _p(ink, dark):
+        return Panel(
+            id="p0001_01", page_num=1,
+            bbox=PanelBBox(x=0, y=0, width=800, height=200),
+            image_path="panels/p0001_01.png",
+            ink_ratio=ink, dark_ratio=dark,
+        )
+
+    assert is_blank_panel(_p(0.01, 0.0), {})          # white sliver
+    assert is_blank_panel(_p(1.0, 1.0), {})           # black sliver
+    assert not is_blank_panel(_p(0.97, 0.95), {})     # black caption panel (white text)
+    assert not is_blank_panel(_p(0.5, 0.3), {})       # ordinary art
