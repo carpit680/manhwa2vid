@@ -1,5 +1,13 @@
 # Script quality plan — closing the gap to the reference
 
+> **Superseded in part (2026-08-18).** Current architecture lives in
+> [`architecture.html`](architecture.html) — this file is kept as the record of what was
+> diagnosed and why. One prescription here has since been **reversed**: Fix A1 called for
+> chunked narration with carried state, and chunking turned out to CAUSE the cross-beat
+> repetition it was meant to contain, because no single call ever saw the whole chapter.
+> Narration is now one call for the entire script (`script.narration_chunk_size: 0`). The
+> beat-conservation gate from Fix A2 remains, and is what makes the single call safe.
+>
 > **Status (2026-08-15): implemented.** All five root-cause fixes and their gates are live;
 > `tests/test_qa_gates.py` holds one regression fixture per critique bug (73 tests green).
 > Two deviations from the plan as written: character intros key on bible tier
