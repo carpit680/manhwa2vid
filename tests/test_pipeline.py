@@ -120,3 +120,32 @@ def test_timeline_alignment(sample_project: Path) -> None:
     assert timeline.total_duration == pytest.approx(audio_duration(wav), abs=0.05)
     assert audio_duration(wav) == pytest.approx(2.0, rel=0.1)
     assert abs(sum(e.duration for e in timeline.entries) - timeline.total_duration) < 1e-6
+
+
+def test_normalize_image_never_upscales(tmp_path):
+    """page_width is a ceiling. An 800px-wide source must pass through at native size —
+    upscaling invents no detail and blurs exactly the text the vision pass needs."""
+    from PIL import Image
+
+    from manhwa2vid.ingest.images import normalize_image
+
+    src = tmp_path / "src.jpg"
+    Image.new("RGB", (800, 4000), "white").save(src)
+    w, h = normalize_image(src, tmp_path / "out.png", target_width=1080)
+    assert (w, h) == (800, 4000)
+
+    wide = tmp_path / "wide.jpg"
+    Image.new("RGB", (1600, 4000), "white").save(wide)
+    w, h = normalize_image(wide, tmp_path / "out2.png", target_width=1080)
+    assert w == 1080 and h == 2700
+
+
+def test_split_thresholds_scale_with_page_width():
+    """min_panel_height etc. are calibrated at the config ceiling; on a narrower native
+    page the same GEOMETRY must apply, not the same pixel count."""
+    from manhwa2vid.panels.split import _px
+
+    config = {"ingest": {"page_width": 1080}, "panels": {"min_panel_height": 120}}
+    assert _px(config, 1080, "panels", "min_panel_height", default=120) == 120
+    assert _px(config, 800, "panels", "min_panel_height", default=120) == 89
+    assert _px(config, 2160, "panels", "min_panel_height", default=120) == 240

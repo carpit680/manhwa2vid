@@ -126,10 +126,25 @@ def _bbox_has_content(img: np.ndarray, y0: int, height: int, min_ink_ratio: floa
     return ink_ratio >= min_ink_ratio
 
 
+def _px(config: dict[str, Any], page_width: int, *keys: str, default: int) -> int:
+    """A pixel threshold from config, scaled to this page's actual width.
+
+    Threshold values in config are calibrated at `ingest.page_width` (the ceiling every
+    wider source is downscaled to). Sources narrower than the ceiling now pass through at
+    native resolution, so a fixed 120px minimum that meant 11% of a 1080-wide page would
+    silently mean 15% of an 800-wide one — same config, different split behavior per
+    title. Scaling by actual/nominal keeps the GEOMETRY of the rule constant across
+    resolutions. Nothing here is per-series: the nominal width is the config ceiling.
+    """
+    nominal = max(1, int(get_nested(config, "ingest", "page_width", default=1080)))
+    value = int(get_nested(config, *keys, default=default))
+    return max(1, round(value * page_width / nominal))
+
+
 def _gutter_bboxes(img: np.ndarray, config: dict[str, Any]) -> list[tuple[int, int]]:
-    min_height = int(get_nested(config, "panels", "min_panel_height", default=120))
-    threshold = float(get_nested(config, "panels", "whitespace_threshold", default=0.92))
     h, _w = img.shape[:2]
+    min_height = _px(config, _w, "panels", "min_panel_height", default=120)
+    threshold = float(get_nested(config, "panels", "whitespace_threshold", default=0.92))
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gutters = _find_gutter_rows(gray, threshold, min_gap=8)
     split_points = sorted(set([0] + gutters + [h]))
@@ -149,15 +164,14 @@ def _split_page_image(
     project_root: Path,
     config: dict[str, Any],
 ) -> PageSplitResult:
-    min_height = int(get_nested(config, "panels", "min_panel_height", default=120))
-    chunk_h = int(get_nested(config, "panels", "fallback_chunk_height", default=800))
-    overlap = int(get_nested(config, "panels", "fallback_overlap", default=80))
-
     img = cv2.imread(str(image_path))
     if img is None:
         raise RuntimeError(f"Failed to read page image: {image_path}")
 
     h, w = img.shape[:2]
+    min_height = _px(config, w, "panels", "min_panel_height", default=120)
+    chunk_h = _px(config, w, "panels", "fallback_chunk_height", default=800)
+    overlap = _px(config, w, "panels", "fallback_overlap", default=80)
     bboxes = _gutter_bboxes(img, config)
     method = "gutter"
     confidence = 0.85 if len(bboxes) >= 2 else 0.5

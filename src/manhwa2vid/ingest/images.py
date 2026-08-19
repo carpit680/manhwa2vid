@@ -93,10 +93,20 @@ def collect_source_images(root: Path, chapters: str) -> list[tuple[int, int, Pat
 
 
 def normalize_image(src: Path, dest: Path, target_width: int) -> tuple[int, int]:
+    """Normalize one source image to a page PNG.
+
+    `target_width` is a CEILING, not a required width. Sources come in whatever
+    resolution the scanlation shipped (observed: 800px and 1080px wide for different
+    titles), and upscaling a narrow source invents no detail — it just blurs the text
+    the OCR/vision pass most needs, while costing more pixels everywhere downstream.
+    Wider-than-target sources are downscaled; narrower ones pass through at native size.
+    Nothing downstream assumes a constant page width: panels inherit page geometry and
+    the renderer scales every panel to the output frame independently.
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
     with Image.open(src) as img:
         rgb = img.convert("RGB")
-        if rgb.width != target_width:
+        if rgb.width > target_width:
             scale = target_width / rgb.width
             new_height = max(1, int(rgb.height * scale))
             rgb = rgb.resize((target_width, new_height), Image.Resampling.LANCZOS)
