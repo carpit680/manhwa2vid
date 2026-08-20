@@ -979,3 +979,40 @@ def test_strip_appearance_descriptors_keeps_role_clauses():
     text = "Lee Joo-hee, the party's rookie healer, rushes over."
     beats = [ScriptBeat(beat_id=1, panel_ids=["p"], narration=text)]
     assert strip_appearance_descriptors(beats)[0].narration == text
+
+
+def test_trim_overlong_trims_the_closer_from_the_front():
+    """The closer's final sentences are the chapter's ending; tail-trimming once deleted
+    a seal-reveal the writer had correctly landed."""
+    from manhwa2vid.script.lint import trim_overlong_beats
+
+    long_tail = (
+        "He sits down before the statues. He pours four cups and toasts his friends. "
+        "He remembers the years they fought together side by side in the cold. "
+        "He brushes the dust from the ice with one hand. "
+        "A system message says the seal on his friends can be removed."
+    )
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p1"], narration="An opening beat."),
+        ScriptBeat(beat_id=2, panel_ids=["p2"], narration=long_tail),
+    ]
+    config = {"script": {"words_per_panel_target": 14, "max_beat_words": 30}}
+    out = trim_overlong_beats(beats, config)
+    assert "seal" in out[1].narration  # the ending survives
+    assert "sits down" not in out[1].narration  # the lead-in is what got cut
+
+
+def test_lint_closer_reveal_flags_a_missing_ending():
+    from manhwa2vid.models import SceneCard
+    from manhwa2vid.script.lint import lint_closer_reveal
+
+    cards = [
+        SceneCard(panel_ids=["p0001_01"], source_text='A: "HELLO."', action=""),
+        SceneCard(panel_ids=["p0024_01"], source_text='sys: "[SEAL CAN BE REMOVED.]"', action=""),
+    ]
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p0024_01"], narration="He drinks quietly with his frozen friends.")]
+    report = lint_closer_reveal(beats, cards)
+    assert 1 in report and report[1][0].startswith("dropped_reveal:")
+
+    ok = [ScriptBeat(beat_id=1, panel_ids=["p0024_01"], narration="A message says the seal can be removed.")]
+    assert lint_closer_reveal(ok, cards) == {}

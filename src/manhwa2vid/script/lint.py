@@ -643,8 +643,13 @@ def trim_overlong_beats(
             out.append(beat)
             continue
         kept = list(sentences)
+        is_last = beat.beat_id == beats[-1].beat_id
         while len(kept) > 2 and len(" ".join(kept).split()) > limit:
-            kept.pop()
+            # The closer's FINAL sentences are the chapter's ending — the reveal the
+            # whole chapter builds to sits there by construction. Trimming the closer
+            # from the tail once deleted a seal-reveal the writer had correctly landed;
+            # for the last beat the padding is the lead-in, so cut from the front.
+            kept.pop(0) if is_last else kept.pop()
         out.append(beat.model_copy(update={"narration": " ".join(kept).strip()}))
     return out
 
@@ -1211,6 +1216,8 @@ def lint_beats(
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_dropped_speakers(beats, scene_cards, bible).items():
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
+    for beat_id, issues in lint_closer_reveal(beats, scene_cards).items():
+        report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_pronoun_monotony(beats).items():
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_overlong_beats(beats, config).items():
@@ -1249,6 +1256,14 @@ def _humanize_issues(issues: list[str]) -> str:
     Chi-yul" has to guess what is being asked of it."""
     out: list[str] = []
     for issue in issues:
+        if issue.startswith("dropped_reveal:"):
+            evidence = issue.split(":", 1)[1]
+            out.append(
+                "this beat is the chapter's ENDING and its final panels read: "
+                f"\"{evidence}\" — the beat must END by landing that content in reported "
+                "form (never verbatim); everything else in the beat is secondary"
+            )
+            continue
         if issue.startswith("dropped_speaker:"):
             name = issue.split(":", 1)[1]
             out.append(
@@ -1682,3 +1697,45 @@ def dedupe_cross_beat_sentences(beats: list[ScriptBeat], lookback: int = 2) -> l
         text = " ".join(kept).strip()
         out.append(beat.model_copy(update={"narration": text}) if text and text != beat.narration else beat)
     return out
+
+
+def lint_closer_reveal(
+    beats: list[ScriptBeat],
+    scene_cards: list[SceneCard] | None,
+) -> dict[int, list[str]]:
+    """The final story panels are the chapter's chosen ending; the closer must say it.
+
+    Positional and series-agnostic: whatever the last panels' on-panel text contains is
+    what the chapter ends on. Flagged as `dropped_reveal:<evidence>` so the rewrite is
+    handed the exact content to land rather than a code to guess at.
+    """
+    if not beats or not scene_cards:
+        return {}
+    by_panel: dict[str, str] = {}
+    for card in scene_cards:
+        for pid in card.panel_ids:
+            by_panel[pid] = card.source_text or ""
+    ordered = sorted(by_panel, key=lambda p: p)
+    tail_text = " ".join(by_panel[p] for p in ordered[-3:]).strip()
+    if not tail_text:
+        return {}
+    terms = {
+        w for w in re.findall(r"[a-z][a-z'-]{3,}", tail_text.lower())
+        if w not in _STOPWORDS_SMALL
+    }
+    if not terms:
+        return {}
+    closer = beats[-1]
+    low = closer.narration.lower()
+    if any(t in low for t in terms):
+        return {}
+    return {closer.beat_id: [f"dropped_reveal:{' '.join(tail_text.split())[:220]}"]}
+
+
+_STOPWORDS_SMALL = frozenset(
+    """
+    the a an and or but so of to in on at for with from by as is are was were be have
+    has had this that it its his her their you your they them he she we not no what
+    when where who how why there here then than now all any some very
+    """.split()
+)

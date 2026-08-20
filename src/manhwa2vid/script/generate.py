@@ -337,14 +337,14 @@ _REVEAL_STOP = frozenset(
 )
 
 
-def _closing_panel_terms(cards: list[SceneCard]) -> set[str]:
+def _closing_panel_terms(cards: list[SceneCard], tail: int = 6) -> set[str]:
     """Distinctive content words from the last few story panels' on-panel text."""
     by_panel: dict[str, str] = {}
     for card in cards:
         for pid in card.panel_ids:
             by_panel[pid] = card.source_text or ""
     ordered = sorted(by_panel, key=_panel_sort_key)
-    text = " ".join(by_panel[pid] for pid in ordered[-6:]).lower()
+    text = " ".join(by_panel[pid] for pid in ordered[-tail:]).lower()
     words = re.findall(r"[a-z][a-z'-]{3,}", text)
     return {w for w in words if w not in _REVEAL_STOP}
 
@@ -974,8 +974,8 @@ def generate_script(
     closer = next((b for b in outline_beats if b.is_closer), None)
     # The chapter's final panels are its chosen ending; their content must reach the
     # last beats. Positional, not series-specific — see grounding.inject_closer_evidence.
-    tail_terms = _closing_panel_terms(cards)
-    late_text = " ".join(b.narration.lower() for b in beats[-2:]) if beats else ""
+    tail_terms = _closing_panel_terms(cards, tail=3)
+    late_text = beats[-1].narration.lower() if beats else ""
     covered = [t for t in tail_terms if t in late_text]
     report.add(
         "reveal-coverage",
