@@ -1016,3 +1016,36 @@ def test_lint_closer_reveal_flags_a_missing_ending():
 
     ok = [ScriptBeat(beat_id=1, panel_ids=["p0024_01"], narration="A message says the seal can be removed.")]
     assert lint_closer_reveal(ok, cards) == {}
+
+
+def test_trailing_closer_is_flagged_and_stripped():
+    """Observed SL closer: '...remains to be seen.' The closer is the one beat a viewer
+    hears to the end, and rule 10's 'no trailing off' keeps being declined."""
+    from manhwa2vid.script.lint import lint_trailing_closer, strip_trailing_closer_sentence
+
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p1"], narration="He steps into the gate."),
+        ScriptBeat(
+            beat_id=2, panel_ids=["p2"],
+            narration="He takes a deep breath and steps into the swirling light. "
+                      "Whether he will clear the raid without injury remains to be seen.",
+        ),
+    ]
+    assert lint_trailing_closer(beats) == {2: ["trailing_closer"]}
+    out = strip_trailing_closer_sentence(beats)
+    assert out[1].narration == "He takes a deep breath and steps into the swirling light."
+    assert lint_trailing_closer(out) == {}
+
+
+def test_trailing_closer_never_empties_a_one_sentence_beat():
+    from manhwa2vid.script.lint import strip_trailing_closer_sentence
+
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p1"], narration="Only time will tell.")]
+    assert strip_trailing_closer_sentence(beats)[0].narration == "Only time will tell."
+
+
+def test_strong_closer_is_untouched():
+    from manhwa2vid.script.lint import lint_trailing_closer
+
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p1"], narration="Hunting is a job where your life is on the line, and today is a work day.")]
+    assert lint_trailing_closer(beats) == {}

@@ -1087,6 +1087,7 @@ def generate_script(
         lock_transition_line,
         strip_appearance_descriptors,
         dedupe_cross_beat_sentences,
+        strip_trailing_closer_sentence,
     )
 
     beats = strip_repeated_appositives(beats, bible)
@@ -1112,6 +1113,7 @@ def generate_script(
     beats = dedupe_intra_beat_sentences(beats)
     beats = dedupe_cross_beat_sentences(beats)
     beats = trim_overlong_beats(beats, config)
+    beats = strip_trailing_closer_sentence(beats)
     beats = enforce_mc_name_budget(beats, bible, config)
 
     from manhwa2vid.script.lint import lint_malformed_opening

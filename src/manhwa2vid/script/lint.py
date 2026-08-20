@@ -1218,6 +1218,8 @@ def lint_beats(
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_closer_reveal(beats, scene_cards).items():
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
+    for beat_id, issues in lint_trailing_closer(beats).items():
+        report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_pronoun_monotony(beats).items():
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_overlong_beats(beats, config).items():
@@ -1256,6 +1258,12 @@ def _humanize_issues(issues: list[str]) -> str:
     Chi-yul" has to guess what is being asked of it."""
     out: list[str] = []
     for issue in issues:
+        if issue == "trailing_closer":
+            out.append(
+                "this beat ENDS the script and currently trails off on a hedge — end on a "
+                "concrete forward hook drawn from the beat's own evidence instead"
+            )
+            continue
         if issue.startswith("dropped_reveal:"):
             evidence = issue.split(":", 1)[1]
             out.append(
@@ -1739,3 +1747,48 @@ _STOPWORDS_SMALL = frozenset(
     when where who how why there here then than now all any some very
     """.split()
 )
+
+
+# Constructions that END a script on a shrug. The closer is the one beat a viewer is
+# guaranteed to hear to the end, and the prompt's "no trailing off" instruction has been
+# declined repeatedly ("...remains to be seen", "...only time will tell"). Generic
+# English hedging shapes, not a per-series list.
+_TRAILING_CLOSER_RE = re.compile(
+    r"\b(?:remains? to be seen|only time will tell|time will tell|"
+    r"what (?:happens|comes) next|remains? (?:unclear|uncertain|unknown)|"
+    r"(?:he|she|they) (?:can )?only hopes?|the future (?:is|remains)|"
+    r"whether .{0,60} remains?)\b",
+    re.I,
+)
+
+
+def lint_trailing_closer(beats: list[ScriptBeat]) -> dict[int, list[str]]:
+    """Flag a closer that ends on a hedge instead of a concrete forward hook."""
+    if not beats:
+        return {}
+    closer = beats[-1]
+    sentences = [s for s in _SENTENCE_SPLIT_RE.split(closer.narration.strip()) if s.strip()]
+    if not sentences:
+        return {}
+    if _TRAILING_CLOSER_RE.search(sentences[-1]):
+        return {closer.beat_id: ["trailing_closer"]}
+    return {}
+
+
+def strip_trailing_closer_sentence(beats: list[ScriptBeat]) -> list[ScriptBeat]:
+    """Deterministic backstop: drop a closing hedge sentence outright.
+
+    A hedge adds no information — the beat's remaining sentences already carry the
+    chapter's last events — so removing it strictly improves the ending. Never empties a
+    beat: a one-sentence closer is left alone for the rewrite to handle.
+    """
+    if not beats:
+        return beats
+    closer = beats[-1]
+    sentences = [s for s in _SENTENCE_SPLIT_RE.split(closer.narration.strip()) if s.strip()]
+    if len(sentences) < 2 or not _TRAILING_CLOSER_RE.search(sentences[-1]):
+        return beats
+    text = " ".join(sentences[:-1]).strip()
+    if not text:
+        return beats
+    return [*beats[:-1], closer.model_copy(update={"narration": text})]
