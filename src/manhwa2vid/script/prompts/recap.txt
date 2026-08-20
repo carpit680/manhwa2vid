@@ -65,12 +65,13 @@ THE TEN RULES:
 
 {naming_priority_rules}
 
-Return JSON (one entry per outline beat, same beat_id):
+Return JSON (one entry per outline beat, same beat_id). key_panels is REQUIRED on
+every beat: 2-5 panel ids from that beat's own evidence that the narration depends on
+(the moment named, the emotion described, the blow landed). The video guarantees these
+are shown; unlisted panels may be dropped.
 {{
   "beats": [
-    {{"beat_id": 1, "narration": "narration text for this beat",
-      "key_panels": ["panel ids from THIS beat that the narration depends on — the moment
-                      named, the emotion described, the blow landed. Usually 2-5. The
-                      video shows these for certain; unlisted panels may be dropped."]}}
+    {{"beat_id": 1, "narration": "...", "key_panels": ["p0004_02", "p0004_05"]}},
+    {{"beat_id": 2, "narration": "...", "key_panels": ["p0005_01", "p0005_03", "p0005_04"]}}
   ]
 }}

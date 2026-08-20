@@ -191,4 +191,7 @@ def story_ahead_from_map(story_map: dict[str, Any], meta: ProjectMeta) -> str:
         if facts:
             line += f" [world: {facts}]"
         lines.append(line)
-    return "\n".join(lines[:12])
+    # Injection is capped tighter than the read scope: forward knowledge helps most for
+    # the immediately-following arc, and every extra summary dilutes the writer's
+    # attention on the chapter it is actually narrating.
+    return "\n".join(lines[:6])

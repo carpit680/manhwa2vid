@@ -611,6 +611,13 @@ def dedupe_intra_beat_sentences(beats: list[ScriptBeat]) -> list[ScriptBeat]:
                 len(tokens & prev) / len(tokens) >= 0.6 for prev in seen
             ):
                 continue
+            # The reverse duplication: a short sentence followed by its richer version
+            # ("He points and laughs." then "He points and laughs at X for Y."). The
+            # earlier one is a strict token-subset of the new one — keep the richer.
+            drop = [i for i, prev in enumerate(seen) if prev and prev <= tokens]
+            for i in reversed(drop):
+                kept.pop(i)
+                seen.pop(i)
             kept.append(sentence)
             seen.append(tokens)
         if len(kept) < len(sentences):
@@ -841,6 +848,10 @@ def rotate_protagonist_name(
             last_word = re.search(r"([A-Za-z']+)\W*$", prior)
             after = text[m.end():].lstrip()
             next_word = after.split(None, 1)[0].strip(".,!?;:'\"") if after else ""
+            if last_word and last_word.group(1).lower() == "of":
+                # "the hand of Jun-Ho" -> "the hand of him" is broken English; genitive
+                # constructions keep the name (a spare mention beats spoken garbage).
+                return m.group(0)
             if last_word and last_word.group(1).lower() in _OBJECT_CUE_WORDS:
                 replacement = objective
             elif _looks_like_verb(next_word):
@@ -1803,3 +1814,22 @@ def strip_trailing_closer_sentence(beats: list[ScriptBeat]) -> list[ScriptBeat]:
     if not text:
         return beats
     return [*beats[:-1], closer.model_copy(update={"narration": text})]
+
+
+_SUBJECT_COMMA_VERB_RE = re.compile(
+    r"([A-Za-z][\w'’-]*),\s+"
+    r"(stands|sits|walks|runs|steps|turns|leaps|lands|rises|falls|smiles|laughs|gasps|"
+    r"stares|looks|draws|raises|enters|faces|charges|kneels|collapses|waits|watches|"
+    r"crosses|arrives|pauses|freezes|shivers|nods|bows|climbs)\b"
+)
+
+
+def repair_subject_comma(beats: list[ScriptBeat]) -> list[ScriptBeat]:
+    """"Seo Jun-Ho, stands in the throne room" — a comma splice between subject and
+    verb, unspeakable aloud. Only fires on a comma DIRECTLY before a finite motion/
+    stance verb, so lists and genuine appositives are untouched."""
+    out: list[ScriptBeat] = []
+    for beat in beats:
+        text = _SUBJECT_COMMA_VERB_RE.sub(r"\1 \2", beat.narration)
+        out.append(beat.model_copy(update={"narration": text}) if text != beat.narration else beat)
+    return out

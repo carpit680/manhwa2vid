@@ -718,6 +718,14 @@ def _sighted_complete_json(
             f"{user}"
         )
         raw = llm.describe_labeled_panels(labeled, prompt)
+        # Keep the last raw narration response for forensics — "which field did the
+        # model actually return" is undiagnosable once parsing has flattened it.
+        try:
+            debug_dir = paths["root"] / "debug"
+            debug_dir.mkdir(exist_ok=True)
+            (debug_dir / "narration_response.json").write_text(raw, encoding="utf-8")
+        except Exception:
+            pass
         return json.loads(raw)
     except Exception as exc:
         console.print(f"[yellow]Sighted narration unavailable ({type(exc).__name__}) — using text evidence[/]")
@@ -1129,6 +1137,7 @@ def generate_script(
         strip_repeated_appositives,
         trim_overlong_beats,
         repair_truncated_sentences,
+        repair_subject_comma,
         strip_internal_labels,
         lock_transition_line,
         strip_appearance_descriptors,
@@ -1153,6 +1162,7 @@ def generate_script(
     beats = strip_duplicate_transitions(beats, transition_panel)
     beats = lock_transition_line(beats, transition_panel, config, transition_line)
     beats = repair_malformed_openings(beats)
+    beats = repair_subject_comma(beats)
     beats = repair_truncated_sentences(beats)
     beats = strip_internal_labels(beats, bible)
     beats = strip_appearance_descriptors(beats, bible)
