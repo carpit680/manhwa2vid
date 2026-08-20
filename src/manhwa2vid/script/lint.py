@@ -1359,13 +1359,12 @@ def lint_and_rewrite_script(
     if attribution_path.exists():
         attribution = [PanelCast.model_validate(a) for a in json.loads(attribution_path.read_text())]
 
+    # model_copy, never field-by-field reconstruction: every beat passes through here,
+    # and a hand-built ScriptBeat silently drops any field this code predates
+    # (key_panel_ids was wiped on all 28 beats exactly this way).
     pre_sanitized = [
-        ScriptBeat(
-            beat_id=beat.beat_id,
-            panel_ids=beat.panel_ids,
-            narration=rotate_protagonist_name(local_sanitize_narration(beat.narration), bible),
-            estimated_seconds=beat.estimated_seconds,
-            character_ids=beat.character_ids,
+        beat.model_copy(
+            update={"narration": rotate_protagonist_name(local_sanitize_narration(beat.narration), bible)}
         )
         for beat in beats
     ]
@@ -1403,15 +1402,7 @@ def lint_and_rewrite_script(
                 issues=report[beat.beat_id],
                 scene_cards=scene_cards,
             )
-            fixed.append(
-                ScriptBeat(
-                    beat_id=beat.beat_id,
-                    panel_ids=beat.panel_ids,
-                    narration=new_text,
-                    estimated_seconds=beat.estimated_seconds,
-                    character_ids=beat.character_ids,
-                )
-            )
+            fixed.append(beat.model_copy(update={"narration": new_text}))
         else:
             fixed.append(beat)
     # A rewrite re-introduces the full name freely (it sees only its own beat), so the

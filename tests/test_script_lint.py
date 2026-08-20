@@ -1074,3 +1074,23 @@ def test_closer_check_leaves_a_declarative_ending_alone():
 
     beats = [ScriptBeat(beat_id=1, panel_ids=["p1"], narration="He enters the gate. Today is a work day.")]
     assert lint_trailing_closer(beats) == {}
+
+
+def test_lint_and_rewrite_preserves_key_panel_ids(monkeypatch, tmp_path):
+    """Every beat passes through lint_and_rewrite_script; its field-by-field beat
+    reconstruction silently wiped key_panel_ids on all 28 beats of a live run. Fields
+    must survive code that predates them."""
+    from manhwa2vid.script.lint import lint_and_rewrite_script
+
+    beats = [
+        ScriptBeat(
+            beat_id=1, panel_ids=["p0001_01", "p0001_02"],
+            narration="A clean sentence with nothing to flag.",
+            key_panel_ids=["p0001_02"],
+        )
+    ]
+    from manhwa2vid.models import SeriesBible
+
+    bible = SeriesBible(series_slug="s", title="S")
+    out = lint_and_rewrite_script(beats, bible, tmp_path / "missing.json", {"characters": {}})
+    assert out[0].key_panel_ids == ["p0001_02"]
