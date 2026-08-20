@@ -31,6 +31,7 @@ from manhwa2vid.script.grounding import (
     format_seeded_outline_for_prompt,
     preassign_outline_from_facts,
     enforce_reading_order,
+    inject_closer_evidence,
 )
 from manhwa2vid.script.lint import banned_words, lint_and_rewrite_script
 from manhwa2vid.script.synopsis import (
@@ -76,6 +77,7 @@ def _cast_context_for_beats(
     cards: list[SceneCard] | None = None,
     *,
     words_per_panel: int = 14,
+    max_beat_words: int = 60,
 ) -> str:
     attr_map = {row.panel_id: row for row in attribution}
     lines: list[str] = []
@@ -95,7 +97,10 @@ def _cast_context_for_beats(
         evid = evidence_for_panels(beat.panel_ids, cards or []) if cards else ""
         # A concrete per-beat word ceiling: every word over budget stretches this beat's
         # panels on screen (audio locks the visuals), so vague "be brief" doesn't cut it.
-        max_words = max(12, len(beat.panel_ids) * words_per_panel)
+        # Ceiling, because panels*rate has no upper bound: a 12-panel beat would get a
+        # 168-word budget, which is a paragraph of screen-time debt. The measured
+        # references (both golds, the reference channel) all sit near 40-45 words/beat.
+        max_words = min(max(12, len(beat.panel_ids) * words_per_panel), max_beat_words)
         lines.append(
             f"Beat {beat.beat_id} [{', '.join(beat.panel_ids)}]: "
             f"char_ids={char_ids}; on_screen={'; '.join(people) or '(none)'}; plot={beat.plot_beat}\n"
@@ -274,20 +279,92 @@ def _complete_json(llm: Any, system: str, user: str, *, fallback_model: str = "l
     raise RuntimeError("script JSON generation failed")
 
 
+def _chapter_count(meta: ProjectMeta, paths: dict[str, Path] | None) -> int:
+    """How many chapters this project covers, from data.
+
+    Preferred source is pages/sources.json (written at ingest, one record per page with
+    its chapter_num) — it reflects what was actually imported. Falls back to parsing
+    meta.chapters ("3", "1-10", "2,4"), then to 1. Never a per-series value.
+    """
+    try:
+        if paths is not None:
+            src = paths["pages"] / "sources.json"
+            if src.exists():
+                records = json.loads(src.read_text(encoding="utf-8"))
+                chapters = {r.get("chapter_num") for r in records if r.get("chapter_num") is not None}
+                if chapters:
+                    return len(chapters)
+    except Exception:
+        pass
+    total = 0
+    for part in str(meta.chapters or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        m = re.match(r"^(\d+)\s*-\s*(\d+)$", part)
+        if m:
+            lo, hi = int(m.group(1)), int(m.group(2))
+            total += max(0, hi - lo + 1)
+        elif part.isdigit():
+            total += 1
+    return max(1, total)
+
+
+def _target_beat_count(meta: ProjectMeta, paths: dict[str, Path] | None, config: dict[str, Any]) -> int:
+    """Beats scale with how much story there is, not a fixed constant.
+
+    A fixed max_beats=18 was tuned on a single ~50-panel chapter (2.9 panels/beat) and
+    then met a 211-panel two-chapter project: 11.7 panels/beat, every beat forced to
+    summarize a dozen panels, and the alignment audit correctly rejected 13 of 18 of
+    them. The stable quantity across the measured references is beats per CHAPTER
+    (hand-written golds: 17 and ~12/chapter; the reference channel: ~12/chapter), so
+    the budget derives from chapter count, clamped by min_beats and the max_beats cap.
+    """
+    per_chapter = int(get_nested(config, "script", "beats_per_chapter", default=14))
+    min_beats = int(get_nested(config, "script", "min_beats", default=10))
+    cap = int(get_nested(config, "script", "max_beats", default=45))
+    return max(min_beats, min(cap, per_chapter * _chapter_count(meta, paths)))
+
+
+
+
+_REVEAL_STOP = frozenset(
+    """
+    the a an and or but so of to in on at for with from by as is are was were be been
+    have has had this that it its his her their you your they them he she we i not no
+    what when where who how why there here then than now all any some very really just
+    """.split()
+)
+
+
+def _closing_panel_terms(cards: list[SceneCard]) -> set[str]:
+    """Distinctive content words from the last few story panels' on-panel text."""
+    by_panel: dict[str, str] = {}
+    for card in cards:
+        for pid in card.panel_ids:
+            by_panel[pid] = card.source_text or ""
+    ordered = sorted(by_panel, key=_panel_sort_key)
+    text = " ".join(by_panel[pid] for pid in ordered[-6:]).lower()
+    words = re.findall(r"[a-z][a-z'-]{3,}", text)
+    return {w for w in words if w not in _REVEAL_STOP}
+
 def _run_outline_pass(
     meta: ProjectMeta,
     cards: list[SceneCard],
     bible: SeriesBible,
     synopsis: ChapterSynopsis,
     config: dict[str, Any],
+    paths: dict[str, Path] | None = None,
 ) -> tuple[str, list[ScriptOutlineBeat]]:
     template = _load_prompt_template("outline.txt")
-    max_beats = int(get_nested(config, "script", "max_beats", default=18))
+    max_beats = _target_beat_count(meta, paths, config)
     system = template.format(max_beats=max_beats)
 
     seeded = preassign_outline_from_facts(synopsis, cards, bible, max_beats=max_beats)
     # Beats must be contiguous runs in reading order, or two of them narrate one moment.
     seeded = enforce_reading_order(seeded)
+    # The ending is pinned from the panels themselves, not trusted to prose compression.
+    seeded = inject_closer_evidence(seeded, cards)
     console.print(f"[dim]Seeded outline from plot_facts → {len(seeded)} panel-grounded beats[/]")
 
     llm = apply_stage_model(get_stage_llm("script", config), "script", config)
@@ -330,6 +407,7 @@ def _run_outline_pass(
             # Prefer LLM wording but restore panel bindings from seed if LLM drifted
             outline = _reconcile_outline_panels(seeded, outline)
             outline = enforce_reading_order(outline)
+            outline = inject_closer_evidence(outline, cards)
             if outline:
                 return str(data.get("hook", synopsis.logline)), outline
         except Exception as exc:
@@ -525,7 +603,7 @@ def _narration_chunk_user(
         )
         + f"\nCharacter bible:\n{format_bible_for_prompt(bible)}\n\n"
         f"Outline beats to narrate now + EVIDENCE (one narration per beat_id):\n"
-        f"{_cast_context_for_beats(chunk, attribution, bible, cards, words_per_panel=int(get_nested(config, 'script', 'words_per_panel_target', default=14)))}"
+        f"{_cast_context_for_beats(chunk, attribution, bible, cards, words_per_panel=int(get_nested(config, 'script', 'words_per_panel_target', default=14)), max_beat_words=int(get_nested(config, 'script', 'max_beat_words', default=60)))}"
     )
 
 
@@ -811,7 +889,7 @@ def generate_script(
     # Reload bible after synopsis sticky-name merges
     bible = load_series_bible(meta.series_slug, meta.title)
 
-    hook, outline_beats = _run_outline_pass(meta, cards, bible, synopsis, config)
+    hook, outline_beats = _run_outline_pass(meta, cards, bible, synopsis, config, paths)
     outline_beats = _mark_closer_beat(outline_beats, synopsis)
     save_json(
         paths["script_outline_json"],
@@ -894,6 +972,19 @@ def generate_script(
         overlap=round(hook_overlap, 2),
     )
     closer = next((b for b in outline_beats if b.is_closer), None)
+    # The chapter's final panels are its chosen ending; their content must reach the
+    # last beats. Positional, not series-specific — see grounding.inject_closer_evidence.
+    tail_terms = _closing_panel_terms(cards)
+    late_text = " ".join(b.narration.lower() for b in beats[-2:]) if beats else ""
+    covered = [t for t in tail_terms if t in late_text]
+    report.add(
+        "reveal-coverage",
+        bool(covered) if tail_terms else True,
+        "" if not tail_terms or covered else (
+            f"none of the final panels' content ({', '.join(sorted(tail_terms)[:6])}) "
+            "appears in the last two beats — the ending was compressed away"
+        ),
+    )
     report.add("closer-present", closer is not None and bool(beats) and beats[-1].beat_id == (closer.beat_id if closer else -1),
                "" if closer else "no closer beat in outline")
     enforce(report, paths["root"], force=qa_forced(config))
@@ -961,6 +1052,19 @@ def generate_script(
                 "warn" if still_major else True,
                 f"beat(s) {sorted(still_major)} replaced with outline text" if still_major else "",
                 beats=sorted(still_major),
+            )
+            # The fallback is a per-beat safety net; when it authors a large FRACTION of
+            # the script, the run has failed and must say so. On the second title tested
+            # 13 of 18 beats shipped as outline text behind an all-green report — the
+            # audit was flagging honest whole-beat summarization at high panel density,
+            # and the "safety" path quietly became the writer.
+            max_frac = float(get_nested(config, "qa", "max_fallback_fraction", default=0.34))
+            frac = len(still_major) / max(1, len(beats))
+            audit.add(
+                "fallback-fraction",
+                frac <= max_frac,
+                f"{len(still_major)}/{len(beats)} beats ({frac:.0%}) shipped from the fallback path"
+                f" — over the {max_frac:.0%} budget; the script is not narration" if frac > max_frac else "",
             )
         enforce(audit, paths["root"], force=qa_forced(config))
 

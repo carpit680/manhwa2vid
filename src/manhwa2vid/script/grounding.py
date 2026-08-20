@@ -394,3 +394,48 @@ def enforce_reading_order(beats: list[ScriptOutlineBeat]) -> list[ScriptOutlineB
 
     # Restore the caller's beat_id ordering: only the panel bindings were being repaired.
     return sorted(out, key=lambda b: b.beat_id)
+
+
+def inject_closer_evidence(
+    beats: list[ScriptOutlineBeat],
+    cards: list[SceneCard],
+    max_chars: int = 420,
+    tail_panels: int = 6,
+) -> list[ScriptOutlineBeat]:
+    """Pin the chapter's final on-panel content to the closer beat's plot_beat.
+
+    The synopsis is a lossy channel: on the second title tested, the last panels carried
+    the chapter's entire point — a system message revealing the frozen team CAN be freed
+    — and plot_facts compressed it into its negative ("unable to free his comrades").
+    Every layer downstream then told the wrong ending, while the scene cards held the
+    reveal verbatim. Reveals are positional, not series-specific: whatever the final
+    story panels SAY is what the chapter chose to end on, so it is quoted into the
+    closer's plot line deterministically instead of trusted to prose compression.
+    """
+    if not beats or not cards:
+        return beats
+    by_panel: dict[str, SceneCard] = {}
+    for card in cards:
+        for pid in card.panel_ids:
+            by_panel[pid] = card
+    ordered = sorted(by_panel, key=_panel_sort_key_local)
+    lines: list[str] = []
+    for pid in ordered[-tail_panels:]:
+        text = " ".join((by_panel[pid].source_text or "").split())
+        if text and text not in lines:
+            lines.append(text)
+    evidence = " / ".join(lines)[:max_chars]
+    if not evidence:
+        return beats
+    closer = next((b for b in beats if b.is_closer), beats[-1])
+    if evidence.lower()[:60] in closer.plot_beat.lower():
+        return beats
+    updated = closer.model_copy(
+        update={
+            "plot_beat": (
+                f"{closer.plot_beat} / CLOSER EVIDENCE — the chapter deliberately ENDS "
+                f"on this; the final beat must land its content: {evidence}"
+            )
+        }
+    )
+    return [updated if b.beat_id == closer.beat_id else b for b in beats]

@@ -60,6 +60,10 @@ severity=minor for everything else. Explicitly NOT unsupported (do not list at a
 - emotional readings consistent with the expression shown
 - narration of sounds implied by the art (a strike landing, a gasp)
 - a name you merely cannot confirm from the art
+- summarization: a beat covers SEVERAL panels at once, and a claim is supported if ANY
+  of the beat's panels supports it. Skipping panels, compressing a sequence into one
+  sentence, or stating an outcome the panel run adds up to is how a recap works and is
+  NEVER a finding.
 
 A recap summarizes; it is not a caption. When in doubt, the claim is supported.
 

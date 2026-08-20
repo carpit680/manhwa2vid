@@ -633,9 +633,10 @@ def trim_overlong_beats(
     sentences so a beat is never gutted.
     """
     per_panel = int(get_nested(config, "script", "words_per_panel_target", default=14))
+    ceiling = int(get_nested(config, "script", "max_beat_words", default=60))
     out: list[ScriptBeat] = []
     for beat in beats:
-        limit = max(16, len(beat.panel_ids) * per_panel)
+        limit = min(max(16, len(beat.panel_ids) * per_panel), ceiling)
         hard = int(limit * 1.35)
         sentences = [s for s in _SENTENCE_SPLIT_RE.split(beat.narration.strip()) if s.strip()]
         if len(beat.narration.split()) <= hard or len(sentences) <= 2:
@@ -743,10 +744,11 @@ def lint_overlong_beats(
     """A beat's words are paid for in screen time by its panels; over budget = long
     static dwells. Flag with the concrete ceiling so the rewrite knows the target."""
     per_panel = int(get_nested(config, "script", "words_per_panel_target", default=14))
+    ceiling = int(get_nested(config, "script", "max_beat_words", default=60))
     # Allow some slack over the authoring target before forcing a rewrite.
     report: dict[int, list[str]] = {}
     for beat in beats:
-        limit = max(16, len(beat.panel_ids) * per_panel)
+        limit = min(max(16, len(beat.panel_ids) * per_panel), ceiling)
         words = len(beat.narration.split())
         if words > int(limit * 1.35):
             report[beat.beat_id] = [f"overlong:cut_to_{limit}_words"]

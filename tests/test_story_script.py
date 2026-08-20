@@ -447,3 +447,64 @@ def test_enforce_reading_order_leaves_well_formed_outlines_alone():
         ["p0001_01", "p0001_02"],
         ["p0002_01"],
     ]
+
+
+def test_beat_budget_scales_with_chapter_count(tmp_path):
+    """A fixed 18-beat cap met a 211-panel two-chapter project at 11.7 panels/beat and
+    the audit rejected 13/18 beats. Beats derive from chapter count (data, not title)."""
+    import json
+
+    from manhwa2vid.models import ProjectMeta
+    from manhwa2vid.script.generate import _chapter_count, _target_beat_count
+
+    meta = ProjectMeta(slug="t", title="T", chapters="1-2", source_lang="en")
+    pages = tmp_path / "pages"
+    pages.mkdir()
+    (pages / "sources.json").write_text(json.dumps(
+        [{"page_num": i, "chapter_num": 1 + (i > 11)} for i in range(1, 25)]
+    ))
+    paths = {"pages": pages}
+    assert _chapter_count(meta, paths) == 2
+    assert _target_beat_count(meta, paths, {}) == 28  # 14/chapter default
+
+    # no sources.json -> parse the chapters string
+    assert _chapter_count(meta, None) == 2
+    ten = ProjectMeta(slug="t", title="T", chapters="1-10", source_lang="en")
+    assert _target_beat_count(ten, None, {}) == 45    # clamped at max_beats cap
+    one = ProjectMeta(slug="t", title="T", chapters="7", source_lang="en")
+    assert _target_beat_count(one, None, {}) == 14
+
+
+def test_inject_closer_evidence_pins_final_panel_content():
+    """The synopsis compressed 'YOU ARE ABLE TO REMOVE THE SEAL' into its NEGATIVE and
+    every downstream layer told the wrong ending. The final panels' text is quoted into
+    the closer deterministically."""
+    from manhwa2vid.models import SceneCard, ScriptOutlineBeat
+    from manhwa2vid.script.grounding import inject_closer_evidence
+
+    cards = [
+        SceneCard(panel_ids=["p0001_01"], source_text='A: "HELLO."', action="a"),
+        SceneCard(panel_ids=["p0024_01"], source_text='system: "[YOU ARE ABLE TO REMOVE THE SEAL.]"', action="b"),
+        SceneCard(panel_ids=["p0024_03"], source_text='"WHAT?!"', action="c"),
+    ]
+    beats = [
+        ScriptOutlineBeat(beat_id=1, panel_ids=["p0001_01"], plot_beat="opening", character_ids=[]),
+        ScriptOutlineBeat(beat_id=2, panel_ids=["p0024_01", "p0024_03"], plot_beat="he fails to break the seal", character_ids=[], is_closer=True),
+    ]
+    out = inject_closer_evidence(beats, cards)
+    assert "ABLE TO REMOVE THE SEAL" in out[1].plot_beat
+    assert "WHAT?!" in out[1].plot_beat
+    assert out[0].plot_beat == "opening"
+    # idempotent — re-injection must not stack
+    again = inject_closer_evidence(out, cards)
+    assert again[1].plot_beat.count("CLOSER EVIDENCE") == 1
+
+
+def test_closing_panel_terms_are_positional_not_series_specific():
+    from manhwa2vid.models import SceneCard
+    from manhwa2vid.script.generate import _closing_panel_terms
+
+    cards = [SceneCard(panel_ids=[f"p{i:04d}_01"], source_text=f'X: "LINE {i}"', action="") for i in range(1, 9)]
+    cards[-1] = SceneCard(panel_ids=["p0008_01"], source_text='sys: "[SEAL REMOVAL POSSIBLE.]"', action="")
+    terms = _closing_panel_terms(cards)
+    assert "seal" in terms and "removal" in terms and "possible" in terms

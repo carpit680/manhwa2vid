@@ -102,7 +102,13 @@ script:
   target_wpm: 235       # reference speaks 237 WPM, stable across the whole 5h video
   genz_level: none      # reference uses ~0 slang (0.07 per 1k words)
   max_narrator_asides: 0  # reference has 18 first-person tokens in 75k words
-  max_beats: 18
+  beats_per_chapter: 14 # beat budget scales with chapters (from pages/sources.json);
+                        # golds and the reference channel all measure ~12-17/chapter
+  min_beats: 10
+  max_beats: 45         # hard cap on the derived budget
+  max_beat_words: 60    # ceiling on any beat's word budget: panels x words_per_panel
+                        # is unbounded on panel-dense titles; every measured reference
+                        # sits near 40-45 words per beat
   # Name-anchor cadence: a beat keeps ONE protagonist name anchor when this many
   # beats have passed since the last one, or when the beat names another same-pronoun
   # character (bare 'he' would be ambiguous out loud). The old hard cap (hook + 2
@@ -125,6 +131,7 @@ script:
   verify_max_beats: 24      # sample cap for the alignment audit on long chapters
 
 qa:
+  max_fallback_fraction: 0.34 # grounded-fallback may rescue beats, not author the script
   enforce: true             # failed gates block the next stage (--force-past-qa overrides)
 
 tts:
