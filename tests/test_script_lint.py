@@ -1049,3 +1049,28 @@ def test_strong_closer_is_untouched():
 
     beats = [ScriptBeat(beat_id=1, panel_ids=["p1"], narration="Hunting is a job where your life is on the line, and today is a work day.")]
     assert lint_trailing_closer(beats) == {}
+
+
+def test_trailing_closer_catches_reworded_question_openers():
+    """The first fix moved the defect rather than removing it: the rewritten closer read
+    'Whether he will survive the new raid is the only question worth asking.' A final
+    sentence that OPENS on 'Whether' poses a question instead of landing an event."""
+    from manhwa2vid.script.lint import lint_trailing_closer, strip_trailing_closer_sentence
+
+    beats = [
+        ScriptBeat(
+            beat_id=1, panel_ids=["p1"],
+            narration="Jin-Woo resolves to do his best as he and Lee Joo-hee enter the gate. "
+                      "Whether he will survive the new D-rank dungeon raid is the only question worth asking.",
+        )
+    ]
+    assert lint_trailing_closer(beats) == {1: ["trailing_closer"]}
+    out = strip_trailing_closer_sentence(beats)
+    assert out[0].narration.endswith("enter the gate.")
+
+
+def test_closer_check_leaves_a_declarative_ending_alone():
+    from manhwa2vid.script.lint import lint_trailing_closer
+
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p1"], narration="He enters the gate. Today is a work day.")]
+    assert lint_trailing_closer(beats) == {}

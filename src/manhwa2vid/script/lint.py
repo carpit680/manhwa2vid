@@ -1762,6 +1762,17 @@ _TRAILING_CLOSER_RE = re.compile(
 )
 
 
+# A final sentence that OPENS on "Whether ..." poses a question instead of landing an
+# event, whatever it goes on to say. Shape, not vocabulary: rewording the hedge
+# ("...remains to be seen" -> "...is the only question worth asking") keeps the defect,
+# so the opener is what gets checked.
+_QUESTION_OPENER_RE = re.compile(r"^\s*(?:whether|will\s+\w+\s+ever|can\s+\w+\s+really)\b", re.I)
+
+
+def _is_trailing_closer_sentence(sentence: str) -> bool:
+    return bool(_TRAILING_CLOSER_RE.search(sentence) or _QUESTION_OPENER_RE.match(sentence))
+
+
 def lint_trailing_closer(beats: list[ScriptBeat]) -> dict[int, list[str]]:
     """Flag a closer that ends on a hedge instead of a concrete forward hook."""
     if not beats:
@@ -1770,7 +1781,7 @@ def lint_trailing_closer(beats: list[ScriptBeat]) -> dict[int, list[str]]:
     sentences = [s for s in _SENTENCE_SPLIT_RE.split(closer.narration.strip()) if s.strip()]
     if not sentences:
         return {}
-    if _TRAILING_CLOSER_RE.search(sentences[-1]):
+    if _is_trailing_closer_sentence(sentences[-1]):
         return {closer.beat_id: ["trailing_closer"]}
     return {}
 
@@ -1786,7 +1797,7 @@ def strip_trailing_closer_sentence(beats: list[ScriptBeat]) -> list[ScriptBeat]:
         return beats
     closer = beats[-1]
     sentences = [s for s in _SENTENCE_SPLIT_RE.split(closer.narration.strip()) if s.strip()]
-    if len(sentences) < 2 or not _TRAILING_CLOSER_RE.search(sentences[-1]):
+    if len(sentences) < 2 or not _is_trailing_closer_sentence(sentences[-1]):
         return beats
     text = " ".join(sentences[:-1]).strip()
     if not text:

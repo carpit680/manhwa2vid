@@ -4,22 +4,22 @@ Reference: `reference/ch1_gold_script.md` · Candidate: `projects/solo-leveling-
 
 ## Content (does it tell the same story?)
 
-- fact_coverage: **0.43** of 237 salient reference terms
-- order_tau: **0.38** (1.0 = same story order, 0 = unrelated, <0 = reversed)
-- missing (first 25): barely, move, three, towering, glowing-eyed, guardians, close, weapons, brands, alive, refuses, believe, blade, present-day, commuter, nobody, twice, hunting, your, torn, open, inside, across, town, already
+- fact_coverage: **0.45** of 237 salient reference terms
+- order_tau: **0.26** (1.0 = same story order, 0 = unrelated, <0 = reversed)
+- missing (first 25): barely, able, three, towering, glowing-eyed, guardians, close, brands, alive, refuses, believe, blade, present-day, streets, fresh, bandages, commuter, nobody, twice, your, work, torn, open, inside, across
 
 ## Style (identical computation on both texts)
 
 | metric | reference | candidate |
 |---|---|---|
 | beats | 17 | 14 |
-| words | 677 | 559 |
-| avg_sentence_words | 15.0 | 13.6 |
-| caption_markers_per_100w | 0.0 | 0.18 |
-| speech_verbs_per_100w | 3.25 | 2.86 |
-| connectives_per_100w | 3.69 | 2.86 |
+| words | 677 | 588 |
+| avg_sentence_words | 15.0 | 14.0 |
+| caption_markers_per_100w | 0.0 | 0.0 |
+| speech_verbs_per_100w | 3.25 | 2.89 |
+| connectives_per_100w | 3.69 | 2.55 |
 | max_consecutive_pronoun_starts | 2 | 2 |
-| pronoun_start_fraction | 0.2 | 0.29 |
+| pronoun_start_fraction | 0.2 | 0.33 |
 
 ## Side by side
 
@@ -31,7 +31,7 @@ Sung Jin-Woo lies in a pool of his own blood, barely able to move. Three towerin
 
 **candidate** `p0002_01, p0003_01, p0004_01`
 
-Sung Jin-Woo lies bleeding on the ground as his breath catches in his throat. He tries to steady himself while sitting in a wide pool of his own blood. He tells himself that he is only a low-rank hunter for the Guild.
+Sung Jin-Woo, an E-Rank hunter, lies bleeding on the cold floor. He clutches his injured hand and struggles to breathe as blood pools around his legs. He gasps heavily, saying that he is merely a weak, low-ranking member of the Hunter Guild.
 
 ### Beat 2
 
@@ -41,7 +41,7 @@ Then the sky clears, over present-day Seoul.
 
 **candidate** `p0005_01, p0006_01, p0007_01, p0007_04`
 
-One massive stone sentinel raises its giant spear to deliver a final, crushing blow. He grits his teeth against the agony and curses his desperate fate. A blinding flash of light erupts as the vision shatters. A wide river flows through Seoul.
+A giant statue raises its spear as he grits his teeth against the pain. He curses his fate while the weapon descends in a blinding flash of light. The city of Seoul stands peaceful along the wide river under a clear morning sky.
 
 ### Beat 3
 
@@ -51,7 +51,7 @@ Jin-Woo walks the morning streets with fresh bandages on his face, just another 
 
 **candidate** `p0008_01, p0008_02, p0009_01, p0009_02`
 
-He walks through the bustling city streets while noting that his life stays on the line. He heads toward an active construction site where a glowing blue dungeon gate vibrates. Other pedestrians pass him by as he prepares for another dangerous day of work.
+He walks through a crowded city crosswalk with his hood up and eyes down. He thinks about the dangerous trade where his life is constantly on the line. The journey leads him toward a D-rank Gate contained within scaffolding at a local construction site.
 
 ### Beat 4
 
@@ -61,7 +61,7 @@ Hunting is a job where your life is on the line, and today is a work day. A gate
 
 **candidate** `p0010_01, p0010_03, p0010_04, p0011_01, p0011_02`
 
-Kim Sangshik, the party's veteran supporting hunter, stops at a busy coffee stand for a morning drink. The vendor wishes him luck on his raid today while handing over the cup. Jin-Woo thinks about his sick mother's medical bills and the guild's meager pay.
+The magical gate vibrates with energy as the raid party prepares to enter. Jin-Woo, an E-rank hunter, desperately needs the guild money for his mother's medical bills. Nearby, Kim Sangshik, a supporting hunter, waits by a food truck for the raid to begin. The coffee vendor hands Kim a hot drink and wishes him luck on his mission.
 
 ### Beat 5
 
@@ -71,7 +71,7 @@ Inside the scaffolding, the gate hangs glowing blue. At the food truck below, Ji
 
 **candidate** `p0012_01, p0012_02, p0012_03, p0013_01, p0013_02`
 
-Bak, a supporting hunter, waves enthusiastically when he spots Kim Sangshik. Bak says it has been a while, prompting a surprised greeting from his old companion. As they shake hands, Kim asks why he returned after quitting the profession. Bak chuckles and replies that his wife is pregnant with their second son.
+Bak, a former hunter, waves to Kim Sangshik and says it has been a while. They shake hands as Kim asks why he returned to this dangerous job. Bak replies that his wife is pregnant with their second son and he needs the money.
 
 ### Beat 6
 
@@ -81,7 +81,7 @@ The truck sends a hunter off with a wish of luck for the raid, while two more gr
 
 **candidate** `p0014_01, p0014_02, p0014_03, p0015_01, p0015_02`
 
-A friendly veteran hunter pats Jin-Woo on the shoulder and welcomes him to the site. He replies that he will be in their capable hands for the upcoming crawl. Kim Sangshik prepares to explain the young man's notorious nickname to a very curious Bak.
+A hunter pats the newcomer on the shoulder and welcomes him. Kim Sangshik asks if he has eaten while Bak observes the warm greeting from the group. He wonders if this newcomer is a powerful hunter because everyone seems happy to see him.
 
 ### Beat 7
 
@@ -89,9 +89,9 @@ A friendly veteran hunter pats Jin-Woo on the shoulder and welcomes him to the s
 
 Song Chi-yul, a veteran of these raids, calls a greeting over his cup. Then an old friend appears — Bak, all smiles in his green puffer jacket. They shake hands, and Bak laughs that he only quit hunting because his wife is expecting their second son. Chi-yul admits that raiding for a fortune, like life itself, was never easy.
 
-**candidate** `p0016_01, p0016_02, p0016_03`
+**candidate** `p0016_01, p0016_02, p0016_03, p0017_01, p0017_02`
 
-Kim Sangshik explains that Bak is looking at the world’s weakest hunter. Even in low-rank dungeons, the young man manages to get himself severely hospitalized. Jin-Woo stands nearby and feels deeply dejected after overhearing their cruel, public gossip.
+Jin-Woo overhears the veterans whispering that he is actually the world's weakest hunter. Kim Sangshik tells Bak that the dungeon will be easy since the weakest man arrived. He tries to order coffee, but the vendor says the stand just ran out.
 
 ### Beat 8
 
@@ -99,9 +99,9 @@ Kim Sangshik explains that Bak is looking at the world’s weakest hunter. Even 
 
 Bak just sighs at that. Then the group perks up — Jin-Woo has arrived, and they thank him for coming. A colleague claps his shoulder about the cold, and he tells them he'll pull his weight again today.
 
-**candidate** `p0017_01`
+**candidate** `p0018_02, p0018_03, p0018_04`
 
-He mutters to himself about the old geezers who cannot stop talking about him.
+He sighs in disappointment as he walks away from the empty coffee stall. He realizes even the smallest comforts are out of reach for a man of his status. A voice suddenly screams that he is hurt again, breaking his quiet resignation.
 
 ### Beat 9
 
@@ -109,9 +109,9 @@ He mutters to himself about the old geezers who cannot stop talking about him.
 
 The truck regulars ask if he's even eaten yet — everyone is glad to see him. Watching all this warmth, Bak asks the obvious question: is this guy some kind of powerful hunter?
 
-**candidate** `p0017_02, p0018_02, p0018_03, p0018_04, p0019_01`
+**candidate** `p0019_01`
 
-A coffee vendor apologizes because the stand just ran out of coffee. Jin-Woo sighs at his luck until Lee Joo-hee, the party's supporting healer, shouts his name. She immediately scolds him for the fresh bandages and the injuries on his face.
+Lee Joo-hee, the party's supporting healer, snaps at Jin-Woo. She asks him why his face is already injured yet again.
 
 ### Beat 10
 
@@ -119,9 +119,9 @@ A coffee vendor apologizes because the stand just ran out of coffee. Jin-Woo sig
 
 Another hunter sets him straight — Bak wouldn't know the nickname, since Jin-Woo joined right after he quit. Within earshot, the older hunters trade it like gossip: the weakest hunter in the guild. One asks if he's really the weakest; the other says he is, and that their dungeon must be a weak one since he was assigned to it. Then they hush each other, in case he can hear.
 
-**candidate** `p0020_01, p0020_02, p0020_03, p0021_01`
+**candidate** `p0020_01, p0020_02, p0020_03, p0021_01, p0021_02`
 
-Sitting on wooden pallets, Jin-Woo admits he was recently hospitalized after a previous raid. He tells a shocked Lee Joo-hee that the higher-ranked hunters decided to skip bringing a healer. His injuries were the only ones sustained because he was the only weak link present.
+Sitting on wooden pallets, Jin-Woo explains that he went to the hospital for his face. He tells Lee Joo-hee that he was the only one injured during the last mission. The high-ranked hunters skipped a healer because they felt safe enough to leave him behind.
 
 ### Beat 11
 
@@ -129,9 +129,9 @@ Sitting on wooden pallets, Jin-Woo admits he was recently hospitalized after a p
 
 He hears every word of it, and lets it pass. At the supply stand he asks for a cup of coffee, and the attendant apologizes — they've just run out.
 
-**candidate** `p0021_02, p0022_01, p0022_02, p0022_03, p0022_04`
+**candidate** `p0022_01, p0022_02, p0022_03`
 
-Lee Joo-hee snaps at the reckless decision to enter a dungeon without proper medical support. Jin-Woo merely smiles weakly and says he is quite used to being the one hurt. They both turn their attention to the group gathering around the vibrating blue gate.
+Jin-Woo smiles weakly and tells Lee Joo-hee that he is accustomed to being weak. She offers him a sympathetic look while they watch the others gather for the hunt. The weight of his debt remains heavy as they move toward the site entrance.
 
 ### Beat 12
 
@@ -139,9 +139,9 @@ Lee Joo-hee snaps at the reckless decision to enter a dungeon without proper med
 
 Not even coffee today, he mutters — it feels like a bad sign. The attendant apologizes again, and he waves it off as nothing.
 
-**candidate** `p0023_01, p0024_01, p0024_02`
+**candidate** `p0022_04, p0023_01`
 
-Song Chi-yul, the party's veteran leader, asks the gathered hunters if they will let him lead. Kim Sangshik agrees since the older man is the highest-ranked hunter present. Bak and the others nod because they trust the skills of the veteran.
+Song Chi-yul, the veteran party leader, stands before the gathered hunters with a confident smile. He asks the raid party for permission to lead them through the upcoming dungeon.
 
 ### Beat 13
 
@@ -149,9 +149,9 @@ Song Chi-yul, the party's veteran leader, asks the gathered hunters if they will
 
 Lee Joo-hee, the party's healer, spots him across the lot and comes running — he's hurt again, she says, alarmed. He laughs it off, but she isn't buying it, and asks why his face keeps getting hurt.
 
-**candidate** `p0024_03, p0025_01`
+**candidate** `p0024_01, p0024_02, p0024_03, p0025_01`
 
-Jin-Woo smiles modestly beside Lee Joo-hee. He asks their leader to look after them as they prepare to head out.
+Kim Sangshik crosses his arms and smiles, agreeing to the choice of leader. Bak, another supporting hunter, nods and adds that they can easily trust the veteran's abilities. A hunter and a hunter happily agree to join. Jin-Woo smiles modestly next to Lee Joo-hee as they look forward.
 
 ### Beat 14
 
@@ -161,7 +161,7 @@ They sit together on a stack of lumber while she asks if he actually saw a docto
 
 **candidate** `p0026_01, p0026_02, p0026_03, p0027_01`
 
-Kim Sangshik tells the young man to stay safely behind the others to avoid further injury. Jin-Woo takes a deep breath as he and Lee Joo-hee step into the swirling energy. Whether he will successfully clear the upcoming dungeon raid without sustaining serious injuries remains to be seen.
+Kim Sangshik tells the boy to stay safely behind the others because of his wounds. Jin-Woo resolves to do his best today as he and Lee Joo-hee enter the gate. Whether he will survive the new D-rank dungeon raid is the only question worth asking.
 
 ### Beat 15
 
