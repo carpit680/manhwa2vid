@@ -33,7 +33,7 @@ from manhwa2vid.script.grounding import (
     enforce_reading_order,
     inject_closer_evidence,
 )
-from manhwa2vid.script.lint import banned_words, lint_and_rewrite_script
+from manhwa2vid.script.lint import banned_words, lint_and_rewrite_script, rotate_protagonist_name
 from manhwa2vid.script.synopsis import (
     format_synopsis_for_prompt,
     generate_chapter_synopsis,
@@ -78,6 +78,9 @@ def _cast_context_for_beats(
     *,
     words_per_panel: int = 14,
     max_beat_words: int = 60,
+    _cap_config: dict[str, Any] | None = None,
+    n_beats_total: int = 0,
+    n_chapters: int = 1,
 ) -> str:
     attr_map = {row.panel_id: row for row in attribution}
     lines: list[str] = []
@@ -100,7 +103,14 @@ def _cast_context_for_beats(
         # Ceiling, because panels*rate has no upper bound: a 12-panel beat would get a
         # 168-word budget, which is a paragraph of screen-time debt. The measured
         # references (both golds, the reference channel) all sit near 40-45 words/beat.
-        max_words = min(max(12, len(beat.panel_ids) * words_per_panel), max_beat_words)
+        from manhwa2vid.script.lint import beat_word_cap
+
+        max_words = beat_word_cap(
+            len(beat.panel_ids),
+            _cap_config if _cap_config is not None else {},
+            n_beats=n_beats_total,
+            n_chapters=n_chapters,
+        )
         lines.append(
             f"Beat {beat.beat_id} [{', '.join(beat.panel_ids)}]: "
             f"char_ids={char_ids}; on_screen={'; '.join(people) or '(none)'}; plot={beat.plot_beat}\n"
@@ -591,6 +601,8 @@ def _narration_chunk_user(
     introduced: list[str],
     running_summary: list[str],
     whole_script: bool = False,
+    n_beats_total: int = 0,
+    n_chapters: int = 1,
 ) -> str:
     # Writing every beat in one context is the biggest quality lever available: a model
     # can only guarantee "each moment lands once" when it is the author of all of them.
@@ -641,7 +653,7 @@ def _narration_chunk_user(
         )
         + f"\nCharacter bible:\n{format_bible_for_prompt(bible)}\n\n"
         f"Outline beats to narrate now + EVIDENCE (one narration per beat_id):\n"
-        f"{_cast_context_for_beats(chunk, attribution, bible, cards, words_per_panel=int(get_nested(config, 'script', 'words_per_panel_target', default=14)), max_beat_words=int(get_nested(config, 'script', 'max_beat_words', default=60)))}"
+        f"{_cast_context_for_beats(chunk, attribution, bible, cards, words_per_panel=int(get_nested(config, 'script', 'words_per_panel_target', default=14)), max_beat_words=int(get_nested(config, 'script', 'max_beat_words', default=60)), _cap_config=config, n_beats_total=n_beats_total, n_chapters=n_chapters)}"
     )
 
 
@@ -807,6 +819,7 @@ def _run_narration_pass(
             meta, chunk, hook, bible, attribution, synopsis, config, cards,
             introduced=introduced, running_summary=running_summary,
             whole_script=len(chunk) == len(outline_beats) and len(chunk) > 1,
+            n_beats_total=len(outline_beats), n_chapters=_chapter_count(meta, paths),
         )
         got: dict[int, str] = {}
         got_keys: dict[int, list[str]] = {}
@@ -839,8 +852,12 @@ def _run_narration_pass(
                 # the beat is still recorded as a fallback so it shows up in QA.
                 from manhwa2vid.script.lint import local_sanitize_narration
 
-                narration = local_sanitize_narration(
-                    (ob.plot_beat or "").split("/ CLOSER")[0].strip()
+                # Same treatment the alignment fallback gets: outline text carries the
+                # full canonical name in every sentence, and shipping it unrotated is
+                # what fed "the monument containing he" a rotation pass later.
+                narration = rotate_protagonist_name(
+                    local_sanitize_narration((ob.plot_beat or "").split("/ CLOSER")[0].strip()),
+                    bible,
                 )
                 if narration:
                     narration_fallbacks.append(ob.beat_id)
@@ -892,6 +909,7 @@ def _retry_single_beat(
             user = _narration_chunk_user(
                 meta, [beat], hook, bible, attribution, synopsis, config, cards,
                 introduced=introduced, running_summary=running_summary,
+                n_beats_total=0, n_chapters=_chapter_count(meta, paths),
             )
             data = _sighted_complete_json(llm, system, user, [beat], paths, config)
             for item in data.get("beats", []):
@@ -1143,6 +1161,7 @@ def generate_script(
         repair_malformed_openings,
         strip_duplicate_transitions,
         strip_repeated_appositives,
+        dedupe_appositive_clauses,
         trim_overlong_beats,
         repair_truncated_sentences,
         repair_subject_comma,
@@ -1154,6 +1173,8 @@ def generate_script(
         derive_key_panels,
     )
 
+    config = {**config, "_n_chapters": _chapter_count(meta, paths)}
+    beats = dedupe_appositive_clauses(beats)
     beats = strip_repeated_appositives(beats, bible)
     beats = strip_caption_sentences(beats, bible)
     transition_panel = ""
@@ -1168,23 +1189,75 @@ def generate_script(
     except Exception:
         transition_panel = ""
         transition_line = ""
-    beats = strip_duplicate_transitions(beats, transition_panel)
-    beats = lock_transition_line(beats, transition_panel, config, transition_line)
-    beats = repair_malformed_openings(beats)
-    beats = repair_subject_comma(beats)
-    beats = repair_truncated_sentences(beats)
-    beats = strip_internal_labels(beats, bible)
-    beats = strip_appearance_descriptors(beats, bible)
-    beats = dedupe_intra_beat_sentences(beats)
-    beats = dedupe_cross_beat_sentences(beats)
-    beats = trim_overlong_beats(beats, config)
-    beats = derive_key_panels(beats, cards)
-    beats = strip_trailing_closer_sentence(beats)
-    beats = enforce_mc_name_budget(beats, bible, config)
+    def _final_polish(bs: list[ScriptBeat]) -> list[ScriptBeat]:
+        # Factored so the grammar loop can re-enter it: any text a rewrite produces goes
+        # through the SAME deterministic chain — the invariant is not "nothing runs
+        # after the polish" but "nothing SHIPS unpolished".
+        bs = strip_duplicate_transitions(bs, transition_panel)
+        bs = lock_transition_line(bs, transition_panel, config, transition_line)
+        bs = repair_malformed_openings(bs)
+        bs = repair_subject_comma(bs)
+        bs = repair_truncated_sentences(bs)
+        bs = strip_internal_labels(bs, bible)
+        bs = strip_appearance_descriptors(bs, bible)
+        bs = dedupe_intra_beat_sentences(bs)
+        bs = dedupe_cross_beat_sentences(bs)
+        bs = trim_overlong_beats(bs, config)
+        bs = derive_key_panels(bs, cards)
+        bs = strip_trailing_closer_sentence(bs)
+        bs = enforce_mc_name_budget(bs, bible, config)
+        return bs
+
+    beats = _final_polish(beats)
+
+    # Grammar net: auto-apply single-candidate corrections; route the rest through ONE
+    # rewrite round, then re-polish the rewritten beats.
+    grammar_residuals: dict[int, list[str]] = {}
+    if get_nested(config, "script", "grammar_check", default=True):
+        from manhwa2vid.script.grammar import grammar_pass, make_language_tool
+
+        tool = make_language_tool()
+        if tool is not None:
+            beats, grammar_issues = grammar_pass(beats, tool)
+            if grammar_issues:
+                from manhwa2vid.script.lint import rewrite_beat
+
+                console.print(
+                    f"[yellow]Grammar:[/] {len(grammar_issues)} beat(s) flagged beyond auto-fix"
+                )
+                attribution_rows = []
+                if paths["cast_attribution_json"].exists():
+                    attribution_rows = [
+                        PanelCast.model_validate(a)
+                        for a in json.loads(paths["cast_attribution_json"].read_text())
+                    ]
+                fixed: list[ScriptBeat] = []
+                for beat in beats:
+                    if beat.beat_id in grammar_issues:
+                        new_text = rewrite_beat(
+                            beat, bible, attribution_rows, config,
+                            issues=grammar_issues[beat.beat_id], scene_cards=cards,
+                        )
+                        fixed.append(beat.model_copy(update={"narration": new_text}))
+                    else:
+                        fixed.append(beat)
+                beats = _final_polish(fixed)
+                beats, grammar_residuals = grammar_pass(beats, tool)
+            try:
+                tool.close()
+            except Exception:
+                pass
 
     from manhwa2vid.script.lint import lint_malformed_opening
 
     final_report = QAReport(stage="script-final")
+    if grammar_residuals:
+        final_report.add(
+            "grammar",
+            "warn",
+            f"{sum(len(v) for v in grammar_residuals.values())} finding(s) in beat(s) "
+            f"{sorted(grammar_residuals)} survived auto-fix and one rewrite",
+        )
     malformed = sorted(lint_malformed_opening(beats))
     final_report.add(
         "beats-wellformed",

@@ -193,5 +193,15 @@ def score_script(
     ]
     report.add("words-per-panel-outliers", "warn" if outliers else True,
                "; ".join(outliers[:4]), outliers=outliers)
-    report.add("total_words", True, "", value=n, beats=len(beats))
+    per_chapter = int(get_nested(config, "script", "words_per_chapter", default=550))
+    n_chapters = int(config.get("_n_chapters", 1)) if isinstance(config, dict) else 1
+    target = per_chapter * max(1, n_chapters)
+    in_band = 0.7 * target <= n <= 1.3 * target
+    report.add(
+        "total_words",
+        True if in_band else "warn",
+        "" if in_band else f"{n} words vs target {target} (band 70-130%)",
+        value=n,
+        beats=len(beats),
+    )
     return report

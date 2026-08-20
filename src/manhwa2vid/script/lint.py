@@ -378,7 +378,7 @@ def strip_repeated_appositives(
             continue
         patterns.append(
             (name, re.compile(
-                rf"(\b{re.escape(name)}),\s+(?:a|an|the)\s+(?:[\w''-]+\s+){{0,16}}[\w''-]+(,|(?=\.))",
+                rf"(\b{re.escape(name)}),\s+(?:a|an|the|another|one)\s+(?:[\w''-]+\s+){{0,16}}[\w''-]+(,|(?=[.!?]))",
                 re.I,
             ))
         )
@@ -627,6 +627,33 @@ def dedupe_intra_beat_sentences(beats: list[ScriptBeat]) -> list[ScriptBeat]:
     return out
 
 
+def beat_word_cap(
+    n_panels: int,
+    config: dict[str, Any],
+    *,
+    n_beats: int = 0,
+    n_chapters: int = 1,
+) -> int:
+    """The single source of truth for a beat's word budget.
+
+    Three forces, minimum wins: the panel-driven budget (words the beat's screen time
+    can pay for), the absolute per-beat ceiling, and — new — the share of the CHAPTER
+    budget. Until now no total-length target existed anywhere: per-beat caps summed to
+    1,680 words for a two-chapter project whose reference narration runs 979. Length was
+    an emergent accident of beats x panel density. words_per_chapter (measured: the
+    reference channel ~490/chapter, the two golds 525 and 677) makes runtime a chosen
+    number, since narration is audio-locked and word count IS runtime.
+    """
+    per_panel = int(get_nested(config, "script", "words_per_panel_target", default=14))
+    ceiling = int(get_nested(config, "script", "max_beat_words", default=60))
+    cap = min(max(16, n_panels * per_panel), ceiling)
+    if n_beats > 0:
+        per_chapter = int(get_nested(config, "script", "words_per_chapter", default=550))
+        share = round(per_chapter * max(1, n_chapters) / n_beats * 1.2)
+        cap = min(cap, max(20, share))
+    return cap
+
+
 def trim_overlong_beats(
     beats: list[ScriptBeat],
     config: dict[str, Any],
@@ -639,11 +666,10 @@ def trim_overlong_beats(
     accumulates — the beat's own point is made first. Always keeps at least two
     sentences so a beat is never gutted.
     """
-    per_panel = int(get_nested(config, "script", "words_per_panel_target", default=14))
-    ceiling = int(get_nested(config, "script", "max_beat_words", default=60))
     out: list[ScriptBeat] = []
+    n_chapters = int(config.get("_n_chapters", 1)) if isinstance(config, dict) else 1
     for beat in beats:
-        limit = min(max(16, len(beat.panel_ids) * per_panel), ceiling)
+        limit = beat_word_cap(len(beat.panel_ids), config, n_beats=len(beats), n_chapters=n_chapters)
         hard = int(limit * 1.35)
         sentences = [s for s in _SENTENCE_SPLIT_RE.split(beat.narration.strip()) if s.strip()]
         if len(beat.narration.split()) <= hard or len(sentences) <= 2:
@@ -755,12 +781,11 @@ def lint_overlong_beats(
 ) -> dict[int, list[str]]:
     """A beat's words are paid for in screen time by its panels; over budget = long
     static dwells. Flag with the concrete ceiling so the rewrite knows the target."""
-    per_panel = int(get_nested(config, "script", "words_per_panel_target", default=14))
-    ceiling = int(get_nested(config, "script", "max_beat_words", default=60))
     # Allow some slack over the authoring target before forcing a rewrite.
     report: dict[int, list[str]] = {}
+    n_chapters = int(config.get("_n_chapters", 1)) if isinstance(config, dict) else 1
     for beat in beats:
-        limit = min(max(16, len(beat.panel_ids) * per_panel), ceiling)
+        limit = beat_word_cap(len(beat.panel_ids), config, n_beats=len(beats), n_chapters=n_chapters)
         words = len(beat.narration.split())
         if words > int(limit * 1.35):
             report[beat.beat_id] = [f"overlong:cut_to_{limit}_words"]
@@ -852,6 +877,13 @@ def rotate_protagonist_name(
                 # "the hand of Jun-Ho" -> "the hand of him" is broken English; genitive
                 # constructions keep the name (a spare mention beats spoken garbage).
                 return m.group(0)
+            if last_word and last_word.group(1).islower() and last_word.group(1).endswith("ing"):
+                # "the monument containing Jun-Ho is beginning to crack": the name is the
+                # OBJECT of a reduced relative clause, but the next word ("is") belongs to
+                # the outer subject and passes the verb test — the subjective branch then
+                # ships "containing he". A prior participle makes the slot uncertain by
+                # construction, so the name stays (the documented safe policy).
+                return m.group(0)
             if last_word and last_word.group(1).lower() in _OBJECT_CUE_WORDS:
                 replacement = objective
             elif _looks_like_verb(next_word):
@@ -931,7 +963,10 @@ def fix_pronoun_case(text: str, bible: SeriesBible) -> str:
         # dismisses the concern" — the verb after the pronoun is what tells them apart
         # ("After him dismisses" shipped once).
         next_word = (m.group(4) or "").strip(".,!?;:'\"")
-        if m.group(1).lower() in _OBJECT_PREV_WORDS and not _looks_like_verb(next_word):
+        prior = m.group(1).lower()
+        if prior.endswith("ing") and prior.islower() and prior not in _OBJECT_PREV_WORDS:
+            return m.group(0)
+        if prior in _OBJECT_PREV_WORDS and not _looks_like_verb(next_word):
             return f"{m.group(1)}{m.group(2)}{objective}"
         return m.group(0)
 
@@ -1231,6 +1266,8 @@ def lint_beats(
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_trailing_closer(beats).items():
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
+    for beat_id, issues in lint_dangling_reply(beats).items():
+        report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_pronoun_monotony(beats).items():
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_overlong_beats(beats, config).items():
@@ -1269,6 +1306,13 @@ def _humanize_issues(issues: list[str]) -> str:
     Chi-yul" has to guess what is being asked of it."""
     out: list[str] = []
     for issue in issues:
+        if issue == "dangling_reply":
+            out.append(
+                "an answer is narrated with no question before it — either narrate the "
+                "question it answers (it is in this beat's SPOKEN evidence) or drop the "
+                "reply framing and state the fact directly"
+            )
+            continue
         if issue == "trailing_closer":
             out.append(
                 "this beat ENDS the script and currently trails off on a hedge — end on a "
@@ -1872,3 +1916,116 @@ def derive_key_panels(
         keys = [pid for pid in beat.panel_ids if pid in keys]  # reading order
         out.append(beat.model_copy(update={"key_panel_ids": keys}) if keys else beat)
     return out
+
+
+_APPOSITIVE_SPAN_RE = re.compile(
+    # ", a/an/the/another/one <clause>," — clause may contain ONE inner comma, so a
+    # state clause like "a member of the five heroes, currently frozen in ice" is one
+    # span, not two half-matches.
+    r",\s+((?:a|an|the|another|one)\b(?:[^,.;!?]+,){0,1}[^,.;!?]+?)(,|(?=[.!?]))",
+    re.I,
+)
+
+
+def dedupe_appositive_clauses(beats: list[ScriptBeat]) -> list[ScriptBeat]:
+    """One appositive CLAUSE per script, whoever it is attached to.
+
+    strip_repeated_appositives keys its ledger on the character NAME, which is correct
+    for "introduce each character once" and useless when the SAME clause is stamped on
+    several characters: a synopsis once gave four teammates the identical role sentence,
+    and the first beat naming all of them shipped it three times in one sentence — every
+    name was legitimately at its own first occurrence. The unit of repetition is the
+    clause text, so that is the ledger key here. Runs before the per-name strip.
+
+    Details that came from the observed wreckage rather than theory:
+      - Removal keeps the leading comma only when a CAPITALIZED word follows (a list of
+        names continues: "Skaya, Khali, and The Marksman chose"); before a lowercase
+        verb the comma goes too ("The Swordswoman agrees", not "The Swordswoman, agrees").
+      - The ledger also strips residue TAILS: the old single-comma regex used to weld
+        "currently frozen in ice," directly onto a name, so every comma-segment of a
+        seen clause (>= 3 words) is removed standalone as well.
+      - The first kept occurrence is placeholder-protected during residue removal.
+    """
+    seen: set[str] = set()
+    segments: set[str] = set()
+    out: list[ScriptBeat] = []
+    for beat in beats:
+        text = beat.narration
+        kept_spans: list[str] = []
+
+        def _sub(m: re.Match) -> str:
+            raw = " ".join(m.group(1).split()).lower()
+            # Ledger key normalizes article and inner commas away, so "another member
+            # of the five heroes currently frozen in ice" equals the seen clause
+            # "a member of the five heroes, currently frozen in ice".
+            clause = re.sub(r"^(?:a|an|the|another|one)\s+", "", raw).replace(",", "")
+            after = text[m.end():].lstrip()
+            comma_ok = after[:1].isupper()
+            if clause in seen:
+                return "," if comma_ok else ""
+            seen.add(clause)
+            for seg in raw.split(","):
+                seg = seg.strip()
+                if len(seg.split()) >= 3:
+                    segments.add(seg)
+            placeholder = f"\x00{len(kept_spans)}\x00"
+            kept_spans.append(m.group(0))
+            return placeholder
+
+        text = _APPOSITIVE_SPAN_RE.sub(_sub, text)
+        # Residue pass: seen clauses (or their tail segments) appearing without the
+        # canonical comma framing — welded to a name or re-marked with "another".
+        # Two rounds: removing a tail segment ("currently frozen in ice") can expose the
+        # head ("another member of the five heroes.") for the next round.
+        for _round in range(2):
+          for frag in sorted(seen | segments, key=len, reverse=True):
+            # Article-flexible: the ledger holds "a member of...", the residue may say
+            # "another member of..." or bare "member of...".
+            core = re.sub(r"^(?:a|an|the|another|one)\s+", "", frag)
+            if "," not in frag:
+                # seen-clauses are stored comma-free; let whitespace match across an
+                # optional comma in the text form.
+                core = core.replace(" ", ",? ")
+            rx = re.compile(
+                r",?\s+\b(?:(?:a|an|the|another|one)\s+)?"
+                + re.escape(core).replace(r"\ ", r"\s+").replace(r",\?", ",?")
+                + r"\s*(,|(?=[.!?]))",
+                re.I,
+            )
+
+            def _rsub(m: re.Match, _t=None) -> str:
+                after = m.string[m.end():].lstrip()
+                return "," if (m.group(1) == "," and after[:1].isupper()) else ""
+
+            text = rx.sub(_rsub, text)  # noqa: B023 — rx bound per iteration
+        for i, span in enumerate(kept_spans):
+            text = text.replace(f"\x00{i}\x00", span)
+        text = re.sub(r"\s*,\s*,", ",", text)
+        text = re.sub(r"\s+([,.!?])", r"\1", text)
+        text = re.sub(r",\s+(and|or)\s+", r" \1 ", text) if ", and ," in text else text
+        text = re.sub(r"\s{2,}", " ", text).strip()
+        out.append(beat.model_copy(update={"narration": text}) if text and text != beat.narration else beat)
+    return out
+
+
+_ANSWER_VERB_RE = re.compile(
+    r"\b(replies|responds|answers|confirms)\b(?:\s+[\w'’-]+){0,2}\s+that\b", re.I
+)
+_QUESTION_CUE_RE = re.compile(r"\?|\b(asks?|asked|wonders?|demands?|questions?)\b", re.I)
+
+
+def lint_dangling_reply(beats: list[ScriptBeat]) -> dict[int, list[str]]:
+    """An answer with no question: "The presenter replies that they did." shipped with
+    nothing asked anywhere before it in the beat. Deterministic detection; the repair
+    goes through the rewrite loop, which holds the beat's SPOKEN evidence and can
+    narrate the actual question."""
+    report: dict[int, list[str]] = {}
+    for beat in beats:
+        sentences = [x for x in _SENTENCE_SPLIT_RE.split(beat.narration.strip()) if x.strip()]
+        prior = ""
+        for sent in sentences:
+            if _ANSWER_VERB_RE.search(sent) and not _QUESTION_CUE_RE.search(prior):
+                report[beat.beat_id] = ["dangling_reply"]
+                break
+            prior += " " + sent
+    return report

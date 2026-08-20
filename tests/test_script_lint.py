@@ -1120,3 +1120,135 @@ def test_derive_key_panels_from_narration_overlap():
     # writer-provided keys are never overridden
     manual = [ScriptBeat(beat_id=1, panel_ids=["p1", "p2"], narration="anything", key_panel_ids=["p2"])]
     assert derive_key_panels(manual, cards)[0].key_panel_ids == ["p2"]
+
+
+def test_dedupe_appositive_clauses_all_observed_forms():
+    """The four observed forms of the stamped clause: triple-in-one-sentence, repeat in
+    a later beat, comma-welded residue, and article-swapped 'another …'."""
+    from manhwa2vid.script.lint import dedupe_appositive_clauses
+
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p"], narration=(
+            "When Skaya, a member of the original five heroes, currently frozen in ice, "
+            "spoke, Khali, a member of the original five heroes, currently frozen in ice, nodded."
+        )),
+        ScriptBeat(beat_id=2, panel_ids=["p"], narration=(
+            "The Swordswoman, a member of the original five heroes, currently frozen in ice, agrees."
+        )),
+        ScriptBeat(beat_id=3, panel_ids=["p"], narration=(
+            "The Marksman currently frozen in ice, admits they might."
+        )),
+        ScriptBeat(beat_id=4, panel_ids=["p"], narration=(
+            "He touches the cold statue of The Swordswoman, another member of the original five heroes currently frozen in ice."
+        )),
+        ScriptBeat(beat_id=5, panel_ids=["p"], narration=(
+            "Lee Joo-hee, the party's rookie healer, snaps at him. Kim, a veteran hunter, waves."
+        )),
+    ]
+    out = dedupe_appositive_clauses(beats)
+    full = " ".join(b.narration for b in out)
+    assert full.count("member of the original five heroes") == 1  # first kept, all others gone
+    assert "currently frozen in ice, Khali" not in out[0].narration
+    assert out[1].narration == "The Swordswoman agrees."
+    assert out[2].narration == "The Marksman admits they might."
+    assert out[3].narration == "He touches the cold statue of The Swordswoman."
+    assert out[4].narration == beats[4].narration  # distinct legit appositives untouched
+
+
+def test_appositive_regex_spans_inner_comma():
+    """Stripping a comma-embedded clause must consume the WHOLE clause — the old regex
+    stopped at the first inner comma and welded 'currently frozen in ice,' to the name."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import strip_repeated_appositives
+
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="char_mc",
+        characters={"char_m": CharacterProfile(id="char_m", canonical_name="The Marksman", tier=CharacterTier.SUPPORTING)},
+    )
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p"], narration="The Marksman, a member of the five heroes, currently frozen in ice, waves."),
+        ScriptBeat(beat_id=2, panel_ids=["p"], narration="The Marksman, a member of the five heroes, currently frozen in ice, admits defeat."),
+    ]
+    # Production order: the text-keyed dedupe runs FIRST and removes the exact repeat,
+    # so the per-name strip never faces the multi-comma form (which is syntactically
+    # ambiguous with "appositive + verb clause" and cannot be solved by regex alone).
+    from manhwa2vid.script.lint import dedupe_appositive_clauses
+
+    out = strip_repeated_appositives(dedupe_appositive_clauses(beats), bible)
+    assert out[1].narration == "The Marksman admits defeat."
+    assert "frozen in ice, admits" not in out[1].narration
+
+
+def test_rotation_keeps_name_after_gerund():
+    """"the monument containing Seo Jun-Ho is beginning to crack": prior participle +
+    next-word finite verb shipped 'containing he'. The uncertain slot keeps the name."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import rotate_protagonist_name
+
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="char_mc",
+        characters={"char_mc": CharacterProfile(id="char_mc", canonical_name="Seo Jun-Ho", tier=CharacterTier.MAIN, pronoun="he")},
+    )
+    t = "The presenter is unaware that the monument containing Seo Jun-Ho is beginning to crack."
+    out = rotate_protagonist_name(t, bible, keep=0)
+    assert "containing he" not in out
+    assert "Seo Jun-Ho" in out or "Jun-Ho" in out
+
+
+def test_beat_word_cap_chapter_budget():
+    from manhwa2vid.script.lint import beat_word_cap
+
+    config = {"script": {"words_per_panel_target": 14, "max_beat_words": 60, "words_per_chapter": 550}}
+    # panel-rich beat, 28 beats over 2 chapters: chapter share wins over the 60 ceiling
+    assert beat_word_cap(12, config, n_beats=28, n_chapters=2) == round(550 * 2 / 28 * 1.2)
+    # few panels: panel budget wins
+    assert beat_word_cap(1, config, n_beats=28, n_chapters=2) == 16
+    # no beat count: old behavior
+    assert beat_word_cap(12, config) == 60
+
+
+def test_grammar_pass_with_fake_tool():
+    """Single-replacement grammar findings auto-apply; multi-candidate ones route to the
+    rewrite as issues. No Java needed — the tool is injected."""
+    from manhwa2vid.script.grammar import grammar_pass
+
+    class Match:
+        def __init__(self, offset, length, reps, issue="grammar", msg="agreement"):
+            self.offset, self.error_length = offset, length
+            self.replacements, self.rule_issue_type = reps, issue
+            self.message, self.rule_id = msg, "X"
+
+    class FakeTool:
+        def check(self, text):
+            out = []
+            i = text.find("containing he")
+            if i >= 0:
+                out.append(Match(i + len("containing "), 2, ["him"]))
+            j = text.find("badstyle")
+            if j >= 0:
+                out.append(Match(j, 8, ["s1", "s2"]))
+            k = text.find("stylish")
+            if k >= 0:
+                out.append(Match(k, 7, ["x"], issue="style"))
+            return out
+
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p"], narration="the monument containing he is cracking"),
+        ScriptBeat(beat_id=2, panel_ids=["p"], narration="this is badstyle indeed"),
+        ScriptBeat(beat_id=3, panel_ids=["p"], narration="a stylish sentence"),
+    ]
+    out, issues = grammar_pass(beats, FakeTool())
+    assert out[0].narration == "the monument containing him is cracking"
+    assert 2 in issues and issues[2][0].startswith("grammar:")
+    assert 3 not in issues  # style category ignored wholesale
+    assert grammar_pass(beats, None) == (beats, {})
+
+
+def test_intro_role_truncates_state_dossiers():
+    from manhwa2vid.script.synopsis import _intro_role
+
+    assert _intro_role("A member of the original five heroes, currently frozen in ice.") == (
+        "A member of the original five heroes"
+    )
+    assert _intro_role("the party's rookie healer") == "the party's rookie healer"
+    assert _intro_role("") == ""

@@ -91,6 +91,18 @@ def format_synopsis_for_prompt(synopsis: ChapterSynopsis) -> str:
     return "\n".join(parts)
 
 
+def _intro_role(role: str) -> str:
+    """A role is an INTRO CLAUSE ("the party's healer"), not a state dossier.
+
+    Synopses emit sentences like "A member of the original five heroes, currently
+    frozen in ice." — a comma-embedded state clause that then gets stamped on every
+    mention by every prompt surface that prints roles. Keep the first comma-segment,
+    capped at 8 words, trailing period dropped; state facts belong in notes.
+    """
+    head = (role or "").split(",")[0].strip().rstrip(".")
+    return " ".join(head.split()[:8])
+
+
 def apply_named_cast_to_bible(bible: SeriesBible, named_cast: list[NamedCastEntry]) -> None:
     """Merge synopsis sticky names into the series bible as aliases/roles."""
     for entry in named_cast:
@@ -127,7 +139,7 @@ def apply_named_cast_to_bible(bible: SeriesBible, named_cast: list[NamedCastEntr
                     aliases=aliases,
                     descriptors=list(dict.fromkeys([*existing.descriptors, *entry.descriptors])),
                     pronoun=existing.pronoun,
-                    role=entry.role or existing.role,
+                    role=_intro_role(entry.role) or existing.role,
                     first_seen_panel=existing.first_seen_panel,
                     appearances=existing.appearances,
                     visual=existing.visual,
@@ -148,7 +160,7 @@ def apply_named_cast_to_bible(bible: SeriesBible, named_cast: list[NamedCastEntr
                 aliases=list(entry.descriptors),
                 descriptors=list(entry.descriptors),
                 pronoun="he",
-                role=entry.role,
+                role=_intro_role(entry.role),
                 visual=VisualProfile(),
                 confidence=0.7,
                 sufficiency="pending",

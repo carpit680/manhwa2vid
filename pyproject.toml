@@ -35,6 +35,9 @@ tts-kokoro = ["kokoro>=0.9", "soundfile"]
 dev = ["pytest>=8"]
 # Reference-video tooling: download captions/clips from recap channels to profile their style
 reference = ["yt-dlp"]
+# Deterministic grammar net for the script polish (needs a Java runtime; LT server
+# downloads once on first use, then fully offline)
+grammar = ["language_tool_python>=2.8"]
 
 [project.scripts]
 manhwa2vid = "manhwa2vid.cli:app"

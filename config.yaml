@@ -106,7 +106,11 @@ script:
                         # golds and the reference channel all measure ~12-17/chapter
   min_beats: 10
   max_beats: 45         # hard cap on the derived budget
-  max_beat_words: 60    # ceiling on any beat's word budget: panels x words_per_panel
+  max_beat_words: 60
+  # Chapter word budget: narration is audio-locked, so word count IS runtime.
+  # Measured references: Mamoru ~490/chapter, golds 525 and 677.
+  words_per_chapter: 550
+  grammar_check: true    # LanguageTool net over the final text (skips if unavailable)    # ceiling on any beat's word budget: panels x words_per_panel
                         # is unbounded on panel-dense titles; every measured reference
                         # sits near 40-45 words per beat
   # Name-anchor cadence: a beat keeps ONE protagonist name anchor when this many
