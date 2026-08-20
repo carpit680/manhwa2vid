@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from manhwa2vid.characters.bible import is_junk_alias, normalize_name, slugify_char_id
+from manhwa2vid.characters.bible import is_descriptor_label, is_junk_alias, normalize_name, slugify_char_id
 from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
 
 _STOPWORDS = frozenset({"a", "an", "the", "guy", "girl", "man", "woman", "person", "with", "in", "on", "and"})
@@ -49,14 +49,36 @@ def _visual_text(profile: CharacterProfile) -> str:
     return " ".join(p for p in parts if p)
 
 
+_RELATIONAL_RE = re.compile(r"\b\w[\w-]*'s\s+\w", re.I)
+
+
+def _is_relational_phrase(text: str) -> bool:
+    """"Jun-Ho's old friend" names a RELATION to Jun-Ho, not Jun-Ho.
+
+    Possessive aliases are common in glossaries and synopses ("X's mother", "X's old
+    friend") and they contain the other character's name as a substring, which is
+    exactly what fuzzy containment rewards. On the second title tested this merged the
+    Association president INTO the protagonist: his alias "Jun-Ho's old friend" scored
+    0.85 against "Seo Jun-Ho", consolidation collapsed the two profiles, the verifier's
+    cast sheet then said the protagonist was a bald association president, and every
+    beat showing him with hair was flagged as a major misattribution — 61% of the
+    script fell back to outline text from one corrupted alias.
+    """
+    return bool(_RELATIONAL_RE.search(text))
+
+
 def _name_match_score(name: str, profile: CharacterProfile) -> float:
     key = normalize_name(name)
     if not key:
         return 0.0
+    relational = _is_relational_phrase(name)
     for candidate in _all_names_for_profile(profile):
         cand = normalize_name(candidate)
         if key == cand:
             return 1.0
+        if relational or _is_relational_phrase(candidate):
+            # A relational phrase identifies someone only by EXACT match to itself.
+            continue
         if key in cand or cand in key:
             return 0.85
     return 0.0
@@ -235,11 +257,18 @@ def profiles_are_same_person(a: CharacterProfile, b: CharacterProfile) -> bool:
         return False
     if normalize_name(a.canonical_name) == normalize_name(b.canonical_name):
         return True
+    # Two profiles that BOTH carry real names may only merge on an EXACT alias identity
+    # ("Specter" listed as an alias of "Seo Jun-Ho"), never on fuzzy containment: fuzzy
+    # is how "Deok-gu" (alias "Jun-Ho's old friend") became the protagonist. Fuzzy
+    # matching remains available when at least one side is a descriptor-labeled profile,
+    # where it is the only signal there is.
+    both_named = not is_descriptor_label(a.canonical_name) and not is_descriptor_label(b.canonical_name)
+    threshold = 1.0 if both_named else 0.85
     for alias in a.aliases:
-        if not is_junk_alias(alias) and _name_match_score(alias, b) >= 0.85:
+        if not is_junk_alias(alias) and _name_match_score(alias, b) >= threshold:
             return True
     for alias in b.aliases:
-        if not is_junk_alias(alias) and _name_match_score(alias, a) >= 0.85:
+        if not is_junk_alias(alias) and _name_match_score(alias, a) >= threshold:
             return True
     # Both descriptor-only with same slug base
     if a.tier == CharacterTier.MINOR and b.tier == CharacterTier.MINOR:
