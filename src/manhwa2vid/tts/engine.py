@@ -51,7 +51,21 @@ def run_tts_and_timeline(
             progress.advance(task)
 
     panels = load_story_panels(paths)
-    timeline = build_timeline(script.beats, panels, audio_dir, config)
+    # Importance signals for panel curation: dialogue and people, from artifacts that
+    # already exist. Curation is skipped gracefully when cards are absent (old projects).
+    salience = None
+    try:
+        from manhwa2vid.panels.filter import load_story_scene_cards
+        from manhwa2vid.video.timeline import panel_salience
+
+        cards = load_story_scene_cards(paths)
+        attribution = None
+        if paths["cast_attribution_json"].exists():
+            attribution = json.loads(paths["cast_attribution_json"].read_text(encoding="utf-8"))
+        salience = panel_salience(cards, attribution)
+    except Exception:
+        salience = None
+    timeline = build_timeline(script.beats, panels, audio_dir, config, salience=salience)
     save_json(paths["timeline_json"], timeline)
     console.print(
         f"[green]TTS complete[/] — {len(script.beats)} beats, "

@@ -201,6 +201,10 @@ class ScriptBeat(BaseModel):
     narration: str
     estimated_seconds: float | None = None
     character_ids: list[str] = Field(default_factory=list)
+    # Panels this beat's narration DEPENDS on — the moment named, the emotion described,
+    # the blow landed. Marked by the writer (which read the evidence), editable in the
+    # draft markdown, honored by timeline curation: key panels are always shown.
+    key_panel_ids: list[str] = Field(default_factory=list)
 
 
 class ScriptOutlineBeat(BaseModel):
@@ -259,6 +263,7 @@ class Timeline(BaseModel):
 class PipelineStage(str, Enum):
     INGEST = "ingest"
     PANELS = "panels"
+    STORY = "story"
     SCOUT = "scout"
     OCR = "ocr"
     SCENE = "scene"
@@ -285,6 +290,7 @@ def series_paths(repo_root: Path, series_slug: str) -> dict[str, Path]:
         "character_quest": base / "character_quest.json",
         "scout_dir": scout,
         "scout_manifest": scout / "manifest.json",
+        "story_map": base / "story_map.json",
     }
 
 

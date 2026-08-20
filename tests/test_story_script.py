@@ -508,3 +508,30 @@ def test_closing_panel_terms_are_positional_not_series_specific():
     cards[-1] = SceneCard(panel_ids=["p0008_01"], source_text='sys: "[SEAL REMOVAL POSSIBLE.]"', action="")
     terms = _closing_panel_terms(cards)
     assert "seal" in terms and "removal" in terms and "possible" in terms
+
+
+def test_key_panels_round_trip_through_draft_markdown():
+    """The `| key:` extension of the load-bearing panels comment must survive the
+    draft -> final -> beats round trip, and stray ids must not import."""
+    from manhwa2vid.models import ScriptBeat, ScriptDraft
+    from manhwa2vid.script.generate import _beats_to_markdown, _parse_markdown_beats
+
+    draft = ScriptDraft(
+        title="T", chapters="1", hook="h",
+        beats=[
+            ScriptBeat(beat_id=1, panel_ids=["p0001_01", "p0001_02"], narration="First beat.",
+                       key_panel_ids=["p0001_02"]),
+            ScriptBeat(beat_id=2, panel_ids=["p0002_01"], narration="Second beat."),
+        ],
+    )
+    md = _beats_to_markdown(draft)
+    assert "| key: p0001_02" in md
+
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "script.final.md"
+        f.write_text(md, encoding="utf-8")
+        beats = _parse_markdown_beats(f)
+    assert beats[0].key_panel_ids == ["p0001_02"]
+    assert beats[1].key_panel_ids == []

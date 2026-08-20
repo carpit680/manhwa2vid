@@ -33,6 +33,91 @@ def audio_duration(path: Path) -> float:
     return 3.0
 
 
+def panel_salience(
+    cards: list[Any],
+    attribution: list[Any] | None = None,
+) -> dict[str, float]:
+    """Deterministic per-panel importance from evidence that already exists.
+
+    Used to rank panels a beat's audio cannot afford to show in full. Signals, by
+    weight: on-panel dialogue (the story's engine) > people present > nothing. Position
+    bonuses (first/last of beat) are applied at selection time, not here, because the
+    same panel can sit in different positions in different beats.
+    """
+    scores: dict[str, float] = {}
+    for card in cards or []:
+        has_dialogue = bool(getattr(card, "source_text", "") or (card.get("source_text") if isinstance(card, dict) else ""))
+        pids = getattr(card, "panel_ids", None) or (card.get("panel_ids") if isinstance(card, dict) else []) or []
+        for pid in pids:
+            scores[pid] = max(scores.get(pid, 0.0), 3.0 if has_dialogue else 0.0)
+    for row in attribution or []:
+        people = getattr(row, "people", None) or (row.get("people") if isinstance(row, dict) else []) or []
+        pid = getattr(row, "panel_id", None) or (row.get("panel_id") if isinstance(row, dict) else "")
+        if pid:
+            scores[pid] = scores.get(pid, 0.0) + min(len(people), 2) * 0.75
+    return scores
+
+
+def select_panels_for_beat(
+    panel_ids: list[str],
+    key_ids: list[str],
+    salience: dict[str, float],
+    audio_duration_s: float,
+    target_s: float,
+    drop_floor: float,
+    *,
+    keep_last: bool = False,
+) -> list[str]:
+    """Importance-first panel selection under a pace budget.
+
+    The reference channel shows roughly half the panels at ~2s each; which half is an
+    editorial judgment, not a stride. Selection order:
+      1. KEY panels — the ones the writer said its narration depends on — are always
+         shown, even past the pace budget (a fight or an emotional run may simply need
+         more panels; dwell compresses toward `drop_floor` instead of dropping them).
+      2. Remaining pace-budget slots fill by salience (dialogue > people > position).
+      3. Reading order is always preserved; a beat never goes below ONE panel — an empty
+         beat would drop its narration audio from the mix and desync everything after.
+    The absolute `drop_floor` cap still applies as the unreadability limit, keys first.
+    """
+    if not panel_ids:
+        return panel_ids
+    affordable = max(1, round(audio_duration_s / max(target_s, 0.1)))
+    hard_cap = max(1, int(audio_duration_s // drop_floor)) if drop_floor > 0 else len(panel_ids)
+
+    def _pos_bonus(pid: str) -> float:
+        if pid == panel_ids[0] or pid == panel_ids[-1]:
+            return 1.0
+        return 0.0
+
+    chosen = {p for p in panel_ids if p in set(key_ids)}
+    if keep_last:
+        chosen.add(panel_ids[-1])
+    if not chosen:
+        chosen.add(max(panel_ids, key=lambda p: (salience.get(p, 0.0) + _pos_bonus(p))))
+
+    remaining = sorted(
+        (p for p in panel_ids if p not in chosen),
+        key=lambda p: -(salience.get(p, 0.0) + _pos_bonus(p)),
+    )
+    for pid in remaining:
+        if len(chosen) >= affordable:
+            break
+        chosen.add(pid)
+
+    if len(chosen) > hard_cap:
+        keys_first = [p for p in panel_ids if p in chosen and p in set(key_ids)][:hard_cap]
+        if keep_last and panel_ids[-1] not in keys_first and len(keys_first) < hard_cap:
+            keys_first.append(panel_ids[-1])
+        others = sorted(
+            (p for p in chosen if p not in keys_first),
+            key=lambda p: -(salience.get(p, 0.0) + _pos_bonus(p)),
+        )
+        chosen = set(keys_first) | set(others[: max(0, hard_cap - len(keys_first))])
+
+    return [p for p in panel_ids if p in chosen]
+
+
 def budget_panels_for_beat(
     panel_ids: list[str],
     audio_duration_s: float,
@@ -170,11 +255,13 @@ def build_timeline(
     panels: list[Panel],
     audio_dir: Path,
     config: dict[str, Any],
+    salience: dict[str, float] | None = None,
 ) -> Timeline:
     min_sec = float(get_nested(config, "video", "min_panel_seconds", default=2.0))
     max_sec = float(get_nested(config, "video", "max_panel_seconds", default=8.0))
     fps = int(get_nested(config, "video", "fps", default=30))
     drop_floor = float(get_nested(config, "video", "panel_drop_floor_seconds", default=1.0))
+    target_s = float(get_nested(config, "video", "target_panel_seconds", default=2.5))
 
     panel_map = {p.id: p for p in panels}
     all_ids = [p.id for p in panels]
@@ -192,7 +279,21 @@ def build_timeline(
         if not panel_ids:
             continue
 
-        budgeted = budget_panels_for_beat(panel_ids, duration, drop_floor)
+        if salience is not None:
+            # Importance-first curation: writer-marked key panels always shown, the rest
+            # by salience under the pace budget. The last beat's final panel is pinned —
+            # the chapter's reveal lives there by construction.
+            budgeted = select_panels_for_beat(
+                panel_ids,
+                beat.key_panel_ids,
+                salience,
+                duration,
+                target_s,
+                drop_floor,
+                keep_last=beat.beat_id == beats[-1].beat_id,
+            )
+        else:
+            budgeted = budget_panels_for_beat(panel_ids, duration, drop_floor)
         dropped += len(panel_ids) - len(budgeted)
         panel_ids = budgeted
 

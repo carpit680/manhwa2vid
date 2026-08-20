@@ -157,6 +157,13 @@ tts:
   voice: onyx
   speed: 0.85
 
+story:
+  # The series brief-read: skim chapters once, before writing any of them. Sweet spot
+  # from manhwa structure (arcs ~10-15 ch; premise+trajectory set by end of arc two):
+  dense_chapters: 24     # foundation read: chapters 0..N
+  rolling_ahead: 12      # ~one arc of forward knowledge past the current project's range
+  pages_per_chapter: 12  # stride-sample per chapter; ONE vision call each
+
 video:
   width: 1920
   height: 1080
@@ -166,6 +173,10 @@ video:
   # Panels are dropped (not flashed) when a beat's narration cannot show them this long.
   # Lower than min_panel_seconds on purpose: mild compression is fine, 0.4s strobing is not.
   panel_drop_floor_seconds: 1.0
+  # Pace budget for importance-first curation: the timeline shows ~audio/target panels
+  # per beat, chosen by writer-marked key panels + salience. The reference channel runs
+  # ~2s per shown panel; 2.5 keeps a touch more air.
+  target_panel_seconds: 2.5
   # Timeline QA warns when a single panel dwells longer than this multiple of
   # max_panel_seconds — the signature of a beat whose narration outruns its panel count.
   dwell_warn_multiplier: 1.5

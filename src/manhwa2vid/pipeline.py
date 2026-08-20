@@ -68,6 +68,11 @@ def run_stage(
     elif stage == PipelineStage.PANELS:
         split_panels(meta, paths, config, force=force)
         mark_stage(checkpoint, stage, paths)
+    elif stage == PipelineStage.STORY:
+        from manhwa2vid.story.brief import run_story_pass
+
+        run_story_pass(meta, paths, config, force=force)
+        mark_stage(checkpoint, stage, paths)
     elif stage == PipelineStage.SCOUT:
         run_character_scout(meta, paths, config, force=force)
         mark_stage(checkpoint, stage, paths)
@@ -107,6 +112,7 @@ def run_all_until_review(project_dir: Path, force: bool = False, force_past_qa: 
     stages = [
         PipelineStage.INGEST,
         PipelineStage.PANELS,
+        PipelineStage.STORY,
         PipelineStage.SCOUT,
         PipelineStage.OCR,
         PipelineStage.CAST,

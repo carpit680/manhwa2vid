@@ -121,6 +121,12 @@ def run_panels(project: Path = typer.Option(..., "--project"), force: bool = Fal
     run_stage(project.resolve(), PipelineStage.PANELS, force=force)
 
 
+@run_app.command("story")
+def run_story(project: Path = typer.Option(..., "--project"), force: bool = False) -> None:
+    """Brief-read pass over the series: chapter gists for story-so-far / story-ahead."""
+    run_stage(project.resolve(), PipelineStage.STORY, force=force)
+
+
 @run_app.command("scout")
 def run_scout(project: Path = typer.Option(..., "--project"), force: bool = False) -> None:
     run_stage(project.resolve(), PipelineStage.SCOUT, force=force)

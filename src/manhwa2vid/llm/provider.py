@@ -545,6 +545,17 @@ class MockLLMProvider(LLMProvider):
             ids.append(stem if stem.startswith("p") else f"panel_{stem}")
         if "fact-check" in prompt.lower():
             return json.dumps({"unsupported": [], "severity": "none"})
+        if "series story map by skimming" in prompt:
+            return json.dumps(
+                {
+                    "summary": "The hero survives an ordeal and sets out toward the tower.",
+                    "key_events": ["hero survives", "sets out"],
+                    "characters_introduced": [{"name": "Hero", "role": "protagonist"}],
+                    "world_facts": ["gates lead to dungeons"],
+                    "cliffhanger": "a new floor opens",
+                    "hook_moments": ["the hero shatters the ice"],
+                }
+            )
         if "panel sample" in prompt.lower():
             return json.dumps(
                 {

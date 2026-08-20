@@ -112,15 +112,33 @@ def _cast_context_for_beats(
 
 
 def _story_so_far(bible: SeriesBible, meta: ProjectMeta) -> str:
-    if not bible.chapter_summaries:
-        return "(first chapter — no prior story)"
+    """Chapters BEFORE this range: approved-script summaries, gaps filled by the brief-read.
+
+    chapter_summaries only exist for chapters whose scripts a human approved; the story
+    map covers everything the brief-read pass skimmed. An approved summary wins when
+    both exist — it reflects the actual narration voice.
+    """
+    from manhwa2vid.story.brief import load_story_map, story_so_far_from_map
+
+    merged: dict[str, str] = story_so_far_from_map(load_story_map(meta.series_slug), meta)
     chapter_key = meta.chapters.split("-")[0].strip()
+    for ch, summary in bible.chapter_summaries.items():
+        if ch != chapter_key:
+            merged[ch] = summary
+    if not merged:
+        return "(first chapter — no prior story)"
     prior = [
         f"Ch {ch}: {summary}"
-        for ch, summary in sorted(bible.chapter_summaries.items(), key=lambda x: x[0])
-        if ch != chapter_key
+        for ch, summary in sorted(merged.items(), key=lambda x: int(x[0]) if x[0].isdigit() else 0)
     ]
-    return "\n".join(prior) if prior else "(first chapter — no prior story)"
+    return "\n".join(prior)
+
+
+def _story_ahead(meta: ProjectMeta) -> str:
+    """Forward knowledge from the brief-read: mechanics and trajectory, never spoilers."""
+    from manhwa2vid.story.brief import load_story_map, story_ahead_from_map
+
+    return story_ahead_from_map(load_story_map(meta.series_slug), meta)
 
 
 def _beats_to_markdown(draft: ScriptDraft) -> str:
@@ -136,7 +154,11 @@ def _beats_to_markdown(draft: ScriptDraft) -> str:
         lines.extend(
             [
                 f"### Beat {beat.beat_id}",
-                f"<!-- panels: {', '.join(beat.panel_ids)} -->",
+                (
+                    f"<!-- panels: {', '.join(beat.panel_ids)}"
+                    + (f" | key: {', '.join(beat.key_panel_ids)}" if beat.key_panel_ids else "")
+                    + " -->"
+                ),
                 "",
                 beat.narration,
                 "",
@@ -152,14 +174,18 @@ def _parse_markdown_beats(path: Path) -> list[ScriptBeat]:
     text = path.read_text(encoding="utf-8")
     beats: list[ScriptBeat] = []
     current_panels: list[str] = []
+    current_keys: list[str] = []
     current_lines: list[str] = []
     beat_id = 0
 
     for line in text.splitlines():
         if line.startswith("<!-- panels:"):
-            current_panels = [
+            body = line.replace("<!-- panels:", "").replace("-->", "")
+            panels_part, _, key_part = body.partition("|")
+            current_panels = [p.strip() for p in panels_part.split(",") if p.strip()]
+            current_keys = [
                 p.strip()
-                for p in line.replace("<!-- panels:", "").replace("-->", "").split(",")
+                for p in key_part.replace("key:", "").split(",")
                 if p.strip()
             ]
         elif line.startswith("### Beat"):
@@ -169,6 +195,7 @@ def _parse_markdown_beats(path: Path) -> list[ScriptBeat]:
                         beat_id=beat_id,
                         panel_ids=current_panels or [f"unknown_{beat_id}"],
                         narration=" ".join(current_lines).strip(),
+                        key_panel_ids=[k for k in current_keys if k in current_panels],
                     )
                 )
             beat_id += 1
@@ -188,6 +215,7 @@ def _parse_markdown_beats(path: Path) -> list[ScriptBeat]:
                 beat_id=beat_id,
                 panel_ids=current_panels or [f"unknown_{beat_id}"],
                 narration=" ".join(current_lines).strip(),
+                key_panel_ids=[k for k in current_keys if k in current_panels],
             )
         )
     return beats
@@ -379,7 +407,8 @@ def _run_outline_pass(
         f"Chapter synopsis (arc + sticky cast; facts are a checklist, not free reassignment):\n"
         f"{format_synopsis_for_prompt(synopsis)}\n\n"
         f"Story so far:\n{_story_so_far(bible, meta)}\n\n"
-        f"Character bible:\n{format_bible_for_prompt(bible)}\n\n"
+        + (f"Story ahead (context only — never previewed in beats):\n{_story_ahead(meta)}\n\n" if _story_ahead(meta) else "")
+        + f"Character bible:\n{format_bible_for_prompt(bible)}\n\n"
         f"SEEDED beats (KEEP panel_ids; smooth plot_beat wording only):\n"
         f"{format_seeded_outline_for_prompt(seeded, cards)}\n\n"
         f"Full panel evidence:\n{_scene_cards_to_context(cards, bible)}"
@@ -595,6 +624,15 @@ def _narration_chunk_user(
         f"{format_synopsis_for_prompt(synopsis)}\n\n"
         f"Story so far:\n{_story_so_far(bible, meta)}\n"
         + (
+            "\nStory AHEAD (from a brief read of later chapters). Use ONLY to keep names,"
+            " emphasis and WORLD MECHANICS consistent with where the story goes — e.g."
+            " clarify a system rule the way the reference channel pulls mechanics"
+            " backward. NEVER reveal or foreshadow future PLOT events:\n"
+            + _story_ahead(meta) + "\n"
+            if _story_ahead(meta)
+            else ""
+        )
+        + (
             "Narration already written this chapter (continue seamlessly, do not repeat):\n"
             + "\n".join(running_summary[-12:])
             + "\n"
@@ -762,11 +800,16 @@ def _run_narration_pass(
             whole_script=len(chunk) == len(outline_beats) and len(chunk) > 1,
         )
         got: dict[int, str] = {}
+        got_keys: dict[int, list[str]] = {}
         try:
             data = _sighted_complete_json(llm, system, user, chunk, paths, config)
             for item in data.get("beats", []):
                 if isinstance(item, dict) and str(item.get("narration", "")).strip():
-                    got[int(item.get("beat_id", -1))] = str(item["narration"]).strip()
+                    bid = int(item.get("beat_id", -1))
+                    got[bid] = str(item["narration"]).strip()
+                    keys = item.get("key_panels")
+                    if isinstance(keys, list):
+                        got_keys[bid] = [str(k).strip() for k in keys if str(k).strip()]
         except Exception as exc:
             console.print(f"[yellow]Narration chunk failed, retrying per beat:[/] {exc}")
 
@@ -798,6 +841,9 @@ def _run_narration_pass(
                 panel_ids=list(ob.panel_ids),  # authoritative — the LLM cannot drift panels
                 narration=narration,
                 character_ids=list(ob.character_ids),
+                # Only ids actually in this beat count; the model echoes ids and a stray
+                # one must not pin a panel from another beat.
+                key_panel_ids=[k for k in got_keys.get(ob.beat_id, []) if k in ob.panel_ids],
             )
             beats_out.append(beat)
             running_summary.append(f"Beat {ob.beat_id}: {narration[:180]}")

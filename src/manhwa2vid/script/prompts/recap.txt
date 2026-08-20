@@ -65,9 +65,12 @@ THE TEN RULES:
 
 {naming_priority_rules}
 
-Return JSON (one entry per outline beat, same beat_id, narration only):
+Return JSON (one entry per outline beat, same beat_id):
 {{
   "beats": [
-    {{"beat_id": 1, "narration": "narration text for this beat"}}
+    {{"beat_id": 1, "narration": "narration text for this beat",
+      "key_panels": ["panel ids from THIS beat that the narration depends on — the moment
+                      named, the emotion described, the blow landed. Usually 2-5. The
+                      video shows these for certain; unlisted panels may be dropped."]}}
   ]
 }}
