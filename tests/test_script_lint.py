@@ -1094,3 +1094,29 @@ def test_lint_and_rewrite_preserves_key_panel_ids(monkeypatch, tmp_path):
     bible = SeriesBible(series_slug="s", title="S")
     out = lint_and_rewrite_script(beats, bible, tmp_path / "missing.json", {"characters": {}})
     assert out[0].key_panel_ids == ["p0001_02"]
+
+
+def test_derive_key_panels_from_narration_overlap():
+    """Self-reported key_panels vanish under long-output pressure; the narration itself
+    shows which panels it used, so derivation is deterministic."""
+    from manhwa2vid.models import SceneCard
+    from manhwa2vid.script.lint import derive_key_panels
+
+    cards = [
+        SceneCard(panel_ids=["p1"], source_text='Kim: "THE SEAL CAN BE REMOVED."', action="Kim reads the message"),
+        SceneCard(panel_ids=["p2"], source_text="", action="a wide empty hallway"),
+        SceneCard(panel_ids=["p3"], source_text='Bak: "LET US DRINK."', action="Bak raises a cup"),
+    ]
+    beats = [
+        ScriptBeat(
+            beat_id=1, panel_ids=["p1", "p2", "p3"],
+            narration="Kim reads the message that the seal can be removed, and Bak raises a cup to drink.",
+        )
+    ]
+    out = derive_key_panels(beats, cards)
+    assert "p1" in out[0].key_panel_ids and "p3" in out[0].key_panel_ids
+    assert "p2" not in out[0].key_panel_ids
+
+    # writer-provided keys are never overridden
+    manual = [ScriptBeat(beat_id=1, panel_ids=["p1", "p2"], narration="anything", key_panel_ids=["p2"])]
+    assert derive_key_panels(manual, cards)[0].key_panel_ids == ["p2"]

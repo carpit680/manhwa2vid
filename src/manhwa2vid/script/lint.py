@@ -1824,3 +1824,51 @@ def repair_subject_comma(beats: list[ScriptBeat]) -> list[ScriptBeat]:
         text = _SUBJECT_COMMA_VERB_RE.sub(r"\1 \2", beat.narration)
         out.append(beat.model_copy(update={"narration": text}) if text != beat.narration else beat)
     return out
+
+
+def derive_key_panels(
+    beats: list[ScriptBeat],
+    scene_cards: list[SceneCard] | None,
+    *,
+    max_keys: int = 5,
+    min_overlap: float = 0.18,
+) -> list[ScriptBeat]:
+    """Mark the panels each beat's narration actually used — deterministically.
+
+    The narration schema asked the writer to self-report key_panels; on whole-script
+    calls (28 beats in one response) the model omitted the field every time while the
+    small retry calls included it — compliance falls exactly when output pressure
+    rises. But self-report was never necessary: the narration itself shows which panels
+    it drew on. A panel whose dialogue/action content overlaps the beat's narration IS
+    a panel the narration depends on. Writer-provided keys are kept when present;
+    derivation fills the gaps.
+    """
+    if not scene_cards:
+        return beats
+    by_panel: dict[str, str] = {}
+    for card in scene_cards:
+        text = f"{card.source_text or ''} {card.action or ''}"
+        for pid in card.panel_ids:
+            by_panel[pid] = text
+    out: list[ScriptBeat] = []
+    for beat in beats:
+        if beat.key_panel_ids:
+            out.append(beat)
+            continue
+        narration_stems = _stemmed_words(beat.narration)
+        if not narration_stems:
+            out.append(beat)
+            continue
+        scored: list[tuple[float, str]] = []
+        for pid in beat.panel_ids:
+            panel_stems = _stemmed_words(by_panel.get(pid, ""))
+            if not panel_stems:
+                continue
+            overlap = len(narration_stems & panel_stems) / len(panel_stems)
+            if overlap >= min_overlap:
+                scored.append((overlap, pid))
+        scored.sort(reverse=True)
+        keys = [pid for _s, pid in scored[:max_keys]]
+        keys = [pid for pid in beat.panel_ids if pid in keys]  # reading order
+        out.append(beat.model_copy(update={"key_panel_ids": keys}) if keys else beat)
+    return out

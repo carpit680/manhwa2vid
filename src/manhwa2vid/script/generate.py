@@ -723,7 +723,8 @@ def _sighted_complete_json(
         try:
             debug_dir = paths["root"] / "debug"
             debug_dir.mkdir(exist_ok=True)
-            (debug_dir / "narration_response.json").write_text(raw, encoding="utf-8")
+            with (debug_dir / "narration_responses.jsonl").open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"n_beats": len(beats), "raw": raw}) + "\n")
         except Exception:
             pass
         return json.loads(raw)
@@ -818,6 +819,8 @@ def _run_narration_pass(
                     keys = item.get("key_panels")
                     if isinstance(keys, list):
                         got_keys[bid] = [str(k).strip() for k in keys if str(k).strip()]
+            returned = sum(1 for v in got_keys.values() if v)
+            console.print(f"[dim]key_panels returned on {returned}/{len(chunk)} beats[/]")
         except Exception as exc:
             console.print(f"[yellow]Narration chunk failed, retrying per beat:[/] {exc}")
 
@@ -853,6 +856,11 @@ def _run_narration_pass(
                 # one must not pin a panel from another beat.
                 key_panel_ids=[k for k in got_keys.get(ob.beat_id, []) if k in ob.panel_ids],
             )
+            if got_keys.get(ob.beat_id) and not beat.key_panel_ids:
+                console.print(
+                    f"[yellow]beat {ob.beat_id}: all {len(got_keys[ob.beat_id])} key ids "
+                    f"failed containment (model echoed foreign ids)[/]"
+                )
             beats_out.append(beat)
             running_summary.append(f"Beat {ob.beat_id}: {narration[:180]}")
             for name in _bible_names_in_text(narration, bible):
@@ -1143,6 +1151,7 @@ def generate_script(
         strip_appearance_descriptors,
         dedupe_cross_beat_sentences,
         strip_trailing_closer_sentence,
+        derive_key_panels,
     )
 
     beats = strip_repeated_appositives(beats, bible)
@@ -1169,6 +1178,7 @@ def generate_script(
     beats = dedupe_intra_beat_sentences(beats)
     beats = dedupe_cross_beat_sentences(beats)
     beats = trim_overlong_beats(beats, config)
+    beats = derive_key_panels(beats, cards)
     beats = strip_trailing_closer_sentence(beats)
     beats = enforce_mc_name_budget(beats, bible, config)
 
