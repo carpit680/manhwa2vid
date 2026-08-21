@@ -1781,7 +1781,16 @@ def lint_closer_reveal(
         return {}
     closer = beats[-1]
     low = closer.narration.lower()
-    if any(t in low for t in terms):
+    hits = sum(1 for t in terms if t in low)
+    # A bracketed system message in the final panels is the genre's reveal device; a
+    # closer that "lands" it must carry its content, not one stray noun. The lenient
+    # single-term check let a closer narrating only the FAILURE half ("...stats fail
+    # to melt her seal") pass on the word "seal" while the reveal (the seal CAN be
+    # removed) was gone. Chapters ending on plain dialogue keep the lenient check —
+    # their endings have no payload sentence to demand.
+    strict = "[" in tail_text and "]" in tail_text
+    required = 2 if strict else 1
+    if hits >= min(required, len(terms)):
         return {}
     return {closer.beat_id: [f"dropped_reveal:{' '.join(tail_text.split())[:220]}"]}
 

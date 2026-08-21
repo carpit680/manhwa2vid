@@ -1252,3 +1252,23 @@ def test_intro_role_truncates_state_dossiers():
     )
     assert _intro_role("the party's rookie healer") == "the party's rookie healer"
     assert _intro_role("") == ""
+
+
+def test_closer_reveal_strict_mode_for_system_message_endings():
+    """A closer narrating only the FAILURE half passed on the single word 'seal' while
+    the reveal (the seal CAN be removed) was gone. Bracketed system messages demand
+    >=2 content terms; plain-dialogue endings keep the lenient check."""
+    from manhwa2vid.models import SceneCard
+    from manhwa2vid.script.lint import lint_closer_reveal
+
+    cards = [
+        SceneCard(panel_ids=["p0024_01"], source_text='sys: "[YOU ARE ABLE TO REMOVE THE SEAL ON THE ICE STATUS.]"', action=""),
+        SceneCard(panel_ids=["p0024_03"], source_text='"WHAT?!"', action=""),
+    ]
+    bad = [ScriptBeat(beat_id=1, panel_ids=["p0024_01"], narration="His stats fail to melt her seal.")]
+    assert 1 in lint_closer_reveal(bad, cards)
+    good = [ScriptBeat(beat_id=1, panel_ids=["p0024_01"], narration="A message says his skill can remove the seal on their icy status.")]
+    assert lint_closer_reveal(good, cards) == {}
+    dialogue = [SceneCard(panel_ids=["p1"], source_text='All: "LET US ENTER THE DUNGEON!"', action="")]
+    sl = [ScriptBeat(beat_id=1, panel_ids=["p1"], narration="He steps into the dungeon gate.")]
+    assert lint_closer_reveal(sl, dialogue) == {}

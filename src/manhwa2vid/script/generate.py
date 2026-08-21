@@ -1057,9 +1057,16 @@ def generate_script(
     tail_terms = _closing_panel_terms(cards, tail=3)
     late_text = beats[-1].narration.lower() if beats else ""
     covered = [t for t in tail_terms if t in late_text]
+    # System-message endings demand their content, not one stray noun — mirrors
+    # lint_closer_reveal's strict mode and the failure that motivated it.
+    tail_raw = ""
+    if cards:
+        by_p = {pid: (c.source_text or "") for c in cards for pid in c.panel_ids}
+        tail_raw = " ".join(by_p[p] for p in sorted(by_p)[-3:])
+    required = 2 if ("[" in tail_raw and "]" in tail_raw) else 1
     report.add(
         "reveal-coverage",
-        bool(covered) if tail_terms else True,
+        (len(covered) >= min(required, len(tail_terms))) if tail_terms else True,
         "" if not tail_terms or covered else (
             f"none of the final panels' content ({', '.join(sorted(tail_terms)[:6])}) "
             "appears in the last two beats — the ending was compressed away"
