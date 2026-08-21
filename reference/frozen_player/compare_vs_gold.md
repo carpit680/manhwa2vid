@@ -4,22 +4,22 @@ Reference: `reference/frozen_player/ch1-2_gold_script.md` · Candidate: `project
 
 ## Content (does it tell the same story?)
 
-- fact_coverage: **0.46** of 357 salient reference terms
-- order_tau: **0.4** (1.0 = same story order, 0 = unrelated, <0 = reversed)
-- missing (first 25): cavern, swordsman, steps, etched, snowflakes, brands, descends, crowned, silhouette, gown, doesn't, bait, aren't, kind, glowing, killing, he'll, works, waste, conjures, sword, collide, midair, duel, apart
+- fact_coverage: **0.41** of 357 salient reference terms
+- order_tau: **0.43** (1.0 = same story order, 0 = unrelated, <0 = reversed)
+- missing (first 25): inside, cavern, swordsman, steps, etched, snowflakes, brands, descends, crowned, silhouette, gown, feels, abandoning, doesn't, bait, aren't, kind, drawing, glowing, blade, killing, he'll, ignorant, works, conjures
 
 ## Style (identical computation on both texts)
 
 | metric | reference | candidate |
 |---|---|---|
 | beats | 25 | 28 |
-| words | 1048 | 1225 |
-| avg_sentence_words | 13.1 | 15.5 |
-| caption_markers_per_100w | 0.0 | 0.08 |
-| speech_verbs_per_100w | 1.24 | 2.04 |
-| connectives_per_100w | 2.39 | 2.29 |
-| max_consecutive_pronoun_starts | 5 | 2 |
-| pronoun_start_fraction | 0.2 | 0.25 |
+| words | 1048 | 908 |
+| avg_sentence_words | 13.1 | 15.4 |
+| caption_markers_per_100w | 0.0 | 0.0 |
+| speech_verbs_per_100w | 1.24 | 3.19 |
+| connectives_per_100w | 2.39 | 2.64 |
+| max_consecutive_pronoun_starts | 5 | 3 |
+| pronoun_start_fraction | 0.2 | 0.34 |
 
 ## Side by side
 
@@ -33,9 +33,9 @@ the Frost Queen. She descends from her throne of ice, a crowned silhouette in a
 gown of frost, and asks how it feels to stand here after abandoning his
 comrades to die.
 
-**candidate** `p0001_02, p0001_03, p0001_04, p0001_05, p0001_06, p0001_07`
+**candidate** `p0001_02, p0001_03, p0001_04, p0001_05, p0001_06, p0001_07, p0002_01, p0002_02, p0002_03`
 
-Seo Jun-Ho, stands in the vast throne room of the Frost Queen’s Nest to face the final boss. A system alert confirms his encounter as Frost Queen, the final boss of the Antarctic gate, asks if abandoning comrades feels good. He replies that his team won't fall easily and asks if the nightmare ends once she is dead.
+Seo Jun-Ho, a legendary hero known as Specter faces the Frost Queen, the boss of the final Antarctic dungeon. He stands in her frozen throne room while a system notification confirms their encounter. The monster asks if he regrets leaving his friends. He replies that they won't croak easily. She mocks his ignorance with a laugh.
 
 ### Beat 2
 
@@ -46,9 +46,9 @@ says, drawing a glowing blade — if killing her ends this, he'll do it here.
 She only laughs, calling him ignorant of how this world really works. He tells
 her to be quiet. He has no time to waste.
 
-**candidate** `p0002_01, p0002_02, p0002_03, p0002_04, p0002_05, p0002_06`
+**candidate** `p0002_04, p0002_05, p0002_06, p0002_09, p0002_10, p0002_11`
 
-The Frost Queen sneers and laughs at his statement, calling him ignorant, but he commands her to shut up and readies his dark blade.
+Jun-Ho snaps at Frost Queen and promises death as they clash in mid-air.
 
 ### Beat 3
 
@@ -58,9 +58,9 @@ The queen conjures a sword of pure ice, and they collide in midair. The duel
 tears the throne room apart — ice shards, black flashes, magic detonating off
 the walls. She hurls a point-blank blast; he slips past it by a breath.
 
-**candidate** `p0002_09, p0002_10, p0002_11, p0003_01, p0003_02, p0003_03`
+**candidate** `p0003_01, p0003_02, p0003_03, p0003_04, p0003_05, p0003_06, p0004_01, p0004_02, p0004_03, p0004_04, p0004_05`
 
-Jun-Ho's boot shatters the frozen floor as he launches into the frigid air. He meets the Frost Queen in a violent collision of dark and light energy. They trade a flurry of lethal strikes across the vast throne room. As sparks fly from their crossing blades, a massive surge of ice energy finally forces him backward.
+Jun-Ho clashes with Frost Queen then stands victorious in her ruined throne room.
 
 ### Beat 4
 
@@ -70,9 +70,9 @@ One final exchange, and the hall falls silent. The Frost Queen kneels, beaten.
 She admits she had fun. He can't say the same. But before his blade can finish
 it, her body begins to glow — and the ice turns on him, crawling up his arms.
 
-**candidate** `p0003_04, p0003_05, p0003_06, p0004_01, p0004_02, p0004_03, p0004_04, p0004_05`
+**candidate** `p0005_01, p0005_02, p0005_04, p0005_06, p0005_08, p0005_10`
 
-The Frost Queen smiles and gathers a blinding sphere of energy in her palm. Jun-Ho gasps in shock as a massive explosion of light and ice shatters the throne room. He lands in a low crouch while shards of the frozen floor rain down around him. Finally, he stands victoriously over his defeated foe in the quiet hall.
+As she dissolves into light, the Frost Queen smiles and admits that their duel was fun. Jun-Ho stares back coldly, replying that he cannot say the same. He delivers one final strike, but his eyes widen when a thick frost crawls up his skin. He cries out as the relentless ice consumes his face.
 
 ### Beat 5
 
@@ -82,9 +82,9 @@ A system message explains the price: he is absorbing the Frost Queen's power,
 and his body will hibernate until her nucleus is fully absorbed. Frost swallows
 him whole, sword still in hand.
 
-**candidate** `p0005_01, p0005_02, p0005_04, p0005_06, p0005_08, p0005_10, p0005_11`
+**candidate** `p0005_11, p0005_12, p0005_14, p0006_02, p0006_03, p0006_04, p0006_05, p0006_06, p0006_07, p0006_08, p0006_09`
 
-Frost Queen smiles while fading into light, admitting the battle was fun. Jun-Ho looks on coldly and replies that he cannot say the same. One final strike triggers a blinding explosion, but he gasps as ice suddenly races across his skin. A system alert mandates hibernation, a restorative sleep, to absorb her nucleus.
+A system prompt alerts Jun-Ho that his body must hibernate to absorb her nucleus, flashing back to when Khali, a heavily tattooed member of the original five heroes, punched an ice wall in frustration. Skaya nominated him to climb the final stairs alone, which was supported by The Marksman due to elemental disadvantages.
 
 ### Beat 6
 
@@ -94,9 +94,9 @@ Seventy-six hours earlier, in Antarctica, five hunters stand at the mouth of
 humanity's final dungeon — the Frost Queen's Nest. The rule carved into it is
 simple and cruel: only one person may climb the stairs.
 
-**candidate** `p0005_12, p0005_14, p0006_02, p0006_03, p0006_04, p0006_05, p0006_06, p0006_07, p0006_08, p0006_09`
+**candidate** `p0007_02, p0007_03, p0007_04, p0007_05, p0007_06, p0007_07`
 
-Twenty-five years ago in Antarctica, Khali, the tattooed giant of the original five-member hero party, and Skaya, the white-haired healer of the original five-member hero party, debated who should go up the stairs.
+Khali clicks his tongue and admits his frustration about staying behind. He eventually concedes because no one else compares to Specter. The Swordswoman observes that his fast agreement confirms their unanimous vote. Khali barks a retort at her jab, yet she remains serious about sending Jun-Ho alone.
 
 ### Beat 7
 
@@ -107,9 +107,9 @@ person up alone means telling the other four to die. Skaya, the party's
 white-haired healer, calms him: time is short, and she believes Specter should
 be the one to go.
 
-**candidate** `p0007_02, p0007_03, p0007_04, p0007_05, p0007_06, p0007_07`
+**candidate** `p0007_08, p0007_09, p0007_10, p0007_11, p0008_02, p0008_03`
 
-Khali reluctantly yields to the decision, and Skaya, who believes in their leader's strength, reaffirms that only Specter has the elemental advantage to face the boss.
+He asks if they will regret this, but The Marksman replies they trust him.
 
 ### Beat 8
 
@@ -119,9 +119,9 @@ The cowboy-hatted marksman agrees — against an ice monster, everyone but
 Specter fights at a disadvantage. Khali concedes there's no one quite like
 him. The swordswoman closes it: it's best if Specter goes.
 
-**candidate** `p0007_08, p0007_09, p0007_10, p0007_11, p0008_02, p0008_03`
+**candidate** `p0008_04, p0008_05, p0008_06, p0008_07, p0008_08, p0008_09`
 
-Jun-Ho stands at a distance and faces his four trusted comrades. The marksman smiles alongside Skaya. He replies that they might if their leader loses the final battle and they all die in vain. But they still trust him completely, and Seo Jun-Ho simply looks forward in silence.
+Skaya, Khali and The Swordswoman tell Jun-Ho that only he can succeed.
 
 ### Beat 9
 
@@ -131,9 +131,9 @@ Specter asks if they're sure they won't regret this. The marksman shrugs —
 they might, if he loses and their deaths mean nothing. But they trust him.
 Skaya smiles and says she knows he won't let their deaths be in vain.
 
-**candidate** `p0008_04, p0008_05, p0008_06, p0008_07, p0008_08, p0008_09`
+**candidate** `p0008_10, p0008_11, p0008_12, p0008_13, p0009_01, p0009_02, p0009_03, p0009_04, p0009_05, p0009_06`
 
-Skaya smiles warmly and tells Jun-Ho she knows he will not let their deaths be in vain. While the team stands together in absolute faith, she asks for his confirmation. He acknowledges their trust as they insist only he can finish the fight, apologizing for the heavy burden they leave behind.
+Twenty-five years later, a presenter in a black suit with black hair explains the legacy of the final dungeon team to an audience, unveiling the ice statues of the five legendary heroes, including the frozen body of Jun-Ho.
 
 ### Beat 10
 
@@ -142,9 +142,9 @@ Skaya smiles warmly and tells Jun-Ho she knows he will not let their deaths be i
 All he can manage is a quiet "you guys." Alone on the stairs, their voices at
 his back — if it's you, you can do this — he whispers an apology and climbs.
 
-**candidate** `p0008_10, p0008_11, p0008_12, p0008_13, p0009_01, p0009_02, p0009_03, p0009_04, p0009_05, p0009_06`
+**candidate** `p0009_07, p0009_08, p0009_09, p0009_10, p0010_03, p0010_04`
 
-Twenty-five years later, a museum presenter exhibits the frozen statues of the five heroes to an audience, detailing the terrifying power of the Frost Queen.
+Deep within the frozen monument, the hand of Seo Jun-Ho suddenly twitches beneath the surface. A schoolboy points excitedly and says that the ice statue just moved. The presenter, a museum historian, tells him he is wrong while the ice cracks. The casing shatters with a violent boom, forcing him to admit it is impossible.
 
 ### Beat 11
 
@@ -155,9 +155,9 @@ about the monsters humanity never beat. The presenter recounts how the Frost
 Queen froze the Pacific with a wave of her hand — and how the Nest Attack
 Team, the Five Heroes, went to Antarctica to stop her.
 
-**candidate** `p0009_07, p0009_08, p0009_09, p0009_10, p0010_03, p0010_04`
+**candidate** `p0010_05, p0010_06, p0010_08, p0011_01, p0011_02, p0011_03`
 
-Thick ice holds the hand of him completely frozen inside the memorial. The schoolboy points toward the stage and says that the frozen statue just moved. Dismissing the claim, the presenter tells the boy that he is incorrect. But small shards of ice suddenly flake off from him. The presenter looks back in confusion just before the ice shatters violently. Terrified by the blast, the presenter says that this is impossible.
+The monument erupts as he bursts through his frozen shell, sending the presenter stumbling back. He collapses and shivers in the open air, thinking that it is incredibly cold. System prompts announce that he has absorbed the queen’s nucleus and gained Frost (EX), a rank representing extraordinary power levels.
 
 ### Beat 12
 
@@ -167,9 +167,9 @@ On stage stands their memorial: five figures sculpted in ice. Then a boy in
 the audience starts shouting — the statue just moved. The presenter laughs it
 off, until the cracking starts behind her.
 
-**candidate** `p0010_05, p0010_06, p0010_08, p0011_01, p0011_02, p0011_03, p0011_04, p0011_05`
+**candidate** `p0011_04, p0011_05, p0011_06, p0012_01, p0012_02, p0012_03, p0012_04`
 
-He bursts from his icy monument in a violent explosion of flying shards. He crashes to the museum floor, shivering violently as he draws his first freezing breath. Shuddering on the cold ground, he says that it is freezing. Floating system windows announce that he has absorbed the boss's nucleus to unlock a new frost skill.
+Jun-Ho collapses on the shattered floor while the panicked presenter asks what is happening. Holographic news feeds immediately report that the legendary Specter has finally returned after his long slumber. Resting in a quiet hospital bed, he marvels that twenty-five years have actually passed. His fingers tremble as he admits he can barely clench his hands.
 
 ### Beat 13
 
@@ -180,9 +180,9 @@ cold, and a system message finally updates: absorption one hundred percent.
 Congratulations. The Frost Queen's nucleus is his, and a new skill with it —
 Frost, EX rank.
 
-**candidate** `p0011_06, p0012_01, p0012_02, p0012_03, p0012_04, p0012_07, p0012_09, p0012_10, p0012_12, p0012_14`
+**candidate** `p0012_07, p0012_09, p0012_10, p0012_12, p0012_14, p0013_01, p0013_02, p0013_03, p0013_04, p0013_05, p0013_07`
 
-The presenter’s voice fades as he reads news in his hospital room. He mutters in shock that twenty-five years have passed. His hands tremble as he admits he can barely clench a fist. When the chief doctor, the hospital’s lead physician, reports that the Player Association president is arriving, he chuckles, knowing he has few friends.
+When a doctor announces the arrival of the association president, he looks out at the sprawling modern skyscrapers, realizing his friends achieved their dream of a peaceful world.
 
 ### Beat 14
 
@@ -192,9 +192,9 @@ His first words in twenty-five years: "Co... cold." As staff rush the stage,
 the weakest whisper in the hall belongs to the strongest player alive. The
 Frozen Player has returned.
 
-**candidate** `p0013_01, p0013_02, p0013_03, p0013_04, p0013_05, p0013_07`
+**candidate** `p0013_08, p0013_12, p0013_15, p0013_16, p0013_17, p0013_18`
 
-He looks out the window at the modern skyscrapers of the peaceful world, reflecting on the quiet future his frozen teammates had sacrificed everything to protect.
+As he holds his mask, the chief doctor gasps, calls him Specter, and asks why he is taking it off.
 
 ### Beat 15
 
@@ -205,9 +205,9 @@ Frost Queen, back after twenty-five years of cryogenic sleep. The man himself
 sits in a hospital bed scrolling headlines, muttering that it's really been
 that long. He can barely close his shaking hand into a fist.
 
-**candidate** `p0013_08, p0013_12, p0013_15, p0013_16, p0013_17, p0013_18`
+**candidate** `p0014_01, p0014_03, p0014_04, p0014_05, p0014_07, p0014_08`
 
-Jun-Ho looks down thoughtfully while gripping his old black face mask. The chief doctor, the hospital’s leading physician, enters and stammers the name Specter in total disbelief. He asks why he would finally reveal his face. The nurse, an attending ward medic, and the young doctor, an assistant physician, stand frozen.
+Jun-Ho stares in disbelief as Deok-gu, his old friend and the current President enters and dismisses the bowing doctors.
 
 ### Beat 16
 
@@ -217,9 +217,9 @@ A doctor announces the president of the Player Association is on his way.
 Jun-Ho isn't interested in strangers — but this one, they say, is an old
 friend. He takes off his mask to the staff's disbelief and waits.
 
-**candidate** `p0014_01, p0014_03, p0014_04, p0014_05, p0014_07, p0014_08`
+**candidate** `p0014_09, p0014_10, p0014_11, p0015_01, p0015_02, p0015_03`
 
-Deok-gu, the Player Association president and old friend of Jun-Ho, marches inside with his bodyguards. He asks the flustered medical staff what is wrong as they scramble aside. He stares in shock at the balding man who promises to explain everything. The president requests a private conversation, and the doctors bow before leaving them alone.
+Deok-gu tells his friend that Jun-Ho looks exactly the same as he always did. Recognizing that distinct voice, he laughs and asks how his old companion developed such severe M-pattern baldness. He calls it a touching reunion while Deok-gu rubs his head and mutters that he hasn't changed one bit.
 
 ### Beat 17
 
@@ -229,9 +229,9 @@ The president arrives flanked by suits, and one look is enough. Deok-gu — the
 same voice, minus the hair. Jun-Ho bursts out laughing: he called that
 M-pattern baldness twenty-five years ago. So much for a touching reunion.
 
-**candidate** `p0014_09, p0014_10, p0014_11, p0015_01, p0015_02, p0015_03`
+**candidate** `p0015_04, p0015_06, p0015_07, p0015_08, p0016_05, p0016_06`
 
-Deok-gu reveals severe hair loss. He stands by the hospital bed and says that Jun-Ho looks exactly the same. Recognizing that familiar voice, he gasps in surprise and smiles broadly. But the sentimental moment quickly turns to teasing as he points and laughs. He points and laughs at Deok-gu for having severe M-pattern baldness.
+Jun-Ho shifts the topic, and Deok-gu recalls when the system announced their final dungeon victory.
 
 ### Beat 18
 
@@ -242,9 +242,9 @@ player heard the same message, and the world wept with joy — for about a
 minute. Then a dimensional elevator rose in the Pacific: the second floor was
 open, ten floors in all. Stay strong until the final floor.
 
-**candidate** `p0015_04, p0015_06, p0015_07, p0015_08, p0016_05, p0016_06`
+**candidate** `p0016_07, p0016_08, p0016_09, p0016_10, p0016_11, p0016_13, p0016_16`
 
-As the two men settle down, they transition to a serious discussion about the aftermath of the final battle, recalling the day safe zones appeared on Earth.
+Humanity rejoices, but a sudden system message shatters the peace, declaring a dimensional elevator is installed in the Pacific Ocean.
 
 ### Beat 19
 
@@ -255,9 +255,9 @@ they should be on the seventh. Deok-gu can barely say it: humanity has
 cleared one. The third floor is a sea of lava, and the only thing that can
 cool it is an altar that demands the Frost Queen's nucleus.
 
-**candidate** `p0016_07, p0016_08, p0016_09, p0016_10, p0016_11, p0016_13, p0016_16`
+**candidate** `p0016_18, p0016_19, p0016_20, p0017_02, p0017_03, p0017_04`
 
-A massive crowd fills the city streets, cheering and crying tears of joy over the victory. But he knows that the world never lets such pure happiness last for very long. A sudden chime echoes everywhere as the system announces a dimensional elevator is installed in the Pacific Ocean. The stunned audience members gasp in silent shock, demanding to know what is happening above them.
+As the system opens the Frontier, world leaders meet. He says their expedition to the second floor brings back vast knowledge.
 
 ### Beat 20
 
@@ -268,9 +268,9 @@ because he knows exactly where it is — he absorbed it. With the straightest
 face he can manage, he declares they were simply unlucky, and everyone should
 be understanding about honest mistakes. Deok-gu is not.
 
-**candidate** `p0016_18, p0016_19, p0016_20, p0017_02, p0017_03, p0017_04`
+**candidate** `p0017_05, p0017_06, p0017_07, p0017_10, p0018_01, p0018_02`
 
-The system announces that travel to the Frontier, a gateway to higher floors, is now possible. Outraged audience members scream that this is nonsense and the Queen should have been the end. He reflects that leaders eventually organized an expedition squad. This floor provided humanity with magic, technology, and vast knowledge.
+Jun-Ho asks what came next while Deok-gu describes the Dimensional Elevator, a spire rising from the Pacific. His old friend reveals that the structure contains ten floors in total. He calculates that humanity should have reached the seventh floor by now. He stares past Deok-gu at the ghosts of his team and weighs their accomplishments.
 
 ### Beat 21
 
@@ -280,9 +280,9 @@ That evening, Jun-Ho asks where his team ended up. The Seoul History Museum —
 though Deok-gu warns the streets below are crawling with reporters. Which is
 why, hours later, a hooded figure badges through a service door instead.
 
-**candidate** `p0017_05, p0017_06, p0017_07, p0017_10, p0018_01, p0018_02`
+**candidate** `p0018_03, p0018_04, p0018_06, p0018_09, p0018_12, p0018_13, p0018_14, p0018_16`
 
-However, Deok-gu nervously reveals that they are still stuck on the second floor, causing his legendary friend to collapse back onto his bed in utter disbelief.
+Deok-gu, Jun-Ho's old friend and the current President, says they are only on the second floor, leaving Jun-Ho utterly speechless.
 
 ### Beat 22
 
@@ -292,9 +292,9 @@ He walks past a dragon's skeleton — annoyed they put that thing on display —
 into a hall kept cold on purpose. There they are: his four friends, frozen
 mid-stride, exhibited like trophies.
 
-**candidate** `p0018_03, p0018_04, p0018_06, p0018_09, p0018_12, p0018_13, p0018_14, p0018_16`
+**candidate** `p0019_01, p0019_02, p0019_03, p0019_04, p0019_05, p0019_09, p0019_10, p0019_11, p0019_12, p0019_13`
 
-Demanding a proper explanation, Jun-Ho learns that the third floor is a volcanic region that cannot be explored without the cooling power of the Frost Queen's Nucleus.
+He sits up in fury, demanding an explanation, and Deok-gu explains that the third floor is a volcanic wasteland requiring the Frost Queen's nucleus to cool.
 
 ### Beat 23
 
@@ -304,9 +304,9 @@ He sits down in front of them and apologizes for being late. Four paper cups,
 one bottle shared with the dead — the world is a better place now, he tells
 them; the peace they dreamed of held. So now... rest.
 
-**candidate** `p0019_01, p0019_02, p0019_03, p0019_04, p0019_05, p0019_09, p0019_10, p0019_11, p0019_12, p0019_13`
+**candidate** `p0020_01, p0020_02, p0020_03, p0020_04, p0020_05, p0020_06`
 
-Deok-gu admits they searched the nest countless times in vain, unaware that Jun-Ho had already absorbed the nucleus into his own body during his long slumber.
+Deok-gu says they searched the nest in vain. Still, Jun-Ho knows that he already absorbed it.
 
 ### Beat 24
 
@@ -316,9 +316,9 @@ He can't finish the sentence. Brushing the dust from Skaya's ice, he mutters
 that the alcohol tastes sweet. Then a system message cuts through the grief:
 Frost EX confirmed — insufficient magic — seal removal failed.
 
-**candidate** `p0020_01, p0020_02, p0020_03, p0020_04, p0020_05, p0020_06`
+**candidate** `p0020_07, p0020_08, p0020_10, p0020_11, p0020_12, p0020_14`
 
-Jun-Ho keeps the secret to himself and gently comforts Deok-gu, telling him the players were simply unlucky, which moves the weeping president to tears of joy.
+Jun-Ho rests a hand on his friend’s shoulder and tells Deok-gu they were just unlucky. He says they should be understanding because anyone can make a mistake. Deok-gu cries and gazes up before shouting with a sudden, radiant burst of relief. He smiles serenely while his companion finally lets a heavy burden fall.
 
 ### Beat 25
 
@@ -329,9 +329,9 @@ holding his friends can be undone. They were never dead — and now the
 strongest player in history, reduced to a shaking fist, has a reason to start
 over. What?!
 
-**candidate** `p0020_07, p0020_08, p0020_10, p0020_11, p0020_12, p0020_14, p0020_15, p0021_01, p0021_12, p0021_13`
+**candidate** `p0020_15, p0021_01, p0021_12, p0021_13, p0022_01, p0022_02`
 
-Jun-Ho tells Deok-gu they were simply unlucky and must be understanding about their past mistakes. Deok-gu replies with a joyful shout through tears while he thinks about how to avoid a future lecture. Warned that reporters are swarming the lobby agrees to slip away toward the museum vault.
+Deok-gu, Jun-Ho's old friend and the current President, tells him of reporters, so he passes authentication to see a dragon skeleton.
 
 ### Beat 26
 
@@ -339,9 +339,9 @@ Jun-Ho tells Deok-gu they were simply unlucky and must be understanding about th
 
 (no reference beat)
 
-**candidate** `p0022_01, p0022_02, p0022_03, p0022_04, p0022_05, p0022_06, p0022_07`
+**candidate** `p0022_03, p0022_04, p0022_05, p0022_06, p0022_07`
 
-Inside the museum vault, Jun-Ho waits for the system to confirm his identity as he walks deeper into the facility. He passes a massive dragon skeleton and wonders today why the beast is on exhibit. Finding the final door, he enters the freezing mist. He sits before Khali and his frozen comrades to apologize for being late.
+Jun-Ho stands before the grand museum entrance and notes that it must be here. He enters a cold vault where thick mist swirls around Khali, Skaya, and his other frozen teammates. After seeing their ice seals, he slumps to the floor and tells them he is sorry for being late.
 
 ### Beat 27
 
@@ -351,7 +351,7 @@ Inside the museum vault, Jun-Ho waits for the system to confirm his identity as 
 
 **candidate** `p0023_01, p0023_02, p0023_04, p0023_05, p0023_06, p0023_07`
 
-After pouring several cups of alcohol, he raises his own and tells his silent friends to have a drink.
+He remembers the peace he won, pours alcohol for his frozen comrades, and sits down to share a quiet drink.
 
 ### Beat 28
 
@@ -361,4 +361,4 @@ After pouring several cups of alcohol, he raises his own and tells his silent fr
 
 **candidate** `p0023_08, p0023_09, p0023_10, p0023_12, p0023_13, p0024_01, p0024_03`
 
-But a second notification warns him that his magic stats are currently too low. Because of this limitation, the system tells him that he failed to remove the seal. Yet, it still reveals that his unique skill makes unsealing their icy status possible. He gasps in utter shock at this unexpected revelation.
+He touches The Swordswoman but his insufficient magic stats fail to melt her seal.
