@@ -1945,19 +1945,54 @@ def derive_key_panels(
     return out
 
 
-_APPOSITIVE_SPAN_RE = re.compile(
-    # ", a/an/the/another/one <clause>," — clause may contain ONE inner comma, so a
-    # state clause like "a member of the five heroes, currently frozen in ice" is one
-    # span, not two half-matches.
-    # Single comma-segment only. Multi-segment state clauses ("..., currently frozen in
-    # ice") are prevented at the DATA source now (synopsis roles are truncated to their
-    # first segment); historic welds are cleaned by the ledger-segment residue pass. A
-    # greedy multi-segment match here once swallowed the following VERB clause and
-    # poisoned the variant detector's token sets.
-    r",\s+((?:(?:a|an|the|another|one)\b|[A-Z][\w'’-]*['’]s\b|his\b|her\b|their\b)[^,.;!?]+?)(,|(?=[.!?]))",
+_APPOSITIVE_LEAD_RE = re.compile(
+    # The FIRST comma-segment of an appositive: ", a member of the five heroes",
+    # ", Jun-Ho's old friend and the current president", ", her older brother".
+    r",\s+((?:(?:a|an|the|another|one)\b|[A-Z][\w'’-]*['’]s\b|his\b|her\b|their\b)[^,.;!?]*)",
     re.I,
 )
+# A SECOND segment continuing the same appositive: ", currently frozen in ice".
+_APPOSITIVE_TAIL_RE = re.compile(r",\s+([a-z][^,.;!?]*)")
 
+# Bare weld: "<Name> currently frozen in ice, admits ..." — an appositive that lost its
+# opening comma. Only ever removed when it is a variant of a clause already kept.
+_APPOSITIVE_WELD_RE = re.compile(
+    r"\b([A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)*)\s+((?:[a-z][\w'’-]*\s+){2,7}[a-z][\w'’-]*),\s+([a-z][\w'’-]*)"
+)
+
+# How many comma-separated segments one appositive may span. Two, because that is the
+# longest form observed ("<role>, <state>") and because the third segment is where the
+# main sentence usually resumes with an irregular past ("..., spoke, Khali nodded") that
+# no suffix test recognises as a verb. A greedy scan swallowed exactly that verb clause
+# and poisoned the variant detector's token sets. The bound is the check: it is not
+# precise, it is safe, and test_dedupe_appositive_clauses_all_observed_forms pins it.
+_MAX_APPOSITIVE_SEGMENTS = 2
+
+
+def _iter_appositive_spans(text: str):
+    """Yield (start, end, clause) for each appositive, inner commas included.
+
+    Non-overlapping and left-to-right; `end` includes the closing comma when there is
+    one, so the caller can drop the slice outright.
+    """
+    cursor = 0
+    for m in _APPOSITIVE_LEAD_RE.finditer(text):
+        if m.start() < cursor:
+            continue
+        end = m.end(1)
+        for _ in range(_MAX_APPOSITIVE_SEGMENTS - 1):
+            tail = _APPOSITIVE_TAIL_RE.match(text, end)
+            if not tail:
+                break
+            first = tail.group(1).split()[0] if tail.group(1).split() else ""
+            if _looks_like_verb(first):
+                break  # the main sentence resumes here
+            end = tail.end(1)
+        clause = text[m.start(1):end]
+        if text[end:end + 1] == ",":
+            end += 1
+        cursor = end
+        yield m.start(), end, clause
 
 def dedupe_appositive_clauses(beats: list[ScriptBeat]) -> list[ScriptBeat]:
     """One appositive CLAUSE per script, whoever it is attached to.
@@ -1965,134 +2000,111 @@ def dedupe_appositive_clauses(beats: list[ScriptBeat]) -> list[ScriptBeat]:
     strip_repeated_appositives keys its ledger on the character NAME, which is correct
     for "introduce each character once" and useless when the SAME clause is stamped on
     several characters: a synopsis once gave four teammates the identical role sentence,
-    and the first beat naming all of them shipped it three times in one sentence — every
-    name was legitimately at its own first occurrence. The unit of repetition is the
-    clause text, so that is the ledger key here. Runs before the per-name strip.
+    and the first beat naming three of them shipped it three times in one sentence —
+    every name legitimately at its own first occurrence. The unit of repetition is the
+    clause, so that is the ledger key here.
 
-    Details that came from the observed wreckage rather than theory:
-      - Removal keeps the leading comma only when a CAPITALIZED word follows (a list of
-        names continues: "Skaya, Khali, and The Marksman chose"); before a lowercase
-        verb the comma goes too ("The Swordswoman agrees", not "The Swordswoman, agrees").
-      - The ledger also strips residue TAILS: the old single-comma regex used to weld
-        "currently frozen in ice," directly onto a name, so every comma-segment of a
-        seen clause (>= 3 words) is removed standalone as well.
-      - The first kept occurrence is placeholder-protected during residue removal.
+    Two passes, both REMOVAL-ONLY:
+      - article/possessive-led spans (", a member of the five heroes,", ", Jun-Ho's old
+        friend and the current president,") — the first is kept, later ones dropped;
+      - bare spans (", members of the five heroes,") which cannot be matched by the
+        anchored pattern without matching every parenthetical, so they are removed only
+        when they are a >=0.8 content-word variant of a clause already kept. Synopses
+        vary their template per character ("a heavily tattooed member...", "a deadly
+        member..."), and exact-text matching misses all of it.
+
+    Scope, learned the hard way: this function once also carried "weld repair" and
+    multi-round residue passes to clean text mangled by an earlier version of
+    strip_repeated_appositives. One of their heuristics — treat a segment as descriptive
+    if its first word ends in -en — deleted "queen dissipates into light," from "The
+    queen dissipates into light, admitting she enjoyed their final struggle", because
+    QUEEN ends in -en. That shipped. The mangling those passes cleaned up is now
+    prevented at its two sources (the per-name regex no longer spans inner commas;
+    synopsis roles are truncated to one clause), so the cleanup machinery is gone rather
+    than made cleverer. A remover that can delete correct prose is worse than the
+    duplication it removes.
     """
     seen: set[str] = set()
     seen_sets: list[frozenset[str]] = []
-    segments: set[str] = set()
     out: list[ScriptBeat] = []
 
     def _content_set(clause: str) -> frozenset[str]:
         return frozenset(_stemmed_words(clause))
 
     def _is_variant(tokens: frozenset[str]) -> bool:
-        # A synopsis that stamps one template varies it per character ("a heavily
-        # tattooed member of the five heroes" / "a deadly member of the five heroes"):
-        # exact text differs, the clause is the same. Overlap >= 0.8 of the smaller
-        # content set counts as the same clause — adjectives can't smuggle it back in.
         if not tokens:
             return False
-        for prev in seen_sets:
-            if not prev:
-                continue
-            if len(tokens & prev) / min(len(tokens), len(prev)) >= 0.8:
-                return True
-        return False
+        return any(
+            prev and len(tokens & prev) / min(len(tokens), len(prev)) >= 0.8
+            for prev in seen_sets
+        )
 
     for beat in beats:
         text = beat.narration
-        kept_spans: list[str] = []
 
-        def _sub(m: re.Match) -> str:
-            raw = " ".join(m.group(1).split()).lower()
-            # Ledger key normalizes article and inner commas away, so "another member
-            # of the five heroes currently frozen in ice" equals the seen clause
-            # "a member of the five heroes, currently frozen in ice".
-            clause = re.sub(r"^(?:a|an|the|another|one)\s+", "", raw).replace(",", "")
-            after = text[m.end():].lstrip()
-            comma_ok = after[:1].isupper()
-            tokens = _content_set(clause)
-            if clause in seen or _is_variant(tokens):
-                return "," if comma_ok else ""
-            seen.add(clause)
-            seen_sets.append(tokens)
-            for seg in raw.split(","):
-                seg = seg.strip()
-                if len(seg.split()) >= 3:
-                    segments.add(seg)
-            placeholder = f"\x00{len(kept_spans)}\x00"
-            kept_spans.append(m.group(0))
-            return placeholder
+        # Pass 1 — article/possessive-led spans, scanned so a "<role>, <state>" clause
+        # is one span. Keep the first of each clause, drop every later variant.
+        pieces: list[str] = []
+        protected: list[str] = []
+        cursor = 0
+        for a, b, clause in _iter_appositive_spans(text):
+            norm = re.sub(r"^(?:a|an|the|another|one)\s+", "", " ".join(clause.split()).lower())
+            tokens = _content_set(norm.replace(",", ""))
+            pieces.append(text[cursor:a])
+            if norm in seen or _is_variant(tokens):
+                # Keep the comma only when a name-list continues ("Skaya, Khali, and X");
+                # before a lowercase verb it must go too ("The Swordswoman agrees").
+                pieces.append("," if text[b:].lstrip()[:1].isupper() else "")
+            else:
+                seen.add(norm)
+                seen_sets.append(tokens)
+                # Masked, not appended: passes 2 and 3 would otherwise re-match the
+                # second segment of the clause just KEPT ("..., currently frozen in
+                # ice,") as a variant of the whole, deleting it AND its closing comma
+                # and leaving "Skaya, a member of the five heroes speaks first."
+                pieces.append(f"\x00{len(protected)}\x00")
+                protected.append(text[a:b])
+            cursor = b
+        pieces.append(text[cursor:])
+        text = "".join(pieces)
 
-        text = _APPOSITIVE_SPAN_RE.sub(_sub, text)
-
-        # Article-less variants ("The Swordswoman, members of the five heroes, tell...")
-        # can't be matched by the article-anchored span without matching EVERY
-        # parenthetical — so this pass is removal-only: a bare ", <clause>," goes only
-        # when it is a >=0.8 variant of a clause already kept.
+        # Pass 2 — bare spans (", members of the five heroes,"). Not anchorable without
+        # matching every parenthetical, so variant-similarity is the only admission test.
         def _bare_sub(m: re.Match) -> str:
-            tokens = _content_set(m.group(1).lower())
-            if _is_variant(tokens):
-                after = text[m.end():].lstrip()
-                return "," if after[:1].isupper() else ""
+            if _is_variant(_content_set(m.group(1).lower())):
+                return "," if text[m.end():].lstrip()[:1].isupper() else ""
             return m.group(0)
 
-        text = re.sub(r",\s+([a-z][^,.;!?]+?)(?:,|(?=[.!?]))", _bare_sub, text)
+        # The lookahead is load-bearing: without it this pass re-matches the very span
+        # pass 1 just decided to KEEP (an article-led clause also starts lowercase), and
+        # every first occurrence is deleted as a variant of itself.
+        text = re.sub(
+            r",\s+((?!(?:a|an|the|another|one|his|her|their)\b)[a-z][^,.;!?]+?)(?:,|(?=[.!?]))",
+            _bare_sub,
+            text,
+        )
 
-        # Welded leftovers from legacy multi-segment roles: "Skaya currently frozen in
-        # ice, spoke" — a name, a lowercase non-verb segment, a comma, then the verb.
+        # Pass 3 — welds: the same clause with its opening comma already gone.
+        # ONLY variant membership may trigger this. Two looser triggers lived here and
+        # both destroyed correct prose: an "ends in -en means participle" shape test
+        # deleted "queen dissipates into light," from "The queen dissipates into light,
+        # admitting she enjoyed their final struggle" (QUEEN ends in -en), and "the next
+        # word looks like a verb" fires on any participial clause. A weld only ever
+        # arises for a clause already seen, so the ledger is the correct trigger.
         def _weld_sub(m: re.Match) -> str:
-            seg_first = m.group(2).split()[0]
-            following = m.group(3)
-            descriptive_shape = seg_first.endswith("ly") or seg_first.endswith("en")
-            if not _looks_like_verb(seg_first) and (
-                _looks_like_verb(following)
-                or descriptive_shape
-                or (_content_set(m.group(2).lower()) and _is_variant(_content_set(m.group(2).lower())))
-            ):
+            if _is_variant(_content_set(m.group(2).lower())):
                 return f"{m.group(1)} {m.group(3)}"
             return m.group(0)
 
-        text = re.sub(
-            r"\b([A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)*)\s+((?:[a-z][\w'’-]*\s+){2,7}[a-z][\w'’-]*),\s+([a-z][\w'’-]*)",
-            _weld_sub,
-            text,
-        )
-        # Residue pass: seen clauses (or their tail segments) appearing without the
-        # canonical comma framing — welded to a name or re-marked with "another".
-        # Two rounds: removing a tail segment ("currently frozen in ice") can expose the
-        # head ("another member of the five heroes.") for the next round.
-        for _round in range(2):
-          for frag in sorted(seen | segments, key=len, reverse=True):
-            # Article-flexible: the ledger holds "a member of...", the residue may say
-            # "another member of..." or bare "member of...".
-            core = re.sub(r"^(?:a|an|the|another|one)\s+", "", frag)
-            if "," not in frag:
-                # seen-clauses are stored comma-free; let whitespace match across an
-                # optional comma in the text form.
-                core = core.replace(" ", ",? ")
-            rx = re.compile(
-                r",?\s+\b(?:(?:a|an|the|another|one)\s+)?"
-                + re.escape(core).replace(r"\ ", r"\s+").replace(r",\?", ",?")
-                + r"\s*(,|(?=[.!?]))",
-                re.I,
-            )
+        text = _APPOSITIVE_WELD_RE.sub(_weld_sub, text)
 
-            def _rsub(m: re.Match, _t=None) -> str:
-                after = m.string[m.end():].lstrip()
-                return "," if (m.group(1) == "," and after[:1].isupper()) else ""
+        text = re.sub(r"\x00(\d+)\x00", lambda m: protected[int(m.group(1))], text)
 
-            text = rx.sub(_rsub, text)  # noqa: B023 — rx bound per iteration
-        for i, span in enumerate(kept_spans):
-            text = text.replace(f"\x00{i}\x00", span)
         text = re.sub(r"\s*,\s*,", ",", text)
         text = re.sub(r"\s+([,.!?])", r"\1", text)
-        text = re.sub(r",\s+(and|or)\s+", r" \1 ", text) if ", and ," in text else text
         text = re.sub(r"\s{2,}", " ", text).strip()
         out.append(beat.model_copy(update={"narration": text}) if text and text != beat.narration else beat)
     return out
-
 
 _ANSWER_VERB_RE = re.compile(
     r"\b(replies|responds|answers|confirms)\b(?:\s+[\w'’-]+){0,2}\s+that\b", re.I

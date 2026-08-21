@@ -1317,3 +1317,52 @@ def test_dedupe_catches_possessive_led_appositives():
     assert sum(1 for b in out if "old friend and the current" in b.narration) == 1
     assert out[1].narration == "Deok-gu explains ten floors."
     assert out[2].narration == "Deok-gu admits it."
+
+
+def test_dedupe_appositive_clauses_spares_correct_prose():
+    """Regression: the remover must never delete a clause that is not a repeated
+    appositive. Two heuristics did, and one SHIPPED — a shape test reading "first word
+    ends in -en means participle" deleted "queen dissipates into light," from beat 4 of
+    the frozen-player draft, because QUEEN ends in -en. The trigger is now ledger
+    membership only, and these are the forms that must survive it."""
+    from manhwa2vid.script.lint import dedupe_appositive_clauses
+
+    safe = [
+        "The queen dissipates into light, admitting she enjoyed their final struggle.",
+        "The presenter proudly displays the statues, revealing the frozen five heroes.",
+        "He grips the hilt tightly, knowing the gate will open at dawn.",
+        "Lee Joo-hee, the party's rookie healer, snaps. Kim, a veteran hunter, waves.",
+    ]
+    beats = [ScriptBeat(beat_id=i + 1, panel_ids=["p"], narration=t) for i, t in enumerate(safe)]
+    assert [b.narration for b in dedupe_appositive_clauses(beats)] == safe
+
+
+def test_dedupe_appositive_keeps_first_occurrence_whole():
+    """The FIRST occurrence keeps every segment AND its closing comma. Both later passes
+    (bare-variant, weld) once re-matched the second segment of the span pass 1 had just
+    kept, yielding "Skaya, a member of the five heroes speaks first." — the appositive
+    silently promoted to subject."""
+    from manhwa2vid.script.lint import dedupe_appositive_clauses
+
+    out = dedupe_appositive_clauses([
+        ScriptBeat(beat_id=1, panel_ids=["p"],
+                   narration="Skaya, a member of the five heroes, currently frozen in ice, speaks first."),
+        ScriptBeat(beat_id=2, panel_ids=["p"],
+                   narration="Khali, a member of the five heroes, currently frozen in ice, nods."),
+    ])
+    assert out[0].narration == "Skaya, a member of the five heroes, currently frozen in ice, speaks first."
+    assert out[1].narration == "Khali nods."
+
+
+def test_appositive_span_stops_before_resuming_verb():
+    """The span may cross ONE inner comma and no more: the third segment is where the
+    main sentence resumes, often with an irregular past ("..., spoke, Khali nodded")
+    that no suffix test recognises as a verb. Pins _MAX_APPOSITIVE_SEGMENTS."""
+    from manhwa2vid.script.lint import _iter_appositive_spans
+
+    text = ("When Skaya, a member of the original five heroes, currently frozen in ice, "
+            "spoke, Khali nodded.")
+    spans = list(_iter_appositive_spans(text))
+    assert len(spans) == 1
+    assert spans[0][2] == "a member of the original five heroes, currently frozen in ice"
+    assert "spoke" not in spans[0][2]
