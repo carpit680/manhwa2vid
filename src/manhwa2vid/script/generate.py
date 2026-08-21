@@ -1186,8 +1186,11 @@ def generate_script(
         from manhwa2vid.script.lint import rewrite_beat
         from manhwa2vid.script.verify import audit_frame_alignment
 
+        from manhwa2vid.script.judge import pick_better
+
         panel_map = {p.id: p for p in load_story_panels(paths)}
         audit, major = audit_frame_alignment(beats, panel_map, paths["root"], config, bible=bible)
+        judge_notes: list[str] = []
         if major:
             console.print(f"[yellow]Alignment audit:[/] rewriting {len(major)} beat(s) with major unsupported claims")
             fixed: list[ScriptBeat] = []
@@ -1197,7 +1200,17 @@ def generate_script(
                     new_text = rewrite_beat(
                         beat, bible, attribution, config, issues=issues, scene_cards=cards
                     )
-                    fixed.append(beat.model_copy(update={"narration": new_text}))
+                    # A rewrite was accepted unconditionally before this: it is aimed at
+                    # a named defect, but nothing checked whether it actually improved
+                    # the beat. Judge it against what it replaced.
+                    beat_panels = [panel_map[pid] for pid in beat.panel_ids if pid in panel_map]
+                    kept, why = pick_better(
+                        beat_panels, paths["root"], config,
+                        new_text, beat.narration,
+                        a_label="rewrite", b_label="original", default="a",
+                    )
+                    judge_notes.append(f"beat {beat.beat_id} rewrite: {why}")
+                    fixed.append(beat.model_copy(update={"narration": kept}))
                 else:
                     fixed.append(beat)
             beats = fixed
@@ -1217,6 +1230,7 @@ def generate_script(
                     f"rewrite — falling back to grounded outline text: {sorted(still_major)}"
                 )
                 fallbacks: list[ScriptBeat] = []
+                replaced: list[int] = []
                 for beat in beats:
                     if beat.beat_id in still_major and beat.beat_id in plot_by_id:
                         grounded = plot_by_id[beat.beat_id].split("/ CLOSER")[0].strip()
@@ -1224,13 +1238,37 @@ def generate_script(
                         # A continuity beat can carry an EMPTY plot_beat; replacing real
                         # narration with '' shipped a silent beat once. Unverified prose
                         # beats dead air — keep the rewrite when the fallback is empty.
-                        if grounded:
-                            fallbacks.append(beat.model_copy(update={"narration": grounded}))
-                        else:
+                        if not grounded:
                             fallbacks.append(beat)
+                            continue
+                        # The substitution used to be automatic: an artefact we HAD
+                        # evaluated was discarded for one we had not. Judge them against
+                        # the panels instead, comparatively — a stale cast descriptor
+                        # sits in both candidates and cancels, where in the absolute
+                        # audit it decided the outcome.
+                        beat_panels = [panel_map[pid] for pid in beat.panel_ids if pid in panel_map]
+                        kept, why = pick_better(
+                            beat_panels, paths["root"], config,
+                            beat.narration, grounded,
+                            a_label="narration", b_label="outline", default="a",
+                        )
+                        judge_notes.append(f"beat {beat.beat_id} fallback: {why}")
+                        if kept != beat.narration:
+                            replaced.append(beat.beat_id)
+                        fallbacks.append(beat.model_copy(update={"narration": kept}))
                     else:
                         fallbacks.append(beat)
                 beats = fallbacks
+                # Only beats the judge actually replaced count as fallbacks; the rest
+                # kept their narration on merit.
+                still_major = {b: v for b, v in still_major.items() if b in replaced}
+            if judge_notes:
+                audit.add(
+                    "judge",
+                    True,
+                    "; ".join(judge_notes[:12]),
+                    decisions=len(judge_notes),
+                )
             audit.add(
                 "grounded-fallback",
                 "warn" if still_major else True,

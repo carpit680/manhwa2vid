@@ -40,9 +40,14 @@ naming claim ONLY against the visual descriptions above:
   (wrong hair, wrong outfit, wrong sex, wrong age) or when nobody is visible at all.
 - If the description is too thin to tell either way, the claim is SUPPORTED. Say nothing.
 
+Each cast entry lists STABLE marks and CURRENT-STATE marks. Only STABLE marks can
+contradict an identity: clothing, masks, hairstyle/baldness, injuries, posture and
+condition change from scene to scene within one recap, so a mismatch there is NEVER a
+finding — the same person in different clothes is the same person.
+
 severity=major ONLY for story-breaking errors:
-- an action or line attributed to a person who contradicts that person's description
-- a named person claimed ON-SCREEN when NOBODY matching their description is visible.
+- an action or line attributed to a person who contradicts that person's STABLE marks
+- a named person claimed ON-SCREEN when NOBODY matching their STABLE marks is visible.
   NOT a finding when the beat reports what that person THINKS or SAYS: a manhwa runs
   inner monologue over whatever art it likes, so a panel drawn on one character while
   another character's bubble carries first-person thought belongs to whoever SAYS it,
@@ -73,28 +78,68 @@ Narration:
 Return JSON: {{"unsupported": ["short description of each unsupported claim"], "severity": "none|minor|major"}}"""
 
 
+# Words that make a description about a character's CURRENT STATE rather than their
+# identity. A recap spans scenes: masks come off, coats become hospital gowns, hair is
+# cut, wounds appear. Generic English apparel/condition vocabulary, no series knowledge.
+_MUTABLE_HINTS = (
+    "mask", "masked", "unmasked", "coat", "jacket", "suit", "robe", "robes", "gown",
+    "pajama", "pyjama", "uniform", "armor", "armour", "hoodie", "shirt", "cape", "hat",
+    "cap", "glasses", "bandage", "wounded", "injured", "bleeding", "frozen", "wearing",
+    "holding", "carrying", "bald", "balding", "shirtless", "dressed", "outfit", "boots",
+)
+
+
+def _split_marks(profile: Any) -> tuple[list[str], list[str]]:
+    """Partition a profile's visual marks into (stable identity, mutable state).
+
+    Written after four of five "major misattributions" in one run turned out to be the
+    verifier holding a character to a description that had simply moved on: a president
+    called "bald" because a joke in the dialogue said so, and a protagonist described as
+    "masked swordsman in a black coat" while he sits in hospital pyjamas a chapter later.
+    Correct narration was discarded for both.
+    """
+    stable: list[str] = []
+    mutable: list[str] = []
+    candidates = [
+        profile.visual.hair,
+        profile.visual.build,
+        *profile.visual.accessories,
+        profile.visual.outfit,
+        *profile.descriptors[:3],
+    ]
+    for mark in candidates:
+        text = (mark or "").strip()
+        if not text:
+            continue
+        low = text.lower()
+        (mutable if any(h in low for h in _MUTABLE_HINTS) else stable).append(text)
+    return list(dict.fromkeys(stable)), list(dict.fromkeys(mutable))
+
+
 def _cast_visuals(bible: SeriesBible | None) -> str:
     """Visual descriptions the verifier needs to judge a naming claim. Without these it
     cannot distinguish 'wrong person' from 'panels don't caption names', and flags every
-    named character as unsupported."""
+    named character as unsupported.
+
+    Marks are presented in two groups because they carry different authority: STABLE
+    marks can contradict an identity claim, CURRENT-STATE marks cannot.
+    """
     if bible is None:
         return "(unavailable — do not flag any naming claim)"
     lines: list[str] = []
     for profile in bible.characters.values():
         if profile.merged_into:
             continue
-        marks = [
-            profile.visual.hair,
-            profile.visual.outfit,
-            profile.visual.build,
-            *profile.visual.accessories,
-            *profile.descriptors[:3],
-        ]
-        looks = "; ".join(dict.fromkeys(m.strip() for m in marks if m and m.strip()))
-        if not looks:
+        stable, mutable = _split_marks(profile)
+        if not stable and not mutable:
             continue
         tag = " [PROTAGONIST]" if profile.id == bible.protagonist_id else ""
-        lines.append(f"- {profile.canonical_name}{tag}: {looks}")
+        parts = []
+        if stable:
+            parts.append(f"STABLE: {'; '.join(stable)}")
+        if mutable:
+            parts.append(f"CURRENT-STATE (may differ scene to scene): {'; '.join(mutable)}")
+        lines.append(f"- {profile.canonical_name}{tag}: {' | '.join(parts)}")
     return "\n".join(lines) or "(no visual descriptions on file — do not flag any naming claim)"
 
 
@@ -109,6 +154,9 @@ def audit_frame_alignment(
     report = QAReport(stage="alignment")
     cast = _cast_visuals(bible)
     max_beats = int(get_nested(config, "script", "verify_max_beats", default=24))
+    # Striding means some beats are never audited at all; downstream gates divide by the
+    # AUDITED count, not len(beats), or the fallback fraction is computed against a
+    # denominator that was never checked.
     sample = beats if len(beats) <= max_beats else beats[:: max(1, len(beats) // max_beats)][:max_beats]
 
     llm = apply_stage_model(get_stage_llm("scene", config), "scene", config)

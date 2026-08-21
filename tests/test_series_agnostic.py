@@ -150,3 +150,32 @@ def test_no_development_series_names_in_prompts(name: str):
         where for where, text in _prompt_texts().items() if name in text.lower()
     ]
     assert not offenders, f"{name!r} is sent to the model from: {offenders}"
+
+
+def test_pipeline_never_reads_the_reference_folder():
+    """The gold script and the reference channel's narration are DEVELOPMENT yardsticks;
+    neither exists when the pipeline runs on a new manhwa. Constants measured from them
+    (target_wpm, words_per_chapter, scorecard bands) travel fine — files do not. A future
+    "just peek at the gold" shortcut must fail the build rather than silently make the
+    pipeline un-runnable on a new title.
+    """
+    import ast
+
+    src = Path(__file__).resolve().parents[1] / "src" / "manhwa2vid"
+    offenders: list[str] = []
+    for py in src.rglob("*.py"):
+        tree = ast.parse(py.read_text(encoding="utf-8"))
+        # Docstrings legitimately cite reference/style_profile.md as the PROVENANCE of a
+        # measured constant; that is documentation, not a dependency. Collect them so
+        # they can be excluded, leaving only executable string literals.
+        docstrings = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                doc = ast.get_docstring(node, clean=False)
+                if doc:
+                    docstrings.add(doc)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if "reference/" in node.value and node.value not in docstrings:
+                    offenders.append(f"{py.relative_to(src)}: {node.value[:70]!r}")
+    assert not offenders, f"pipeline code references the dev-only reference/ folder: {offenders}"

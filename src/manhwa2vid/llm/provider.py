@@ -576,6 +576,11 @@ class MockLLMProvider(LLMProvider):
         for p in image_paths:
             stem = p.stem
             ids.append(stem if stem.startswith("p") else f"panel_{stem}")
+        if "Choose the better narration" in prompt:
+            # Placed ABOVE the fact-check branch: a judge prompt that fell through to it
+            # would get {"unsupported": [], "severity": "none"} and silently "pass".
+            # Deterministic pick so order-swap agreement is testable offline.
+            return json.dumps({"winner": "A", "why": "mock prefers the first candidate"})
         if "fact-check" in prompt.lower():
             return json.dumps({"unsupported": [], "severity": "none"})
         if "series story map by skimming" in prompt:
