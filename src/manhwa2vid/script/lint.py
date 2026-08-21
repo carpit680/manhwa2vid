@@ -872,7 +872,25 @@ def rotate_protagonist_name(
             # pronoun case is gibberish out loud.
             last_word = re.search(r"([A-Za-z']+)\W*$", prior)
             after = text[m.end():].lstrip()
-            next_word = after.split(None, 1)[0].strip(".,!?;:'\"") if after else ""
+            words_after = [w.strip(".,!?;:'\"") for w in after.split()[:2]]
+            next_word = words_after[0] if words_after else ""
+            # "before Jun-Ho violently shatters": an adverb between the slot and its verb
+            # hid the verb from the next-word test, so the objective branch won and
+            # shipped "before him violently shatters". Look past a single -ly adverb.
+            if next_word.lower().endswith("ly") and len(words_after) > 1:
+                next_word = words_after[1]
+            # Words that are BOTH prepositions and subordinating conjunctions. "before
+            # him" is correct; "before him violently shatters" is not — the same word
+            # opens a clause whose pronoun is a SUBJECT. Whenever a finite verb follows,
+            # the slot is ambiguous by construction, so the name stays (the module's
+            # precision-first policy: a spare mention beats spoken garbage).
+            _DUAL_ROLE = {"before", "after", "until", "since", "while", "as", "than", "once"}
+            if (
+                last_word
+                and last_word.group(1).lower() in _DUAL_ROLE
+                and _looks_like_verb(next_word)
+            ):
+                return m.group(0)
             if last_word and last_word.group(1).lower() == "of":
                 # "the hand of Jun-Ho" -> "the hand of him" is broken English; genitive
                 # constructions keep the name (a spare mention beats spoken garbage).
@@ -1936,7 +1954,7 @@ _APPOSITIVE_SPAN_RE = re.compile(
     # first segment); historic welds are cleaned by the ledger-segment residue pass. A
     # greedy multi-segment match here once swallowed the following VERB clause and
     # poisoned the variant detector's token sets.
-    r",\s+((?:a|an|the|another|one)\b[^,.;!?]+?)(,|(?=[.!?]))",
+    r",\s+((?:(?:a|an|the|another|one)\b|[A-Z][\w'’-]*['’]s\b|his\b|her\b|their\b)[^,.;!?]+?)(,|(?=[.!?]))",
     re.I,
 )
 

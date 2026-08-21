@@ -1272,3 +1272,48 @@ def test_closer_reveal_strict_mode_for_system_message_endings():
     dialogue = [SceneCard(panel_ids=["p1"], source_text='All: "LET US ENTER THE DUNGEON!"', action="")]
     sl = [ScriptBeat(beat_id=1, panel_ids=["p1"], narration="He steps into the dungeon gate.")]
     assert lint_closer_reveal(sl, dialogue) == {}
+
+
+def test_dual_role_subordinator_keeps_the_name():
+    """Shipped: "the presenter dismisses him just before him violently shatters his
+    frozen prison." "before" is both a preposition and a subordinating conjunction; when
+    a finite verb follows, the slot is a SUBJECT and the object-cue arm is wrong. An
+    adverb between the two hid the verb from the next-word test."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import rotate_protagonist_name
+
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="char_mc",
+        characters={"char_mc": CharacterProfile(
+            id="char_mc", canonical_name="Seo Jun-Ho", tier=CharacterTier.MAIN, pronoun="he")},
+    )
+    out = rotate_protagonist_name(
+        "the presenter dismisses him just before Seo Jun-Ho violently shatters his prison.",
+        bible, keep=0)
+    assert "before him violently" not in out
+
+    # no adverb in the way — same rule
+    assert "before him shatters" not in rotate_protagonist_name(
+        "he waits before Seo Jun-Ho shatters the ice.", bible, keep=0)
+
+    # genuine prepositional object still rotates
+    assert "after him" in rotate_protagonist_name("Skaya walks in after Seo Jun-Ho.", bible, keep=0)
+    assert "tells him" in rotate_protagonist_name("Deok-gu tells Seo Jun-Ho the truth.", bible, keep=0)
+
+
+def test_dedupe_catches_possessive_led_appositives():
+    """Shipped three times untouched: "Deok-gu, Jun-Ho's old friend and the current
+    Player Association president". The clause is led by a possessive, not an article, so
+    the span regex never saw it."""
+    from manhwa2vid.script.lint import dedupe_appositive_clauses
+
+    clause = "Jun-Ho's old friend and the current Player Association president"
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p"], narration=f"Deok-gu, {clause} enters."),
+        ScriptBeat(beat_id=2, panel_ids=["p"], narration=f"Deok-gu, {clause}, explains ten floors."),
+        ScriptBeat(beat_id=3, panel_ids=["p"], narration=f"Deok-gu, {clause}, admits it."),
+    ]
+    out = dedupe_appositive_clauses(beats)
+    assert sum(1 for b in out if "old friend and the current" in b.narration) == 1
+    assert out[1].narration == "Deok-gu explains ten floors."
+    assert out[2].narration == "Deok-gu admits it."
