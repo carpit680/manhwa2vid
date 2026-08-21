@@ -110,6 +110,10 @@ script:
   # Chapter word budget: narration is audio-locked, so word count IS runtime.
   # Measured references: Mamoru ~490/chapter, golds 525 and 677.
   words_per_chapter: 550
+  # The narration response is an order of magnitude bigger than a vision window and was
+  # silently truncated at the shared 4096 vision cap for three runs, yielding zero beats.
+  narration_max_output_tokens: 16384
+  pairwise_judge: true   # comparative decision on fallback + rewrite (see script/judge.py)
   grammar_check: true    # LanguageTool net over the final text (skips if unavailable)    # ceiling on any beat's word budget: panels x words_per_panel
                         # is unbounded on panel-dense titles; every measured reference
                         # sits near 40-45 words per beat

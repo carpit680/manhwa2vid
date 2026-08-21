@@ -535,3 +535,22 @@ def test_key_panels_round_trip_through_draft_markdown():
         beats = _parse_markdown_beats(f)
     assert beats[0].key_panel_ids == ["p0001_02"]
     assert beats[1].key_panel_ids == []
+
+
+def test_truncation_reason_detects_both_tells():
+    """The two independent signals that a narration response is not to be believed."""
+    from manhwa2vid.script.generate import truncation_reason
+
+    good = {"beats": [{"beat_id": 1, "narration": "a"}]}
+    assert truncation_reason(good, "stop") == ""
+
+    # provider says outright it ran out of budget
+    assert "length" in truncation_reason(good, "length")
+
+    # the real failure: salvage rescued ONE inner beat, no envelope. data["beats"] is
+    # empty and 28 beats silently fell to per-beat mode for three runs.
+    salvaged = {"beat_id": 1, "narration": "text", "key_panels": ["p1"]}
+    assert "salvaged" in truncation_reason(salvaged, "stop")
+
+    # a single-beat retry legitimately returns an envelope with one beat
+    assert truncation_reason({"beats": [{"beat_id": 3, "narration": "x"}]}, "stop") == ""

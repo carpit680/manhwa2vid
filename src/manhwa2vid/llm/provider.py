@@ -276,6 +276,10 @@ class OpenAICompatProvider(LLMProvider):
     DEFAULT_VISION_MODEL: str = ""
     MAX_VISION_TOKENS: int = 4096
 
+    #: Why the last call stopped ("stop" | "length" | ...). "length" means truncated.
+    last_finish_reason: str = ""
+    last_completion_tokens: int = 0
+
     def __init__(self, text_model: str | None = None, vision_model: str | None = None) -> None:
         from openai import OpenAI
 
@@ -286,10 +290,37 @@ class OpenAICompatProvider(LLMProvider):
 
     def _extra_body(self, model: str) -> dict[str, Any] | None:
         """Per-model request tweaks. Thinking models otherwise spend their whole token
-        budget on <think> and return an empty/truncated body."""
-        if "qwen" in model.lower():
+        budget on reasoning and return an empty/truncated body.
+
+        Gemini 3.x was added after a 28-beat narration response came back cut
+        mid-structure at a 4096-token cap: reasoning consumed the budget, the JSON never
+        closed, and the salvage path silently yielded zero beats for three straight runs.
+        """
+        low = model.lower()
+        if "qwen" in low:
+            return {"reasoning_effort": "none"}
+        if "gemini-3" in low or "gemini-4" in low:
             return {"reasoning_effort": "none"}
         return None
+
+    def _record_finish(self, resp: Any) -> None:
+        """Remember why the model stopped, so callers can tell truncation from an answer.
+
+        `_extract_json_object` is deliberately resilient: given a truncated body it
+        returns the first COMPLETE inner object rather than raising. That is correct for
+        vision windows and catastrophic for a whole-script narration response, where the
+        first complete inner object is a single beat and the caller reads
+        `data["beats"]` — getting nothing, silently, run after run. The salvage stays;
+        callers that cannot tolerate it now have a signal to check.
+        """
+        try:
+            self.last_finish_reason = str(resp.choices[0].finish_reason or "")
+        except Exception:
+            self.last_finish_reason = ""
+        try:
+            self.last_completion_tokens = int(resp.usage.completion_tokens)
+        except Exception:
+            self.last_completion_tokens = 0
 
     def available_models(self) -> list[str]:
         """Model ids this key can actually reach — availability is key-dependent."""
@@ -334,6 +365,7 @@ class OpenAICompatProvider(LLMProvider):
                     raise
                 resp = _retry_on_rate_limit(lambda: call(False, current))
                 break
+        self._record_finish(resp)
         content = resp.choices[0].message.content or ""
         return _extract_json_object(content) if json_mode else content
 
@@ -385,6 +417,7 @@ class OpenAICompatProvider(LLMProvider):
                 raise
             # Fall back to free-form output and extract the JSON object locally.
             resp = _retry_on_rate_limit(lambda: call(False))
+        self._record_finish(resp)
         return _extract_json_object(resp.choices[0].message.content or "{}")
 
 

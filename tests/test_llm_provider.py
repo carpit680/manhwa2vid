@@ -355,3 +355,42 @@ def test_preflight_raises_on_dead_key() -> None:
 
     with pytest.raises(BillingExhausted):
         preflight_check(_Dead(), label="test")
+
+
+def test_extra_body_suppresses_thinking_for_gemini_3():
+    """A 28-beat narration came back cut mid-structure at a 4096 cap: reasoning consumed
+    the budget. gemini-2.5 is left alone deliberately — the bug was observed on 3.x."""
+    from manhwa2vid.llm.provider import GeminiProvider
+
+    p = GeminiProvider.__new__(GeminiProvider)
+    assert p._extra_body("gemini-3.5-flash") == {"reasoning_effort": "none"}
+    assert p._extra_body("gemini-3-flash-preview") == {"reasoning_effort": "none"}
+    assert p._extra_body("gemini-2.5-flash") is None
+    assert p._extra_body("qwen/qwen3.6-27b") == {"reasoning_effort": "none"}
+
+
+def test_record_finish_captures_truncation():
+    """finish_reason is the provider saying outright that the body was cut. Nothing read
+    it before, which is why silent truncation survived three runs."""
+    from manhwa2vid.llm.provider import GeminiProvider
+
+    class Choice:
+        finish_reason = "length"
+
+    class Usage:
+        completion_tokens = 4096
+
+    class Resp:
+        choices = [Choice()]
+        usage = Usage()
+
+    p = GeminiProvider.__new__(GeminiProvider)
+    p._record_finish(Resp())
+    assert p.last_finish_reason == "length"
+    assert p.last_completion_tokens == 4096
+
+    class Bare:
+        choices: list = []
+
+    p._record_finish(Bare())
+    assert p.last_finish_reason == ""

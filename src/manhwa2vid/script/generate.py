@@ -657,6 +657,30 @@ def _narration_chunk_user(
     )
 
 
+def truncation_reason(data: Any, finish_reason: str) -> str:
+    """Why this response should not be believed, or "" if it looks complete.
+
+    Two independent tells:
+      - `finish_reason == "length"` is the provider stating outright that it stopped
+        because it ran out of output budget.
+      - a parsed body that is a single BEAT rather than the {"beats": [...]} envelope is
+        `_extract_json_object` having salvaged the first complete INNER object from a
+        body that never closed. That salvage is correct for vision windows and
+        catastrophic here: the caller reads data["beats"], gets nothing, and every beat
+        silently degrades to being written in isolation.
+    """
+    if finish_reason == "length":
+        return "finish_reason=length"
+    if isinstance(data, dict) and "beat_id" in data and "beats" not in data:
+        return "salvaged a single beat (envelope never closed)"
+    return ""
+
+
+class NarrationTruncated(RuntimeError):
+    """The model's answer was cut off. Distinct from "the model had nothing to say":
+    truncation is recoverable by asking for less, an empty answer is not."""
+
+
 def _sighted_complete_json(
     llm: Any,
     system: str,
@@ -665,6 +689,7 @@ def _sighted_complete_json(
     paths: dict[str, Path] | None,
     config: dict[str, Any],
     max_images: int | None = None,
+    max_output_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Narration call with the beats' own panels attached.
 
@@ -729,17 +754,37 @@ def _sighted_complete_json(
             "story in the voice the system prompt defines.\n\n"
             f"{user}"
         )
+        # The narration response is an order of magnitude larger than a vision window;
+        # the shared MAX_VISION_TOKENS default (4096) truncated every whole-script call
+        # for three runs straight while the salvage path made it look like an empty
+        # answer. Give this call its own budget.
+        if hasattr(llm, "MAX_VISION_TOKENS"):
+            llm.MAX_VISION_TOKENS = max_output_tokens or int(
+                get_nested(config, "script", "narration_max_output_tokens", default=16384)
+            )
         raw = llm.describe_labeled_panels(labeled, prompt)
+        finish = str(getattr(llm, "last_finish_reason", "") or "")
         # Keep the last raw narration response for forensics — "which field did the
         # model actually return" is undiagnosable once parsing has flattened it.
         try:
             debug_dir = paths["root"] / "debug"
             debug_dir.mkdir(exist_ok=True)
             with (debug_dir / "narration_responses.jsonl").open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps({"n_beats": len(beats), "raw": raw}) + "\n")
+                fh.write(json.dumps({"n_beats": len(beats), "finish": finish, "raw": raw}) + "\n")
         except Exception:
             pass
-        return json.loads(raw)
+        data = json.loads(raw)
+        why = truncation_reason(data, finish)
+        if why:
+            raise NarrationTruncated(
+                f"narration response truncated ({why}) for {len(beats)} beat(s)"
+            )
+        return data
+    except NarrationTruncated:
+        # Must reach the ladder in _run_narration_pass. Swallowing it here and quietly
+        # switching to the text-only path would be the same silent degradation this
+        # whole change exists to end.
+        raise
     except Exception as exc:
         console.print(f"[yellow]Sighted narration unavailable ({type(exc).__name__}) — using text evidence[/]")
         return _complete_json(llm, system, user)
@@ -755,7 +800,7 @@ def _run_narration_pass(
     config: dict[str, Any],
     cards: list[SceneCard] | None = None,
     paths: dict[str, Path] | None = None,
-) -> tuple[list[ScriptBeat], list[int], list[int]]:
+) -> tuple[list[ScriptBeat], list[int], list[int], str]:
     """Chunked narration: outline beat_ids/panel_ids are authoritative; the LLM only
     supplies narration text. Returns (beats, beat_ids_missing_after_retry)."""
     template = _load_prompt_template("recap.txt")
@@ -814,28 +859,73 @@ def _run_narration_pass(
     missing: list[int] = []
     narration_fallbacks: list[int] = []
 
-    for chunk in _chunked(outline_beats, chunk_size):
+    base_budget = int(get_nested(config, "script", "narration_max_output_tokens", default=16384))
+
+    def _call_group(
+        group: list[ScriptOutlineBeat], budget: int | None = None
+    ) -> tuple[dict[int, str], dict[int, list[str]]]:
         user = _narration_chunk_user(
-            meta, chunk, hook, bible, attribution, synopsis, config, cards,
+            meta, group, hook, bible, attribution, synopsis, config, cards,
             introduced=introduced, running_summary=running_summary,
-            whole_script=len(chunk) == len(outline_beats) and len(chunk) > 1,
+            whole_script=len(group) == len(outline_beats) and len(group) > 1,
             n_beats_total=len(outline_beats), n_chapters=_chapter_count(meta, paths),
         )
+        data = _sighted_complete_json(
+            llm, system, user, group, paths, config, max_output_tokens=budget
+        )
+        g: dict[int, str] = {}
+        k: dict[int, list[str]] = {}
+        for item in data.get("beats", []):
+            if isinstance(item, dict) and str(item.get("narration", "")).strip():
+                bid = int(item.get("beat_id", -1))
+                g[bid] = str(item["narration"]).strip()
+                keys = item.get("key_panels")
+                if isinstance(keys, list):
+                    k[bid] = [str(x).strip() for x in keys if str(x).strip()]
+        # A multi-beat call that yields NOTHING is not an empty answer, it is a broken
+        # one: the salvage path handed back a single inner beat with no envelope. Treated
+        # as truncation so the ladder below degrades deliberately instead of silently
+        # dropping every beat into per-beat mode.
+        if len(group) > 1 and not g:
+            raise NarrationTruncated(f"call for {len(group)} beats returned no beats")
+        return g, k
+
+    # Degradation ladder: one call for the whole script is the design; anything less is
+    # a documented, LOUD downgrade. Per-beat is the floor and the worst outcome — it is
+    # what the pipeline was silently doing for three runs, and it is strictly worse than
+    # the chunking it replaced, because no beat can see any other.
+    groups: list[list[ScriptOutlineBeat]] = _chunked(outline_beats, chunk_size)
+    narration_path = "whole-script" if len(groups) == 1 else f"chunked({chunk_size})"
+    gi = 0
+    while gi < len(groups):
+        chunk = groups[gi]
         got: dict[int, str] = {}
         got_keys: dict[int, list[str]] = {}
         try:
-            data = _sighted_complete_json(llm, system, user, chunk, paths, config)
-            for item in data.get("beats", []):
-                if isinstance(item, dict) and str(item.get("narration", "")).strip():
-                    bid = int(item.get("beat_id", -1))
-                    got[bid] = str(item["narration"]).strip()
-                    keys = item.get("key_panels")
-                    if isinstance(keys, list):
-                        got_keys[bid] = [str(k).strip() for k in keys if str(k).strip()]
-            returned = sum(1 for v in got_keys.values() if v)
-            console.print(f"[dim]key_panels returned on {returned}/{len(chunk)} beats[/]")
+            got, got_keys = _call_group(chunk)
+        except NarrationTruncated as exc:
+            console.print(f"[yellow]Narration truncated:[/] {exc} — retrying with a larger budget")
+            try:
+                got, got_keys = _call_group(chunk, budget=base_budget * 2)
+                narration_path = "whole-script (retried)"
+            except Exception as exc2:
+                if len(chunk) > 8:
+                    console.print(
+                        f"[yellow]Still failing ({exc2}) — splitting {len(chunk)} beats "
+                        "into 8-beat groups; beats will see less of each other[/]"
+                    )
+                    groups[gi : gi + 1] = _chunked(chunk, 8)
+                    narration_path = "chunked(8) after truncation"
+                    continue
+                console.print(f"[red]Narration group failed ({exc2}) — falling back per beat[/]")
+                narration_path = "per-beat (degraded)"
         except Exception as exc:
             console.print(f"[yellow]Narration chunk failed, retrying per beat:[/] {exc}")
+            narration_path = "per-beat (degraded)"
+        else:
+            returned = sum(1 for v in got_keys.values() if v)
+            console.print(f"[dim]key_panels returned on {returned}/{len(chunk)} beats[/]")
+        gi += 1
 
         for ob in chunk:
             narration = got.get(ob.beat_id, "")
@@ -884,7 +974,7 @@ def _run_narration_pass(
                 if name not in introduced:
                     introduced.append(name)
 
-    return beats_out, missing, narration_fallbacks
+    return beats_out, missing, narration_fallbacks, narration_path
 
 
 def _retry_single_beat(
@@ -976,7 +1066,7 @@ def generate_script(
         {"hook": hook, "beats": [b.model_dump(mode="json") for b in outline_beats]},
     )
 
-    beats, missing_beats, narration_fallbacks = _run_narration_pass(
+    beats, missing_beats, narration_fallbacks, narration_path = _run_narration_pass(
         meta, outline_beats, hook, bible, attribution, synopsis, config, cards, paths=paths
     )
 
@@ -985,6 +1075,13 @@ def generate_script(
     report = QAReport(stage="script")
     outline_ids = [b.beat_id for b in outline_beats]
     script_ids = [b.beat_id for b in beats]
+    report.add(
+        "narration-path",
+        True if narration_path.startswith("whole-script") else "warn",
+        "" if narration_path.startswith("whole-script")
+        else f"narration ran as {narration_path} — beats saw less of each other than the design intends",
+        path=narration_path,
+    )
     report.add(
         "narration-complete",
         "warn" if narration_fallbacks else True,
