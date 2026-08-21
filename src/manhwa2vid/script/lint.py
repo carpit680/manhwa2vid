@@ -1922,7 +1922,12 @@ _APPOSITIVE_SPAN_RE = re.compile(
     # ", a/an/the/another/one <clause>," — clause may contain ONE inner comma, so a
     # state clause like "a member of the five heroes, currently frozen in ice" is one
     # span, not two half-matches.
-    r",\s+((?:a|an|the|another|one)\b(?:[^,.;!?]+,){0,1}[^,.;!?]+?)(,|(?=[.!?]))",
+    # Single comma-segment only. Multi-segment state clauses ("..., currently frozen in
+    # ice") are prevented at the DATA source now (synopsis roles are truncated to their
+    # first segment); historic welds are cleaned by the ledger-segment residue pass. A
+    # greedy multi-segment match here once swallowed the following VERB clause and
+    # poisoned the variant detector's token sets.
+    r",\s+((?:a|an|the|another|one)\b[^,.;!?]+?)(,|(?=[.!?]))",
     re.I,
 )
 
@@ -1947,8 +1952,27 @@ def dedupe_appositive_clauses(beats: list[ScriptBeat]) -> list[ScriptBeat]:
       - The first kept occurrence is placeholder-protected during residue removal.
     """
     seen: set[str] = set()
+    seen_sets: list[frozenset[str]] = []
     segments: set[str] = set()
     out: list[ScriptBeat] = []
+
+    def _content_set(clause: str) -> frozenset[str]:
+        return frozenset(_stemmed_words(clause))
+
+    def _is_variant(tokens: frozenset[str]) -> bool:
+        # A synopsis that stamps one template varies it per character ("a heavily
+        # tattooed member of the five heroes" / "a deadly member of the five heroes"):
+        # exact text differs, the clause is the same. Overlap >= 0.8 of the smaller
+        # content set counts as the same clause — adjectives can't smuggle it back in.
+        if not tokens:
+            return False
+        for prev in seen_sets:
+            if not prev:
+                continue
+            if len(tokens & prev) / min(len(tokens), len(prev)) >= 0.8:
+                return True
+        return False
+
     for beat in beats:
         text = beat.narration
         kept_spans: list[str] = []
@@ -1961,9 +1985,11 @@ def dedupe_appositive_clauses(beats: list[ScriptBeat]) -> list[ScriptBeat]:
             clause = re.sub(r"^(?:a|an|the|another|one)\s+", "", raw).replace(",", "")
             after = text[m.end():].lstrip()
             comma_ok = after[:1].isupper()
-            if clause in seen:
+            tokens = _content_set(clause)
+            if clause in seen or _is_variant(tokens):
                 return "," if comma_ok else ""
             seen.add(clause)
+            seen_sets.append(tokens)
             for seg in raw.split(","):
                 seg = seg.strip()
                 if len(seg.split()) >= 3:
@@ -1973,6 +1999,39 @@ def dedupe_appositive_clauses(beats: list[ScriptBeat]) -> list[ScriptBeat]:
             return placeholder
 
         text = _APPOSITIVE_SPAN_RE.sub(_sub, text)
+
+        # Article-less variants ("The Swordswoman, members of the five heroes, tell...")
+        # can't be matched by the article-anchored span without matching EVERY
+        # parenthetical — so this pass is removal-only: a bare ", <clause>," goes only
+        # when it is a >=0.8 variant of a clause already kept.
+        def _bare_sub(m: re.Match) -> str:
+            tokens = _content_set(m.group(1).lower())
+            if _is_variant(tokens):
+                after = text[m.end():].lstrip()
+                return "," if after[:1].isupper() else ""
+            return m.group(0)
+
+        text = re.sub(r",\s+([a-z][^,.;!?]+?)(?:,|(?=[.!?]))", _bare_sub, text)
+
+        # Welded leftovers from legacy multi-segment roles: "Skaya currently frozen in
+        # ice, spoke" — a name, a lowercase non-verb segment, a comma, then the verb.
+        def _weld_sub(m: re.Match) -> str:
+            seg_first = m.group(2).split()[0]
+            following = m.group(3)
+            descriptive_shape = seg_first.endswith("ly") or seg_first.endswith("en")
+            if not _looks_like_verb(seg_first) and (
+                _looks_like_verb(following)
+                or descriptive_shape
+                or (_content_set(m.group(2).lower()) and _is_variant(_content_set(m.group(2).lower())))
+            ):
+                return f"{m.group(1)} {m.group(3)}"
+            return m.group(0)
+
+        text = re.sub(
+            r"\b([A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)*)\s+((?:[a-z][\w'’-]*\s+){2,7}[a-z][\w'’-]*),\s+([a-z][\w'’-]*)",
+            _weld_sub,
+            text,
+        )
         # Residue pass: seen clauses (or their tail segments) appearing without the
         # canonical comma framing — welded to a name or re-marked with "another".
         # Two rounds: removing a tail segment ("currently frozen in ice") can expose the
