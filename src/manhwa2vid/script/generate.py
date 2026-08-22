@@ -1451,6 +1451,17 @@ def generate_script(
         tool = make_language_tool()
         if tool is not None:
             beats, grammar_issues = grammar_pass(beats, tool)
+            # grammar_pass AUTO-APPLIES replacements, so it writes text — and it used to
+            # be the last thing that did, after _final_polish had already run. ch1 beat 1
+            # shipped "Sung Jin-Woo, gasps for air": a subject-verb comma splice that
+            # repair_subject_comma fixes on sight and never got the chance to see. The
+            # invariant this file states is "nothing SHIPS unpolished", so every
+            # grammar_pass is followed by the deterministic chain.
+            beats = _final_polish(beats)
+            from manhwa2vid.script.lint import lint_contentless_report
+
+            for bid, msgs in lint_contentless_report(beats).items():
+                grammar_issues.setdefault(bid, []).extend(msgs)
             if grammar_issues:
                 from manhwa2vid.script.lint import rewrite_beat
 
@@ -1475,6 +1486,9 @@ def generate_script(
                         fixed.append(beat)
                 beats = _final_polish(fixed)
                 beats, grammar_residuals = grammar_pass(beats, tool)
+                beats = _final_polish(beats)
+                for bid, msgs in lint_contentless_report(beats).items():
+                    grammar_residuals.setdefault(bid, []).extend(msgs)
             try:
                 tool.close()
             except Exception:

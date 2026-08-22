@@ -1410,6 +1410,46 @@ def lint_hook_grounding(hook: str, evidence_text: str) -> list[str]:
     return bad
 
 
+_REPORT_VERB_RE = re.compile(
+    r"\b(tells?|told|asks?|says?|said|explains?|replies|replied|admits?|adds?|notes?|"
+    r"warns?|reminds?|assures?|informs?)\b",
+    re.I,
+)
+_REPORT_COMPLEMENT_RE = re.compile(
+    r"\b(that|how|why|what|whether|if|about|to\s+\w+|not\s+to)\b|[,:]", re.I
+)
+
+
+def lint_contentless_report(beats: list[ScriptBeat]) -> dict[int, list[str]]:
+    """A reporting verb that reports nothing: "Kim Sangshik tells Bak."
+
+    Tells him WHAT. These are syntactically complete, so repair_truncated_sentences
+    passes them and every grammar checker calls them clean, yet they carry no
+    information at all — the whole point of the sentence went missing. Two shipped in one
+    ch1 draft ("Kim Sangshik tells Bak.", "Jin-Woo smiles weakly and tells Lee Joo-hee."),
+    both produced by rewrites squeezing a reported line into a tight word budget.
+
+    Detection is a complement test on the clause FOLLOWING the verb: real reported speech
+    continues into that/how/why/whether/about/to-infinitive or a comma. Deliberately
+    narrow — it only fires when the sentence ENDS within a few words of the verb, so
+    "she tells him the truth" (a direct object that is genuinely the content) survives.
+    """
+    out: dict[int, list[str]] = {}
+    for beat in beats:
+        for sentence in _SENTENCE_SPLIT_RE.split(beat.narration.strip()):
+            m = _REPORT_VERB_RE.search(sentence)
+            if not m:
+                continue
+            tail = sentence[m.end():].strip(" .!?")
+            if len(tail.split()) > 4 or _REPORT_COMPLEMENT_RE.search(tail):
+                continue
+            out.setdefault(beat.beat_id, []).append(
+                f'"{sentence.strip()}" reports nothing — say WHAT was said, or cut the '
+                "sentence and spend the words on the next event"
+            )
+    return out
+
+
 def lint_beats(
     beats: list[ScriptBeat],
     config: dict[str, Any],

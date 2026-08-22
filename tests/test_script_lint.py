@@ -1440,3 +1440,21 @@ def test_lint_hook_grounding_flags_invented_specifics():
     evidence = "E-RANK HUNTER. the hunter guild's lowest rank a blue gate in seoul"
     assert lint_hook_grounding("He steps through a D-rank gate in Seoul.", evidence) == ["d-rank"]
     assert lint_hook_grounding("He steps through an E-rank gate in Seoul.", evidence) == []
+
+
+def test_lint_contentless_report_flags_reports_with_no_content():
+    """"Kim Sangshik tells Bak." — tells him WHAT. Syntactically complete, so
+    repair_truncated_sentences passes it and LanguageTool calls it clean, while the point
+    of the sentence is simply gone. Two shipped in one ch1 draft."""
+    from manhwa2vid.script.lint import lint_contentless_report
+
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p"], narration="Kim Sangshik tells Bak."),
+        ScriptBeat(beat_id=2, panel_ids=["p"],
+                   narration="Jin-Woo smiles weakly and tells Lee Joo-hee."),
+        ScriptBeat(beat_id=3, panel_ids=["p"],
+                   narration="Kim tells Bak that the dungeon will be easy today."),
+        ScriptBeat(beat_id=4, panel_ids=["p"], narration="She tells him the truth about the raid."),
+    ]
+    flagged = lint_contentless_report(beats)
+    assert sorted(flagged) == [1, 2]
