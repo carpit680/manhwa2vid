@@ -1517,3 +1517,20 @@ def test_lock_transition_line_keeps_itself_when_placed_early():
         "p0008_01", {}, line)[0].narration
     assert line in out                      # survived
     assert "Quiet bridges" not in out       # the model's restatement went
+
+
+def test_lint_malformed_phrases_catches_rewrite_wreckage():
+    """Two shapes grammatical enough to survive every other net, both shipped from
+    REWRITES: a determiner and its modifier outliving the name they belonged to, and two
+    anonymous agents flattened onto one descriptor so the sentence identifies nobody."""
+    from manhwa2vid.script.lint import lint_malformed_phrases
+
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p"], narration="A dejected he walks away from the stall."),
+        ScriptBeat(beat_id=2, panel_ids=["p"], narration="A hunter and a hunter both shout agreement."),
+        ScriptBeat(beat_id=3, panel_ids=["p"], narration="A dejected Jin-Woo walks away from the stall."),
+        ScriptBeat(beat_id=4, panel_ids=["p"], narration="A hunter and a vendor both shout."),
+        # Object pronoun: article, two words, pronoun — matches the shape, is correct.
+        ScriptBeat(beat_id=5, panel_ids=["p"], narration="The healer treats him after the raid."),
+    ]
+    assert sorted(lint_malformed_phrases(beats)) == [1, 2]

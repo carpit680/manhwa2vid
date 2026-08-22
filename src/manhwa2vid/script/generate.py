@@ -1475,10 +1475,11 @@ def generate_script(
             # invariant this file states is "nothing SHIPS unpolished", so every
             # grammar_pass is followed by the deterministic chain.
             beats = _final_polish(beats)
-            from manhwa2vid.script.lint import lint_contentless_report
+            from manhwa2vid.script.lint import lint_contentless_report, lint_malformed_phrases
 
-            for bid, msgs in lint_contentless_report(beats).items():
-                grammar_issues.setdefault(bid, []).extend(msgs)
+            for finding in (lint_contentless_report(beats), lint_malformed_phrases(beats)):
+                for bid, msgs in finding.items():
+                    grammar_issues.setdefault(bid, []).extend(msgs)
             if grammar_issues:
                 from manhwa2vid.script.lint import rewrite_beat
 
@@ -1504,8 +1505,9 @@ def generate_script(
                 beats = _final_polish(fixed)
                 beats, grammar_residuals = grammar_pass(beats, tool)
                 beats = _final_polish(beats)
-                for bid, msgs in lint_contentless_report(beats).items():
-                    grammar_residuals.setdefault(bid, []).extend(msgs)
+                for finding in (lint_contentless_report(beats), lint_malformed_phrases(beats)):
+                    for bid, msgs in finding.items():
+                        grammar_residuals.setdefault(bid, []).extend(msgs)
             try:
                 tool.close()
             except Exception:

@@ -1450,6 +1450,54 @@ def lint_contentless_report(beats: list[ScriptBeat]) -> dict[int, list[str]]:
     return out
 
 
+# "A dejected he walks away" — a determiner and modifiers stranded on a pronoun, left
+# behind when a name is swapped out of a premodified noun phrase.
+_ARTICLE_PRONOUN_RE = re.compile(
+    r"\b(a|an|the)\s+(?:[a-z][\w'’-]*\s+){0,2}(he|she|they|him|her|them)\b", re.I
+)
+# "A hunter and a hunter both shout" — two anonymous agents collapsed onto one descriptor.
+_ECHOED_AGENT_RE = re.compile(r"\b(an?)\s+([a-z][\w'’-]*)\s+and\s+(an?)\s+\2\b", re.I)
+
+
+def lint_malformed_phrases(beats: list[ScriptBeat]) -> dict[int, list[str]]:
+    """Two shapes that are grammatical enough to survive every other net.
+
+    Both shipped in one ch1 draft, both out of REWRITES rather than the first pass, and
+    neither is reproducible by any single polish step — which is the point: LanguageTool
+    calls them clean, the malformed-opening gate only inspects a beat's first words, and
+    the deterministic repairs each look at one construction.
+
+      "A dejected he walks away from the coffee stall"  — the determiner and its modifier
+      outlived the name they belonged to;
+      "A hunter and a hunter both shout their agreement" — two anonymous agents flattened
+      onto the same descriptor, so the sentence says nothing.
+
+    Reported for rewrite rather than repaired: recovering "A dejected Jin-Woo" needs to
+    know WHICH person, and inventing one is how a misattribution ships.
+    """
+    out: dict[int, list[str]] = {}
+    for beat in beats:
+        stranded = _ARTICLE_PRONOUN_RE.search(beat.narration)
+        # A stranded determiner heads a SUBJECT, so a verb has to follow the pronoun.
+        # Without that test the object pronoun in "The healer treats him after the raid"
+        # matched — article, two words, pronoun — and flagged a correct sentence.
+        if stranded:
+            after = beat.narration[stranded.end():].split()
+            if not after or not _looks_like_verb(after[0]):
+                stranded = None
+        for match, why in (
+            (stranded,
+             "an article and its modifiers are stranded on a pronoun; name the person or "
+             "drop the determiner"),
+            (_ECHOED_AGENT_RE.search(beat.narration),
+             "the same descriptor is used for two different people, so the sentence "
+             "identifies nobody; distinguish them or name one"),
+        ):
+            if match:
+                out.setdefault(beat.beat_id, []).append(f'"{match.group(0)}" — {why}')
+    return out
+
+
 def lint_beats(
     beats: list[ScriptBeat],
     config: dict[str, Any],
