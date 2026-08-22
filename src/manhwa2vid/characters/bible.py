@@ -145,6 +145,45 @@ def merge_profile(bible: SeriesBible, profile: CharacterProfile) -> None:
     )
 
 
+# Words that carry no story information on their own. A "role" that reduces to one of
+# these after the tier word is stripped is not a role at all.
+_EMPTY_ROLE_NOUNS = frozenset(
+    """character person figure man woman guy girl one npc role someone somebody
+    individual member""".split()
+)
+
+
+def sanitize_role(role: str) -> str:
+    """Strip internal TAXONOMY out of a character's story role.
+
+    CharacterTier is bookkeeping — main/supporting/minor/extra rank how much page time
+    someone gets. It is not something a narrator can say. But the tier word leaks into the
+    role field (the quest/search passes see the tier in context and answer "supporting
+    hunter"), the bible prints `role: supporting hunter`, and rule 4 tells the writer to
+    introduce each person with their role — so Solo Leveling ch1 shipped "Kim Sangshik, a
+    supporting hunter". Nothing in that clause tells a viewer anything.
+
+    This is series-agnostic damage: any title gets "a supporting knight", "a supporting
+    mage". Strip the tier word and keep the real noun ("supporting hunter" -> "hunter");
+    if nothing informative survives ("main character"), return empty and let the writer
+    introduce the person some other way rather than with a label about the pipeline.
+
+    Applied on both paths deliberately. Sanitizing only at write time would leave every
+    bible already on disk broken, and those persist at SERIES level across every chapter
+    of a title — the state does not rebuild itself.
+    """
+    text = " ".join((role or "").split())
+    if not text:
+        return ""
+    tier_words = {t.value.lower() for t in CharacterTier}
+    kept = [w for w in text.split() if w.lower().strip(",") not in tier_words]
+    if len(kept) == len(text.split()):
+        return text  # no tier word present; leave the role exactly as written
+    if not kept or all(w.lower().strip(",") in _EMPTY_ROLE_NOUNS for w in kept):
+        return ""
+    return " ".join(kept)
+
+
 def format_bible_for_prompt(bible: SeriesBible, *, active_ids: set[str] | None = None) -> str:
     if not bible.characters:
         return "(no characters in bible yet)"
@@ -170,8 +209,9 @@ def format_bible_for_prompt(bible: SeriesBible, *, active_ids: set[str] | None =
         parts = [
             f"- [{profile.tier.value}]{mc_tag} {profile.canonical_name} (id={profile.id}, pronoun={profile.pronoun})"
         ]
-        if profile.role:
-            parts.append(f"role: {profile.role}")
+        role_text = sanitize_role(profile.role)
+        if role_text:
+            parts.append(f"role: {role_text}")
         if alias_text:
             parts.append(f"aliases: {alias_text}")
         if desc_text:

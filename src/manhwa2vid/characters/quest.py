@@ -8,7 +8,7 @@ from typing import Any
 
 from rich.console import Console
 
-from manhwa2vid.characters.bible import merge_profile, save_series_bible
+from manhwa2vid.characters.bible import merge_profile, save_series_bible, sanitize_role
 from manhwa2vid.characters.consolidate import consolidate_profiles
 from manhwa2vid.characters.search import search_sources
 from manhwa2vid.config import find_repo_root, get_nested
@@ -84,7 +84,11 @@ def apply_findings(profile: CharacterProfile, findings: list[CharacterFinding]) 
         elif finding.field == "descriptor" and finding.value not in descriptors:
             descriptors.append(finding.value)
         elif finding.field == "role" and not role:
-            role = finding.value
+            # The tier is in this pass's context, so the model answers "supporting
+            # hunter" — bookkeeping, not a role a narrator can speak. Strip it here so
+            # the bible stops accumulating them; format_bible_for_prompt strips it again
+            # on the way out, because bibles already on disk never rebuild themselves.
+            role = sanitize_role(finding.value)
         elif finding.field == "pronoun":
             pronoun = finding.value
         elif finding.field == "tier" and finding.value == "main":

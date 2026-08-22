@@ -179,3 +179,46 @@ def test_pipeline_never_reads_the_reference_folder():
                 if "reference/" in node.value and node.value not in docstrings:
                     offenders.append(f"{py.relative_to(src)}: {node.value[:70]!r}")
     assert not offenders, f"pipeline code references the dev-only reference/ folder: {offenders}"
+
+
+def test_sanitize_role_strips_tier_taxonomy():
+    """CharacterTier ranks page time; it is not something a narrator can say. The quest
+    pass sees the tier in context and answers "supporting hunter", the bible prints
+    `role: supporting hunter`, and rule 4 tells the writer to introduce people by role —
+    so ch1 shipped "Kim Sangshik, a supporting hunter". Series-agnostic damage: any title
+    gets "a supporting knight"."""
+    from manhwa2vid.characters.bible import sanitize_role
+
+    assert sanitize_role("supporting hunter") == "hunter"
+    assert sanitize_role("supporting knight of the realm") == "knight of the realm"
+    assert sanitize_role("minor vendor") == "vendor"
+    # Nothing informative survives -> no role clause at all, rather than a pipeline label.
+    assert sanitize_role("main character") == ""
+    assert sanitize_role("supporting") == ""
+    # Genuine roles are untouched, including the one quest.py branches on.
+    assert sanitize_role("raid leader") == "raid leader"
+    assert sanitize_role("the party's field medic") == "the party's field medic"
+    assert sanitize_role("protagonist") == "protagonist"
+
+
+def test_bible_prompt_never_prints_tier_as_role():
+    """The read path must sanitize too: bibles persist at SERIES level across every
+    chapter of a title, so state already on disk never rebuilds itself."""
+    import json
+
+    from manhwa2vid.characters.bible import format_bible_for_prompt
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="char_mc",
+        characters={
+            "char_mc": CharacterProfile(
+                id="char_mc", canonical_name="MC", tier=CharacterTier.MAIN, role="protagonist"),
+            "char_k": CharacterProfile(
+                id="char_k", canonical_name="Kim", tier=CharacterTier.SUPPORTING,
+                role="supporting hunter"),
+        },
+    )
+    text = format_bible_for_prompt(bible)
+    assert "role: supporting hunter" not in text
+    assert "role: hunter" in text
