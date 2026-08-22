@@ -1196,35 +1196,65 @@ def generate_script(
     # Omission pass. Every other gate here audits what the narration ASSERTS; this one
     # audits what it silently dropped, against the outline that was built with
     # whole-chapter context. See lint_plot_coverage for why this is warn-and-rewrite.
-    from manhwa2vid.script.lint import lint_plot_coverage, rewrite_beat as _rewrite_beat
+    from manhwa2vid.script.lint import (
+        lint_hook_grounding,
+        lint_plot_coverage,
+        lint_repeated_setting,
+        lint_time_shift_marker,
+        rewrite_beat as _rewrite_beat,
+    )
 
     plot_by_id_all = {ob.beat_id: ob.plot_beat for ob in outline_beats}
     min_cov = float(get_nested(config, "script", "min_plot_coverage", default=0.25))
-    uncovered = lint_plot_coverage(beats, plot_by_id_all, min_ratio=min_cov)
-    if uncovered:
+
+    # World terms worth protecting from re-description: a term the chapter's own panels
+    # keep naming. Derived from the cards, never a hardcoded list — "Gate" is Solo
+    # Leveling's word and meaningless for the next title.
+    term_counts: dict[str, int] = {}
+    for card in cards:
+        for term in card.key_terms or []:
+            if len(term) > 3:
+                term_counts[term] = term_counts.get(term, 0) + 1
+    world_terms = [t for t, n in sorted(term_counts.items(), key=lambda kv: -kv[1]) if n >= 2][:20]
+
+    # One rewrite round for every story-integrity defect, so a beat with two problems is
+    # regenerated once against both rather than twice against one each.
+    issues_by_beat: dict[int, list[str]] = {}
+    for finding in (
+        lint_plot_coverage(beats, plot_by_id_all, min_ratio=min_cov),
+        lint_time_shift_marker(beats, plot_by_id_all),
+        lint_repeated_setting(beats, world_terms),
+    ):
+        for bid, msgs in finding.items():
+            issues_by_beat.setdefault(bid, []).extend(msgs)
+
+    if issues_by_beat:
         console.print(
-            f"[yellow]Plot coverage:[/] {len(uncovered)} beat(s) dropped their outline "
-            f"story — rewriting: {sorted(uncovered)}"
+            f"[yellow]Story integrity:[/] rewriting {len(issues_by_beat)} beat(s): "
+            f"{sorted(issues_by_beat)}"
         )
         recovered: list[ScriptBeat] = []
         for beat in beats:
-            if beat.beat_id in uncovered:
+            if beat.beat_id in issues_by_beat:
                 new_text = _rewrite_beat(
                     beat, bible, attribution, config,
-                    issues=uncovered[beat.beat_id], scene_cards=cards,
+                    issues=issues_by_beat[beat.beat_id], scene_cards=cards,
                 )
                 recovered.append(beat.model_copy(update={"narration": new_text}))
             else:
                 recovered.append(beat)
         beats = recovered
-    still_uncovered = lint_plot_coverage(beats, plot_by_id_all, min_ratio=min_cov)
+
+    hook_bad = lint_hook_grounding(hook, " ".join(
+        f"{c.source_text or ''} {c.action or ''} {' '.join(c.key_terms or [])}" for c in cards
+    ))
     cov_report = QAReport(stage="script-coverage")
     cov_report.add(
-        "plot-coverage",
-        True if not still_uncovered else "warn",
-        (f"{len(still_uncovered)} beat(s) still below {min_cov:.0%} of their outline "
-         f"story after rewrite: {sorted(still_uncovered)}") if still_uncovered else "",
-        flagged=len(uncovered), remaining=len(still_uncovered), threshold=min_cov,
+        "hook-grounding",
+        True if not hook_bad else "warn",
+        (f"hook asserts {hook_bad} — absent from every panel in this chapter; it is the "
+         "first line a viewer hears") if hook_bad else "",
+        unsupported=hook_bad,
     )
     enforce(cov_report, paths["root"], force=qa_forced(config))
 
@@ -1378,6 +1408,19 @@ def generate_script(
     except Exception:
         transition_panel = ""
         transition_line = ""
+    # A chapter that HAS a flashforward but no locked line means lock_transition_line is
+    # about to no-op: it returns early on an empty line, so the single most audible
+    # moment in the recap silently loses its cue. Solo Leveling ch1 shipped exactly this
+    # — last_flashforward_panel="p0007_01" with return_to_present_line=None from a story
+    # map cached by an older build, and because the scene stage caches on file existence
+    # the artefact was never rebuilt. Say so rather than degrading quietly.
+    if transition_panel and not transition_line:
+        console.print(
+            "[yellow]Transition:[/] this chapter has a flashforward "
+            f"(panel {transition_panel}) but the story map carries no "
+            "return_to_present_line — re-run `run scene --force` to rebuild it. "
+            "Falling back to the story-integrity rewrite for the cue."
+        )
     def _final_polish(bs: list[ScriptBeat]) -> list[ScriptBeat]:
         # Factored so the grammar loop can re-enter it: any text a rewrite produces goes
         # through the SAME deterministic chain — the invariant is not "nothing runs

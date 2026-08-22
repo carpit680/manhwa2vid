@@ -1388,3 +1388,55 @@ def test_repair_subject_comma_spares_closing_appositive_comma():
     assert out[1] == "Song Chi-yul, the party leader, steps forward."
     assert out[2] == "Seo Jun-Ho stands in the hall."       # real splice still repaired
     assert out[3] == "He nods. Rell walks away."             # splice after a sentence end
+
+
+def test_lint_time_shift_marker_requires_a_spoken_cue():
+    """A viewer HEARS narration. On the page a white flash plus new scenery reads as a
+    flashback; spoken over the same panels it is just the next sentence. Solo Leveling
+    ch1 shipped the jump home purely visually and a listener could not tell time had
+    moved."""
+    from manhwa2vid.script.lint import lint_time_shift_marker
+
+    plot = {2: "The scene shifts to the present day in Seoul, where he walks a crosswalk.",
+            3: "He heads toward the construction site."}
+    beats = [
+        ScriptBeat(beat_id=2, panel_ids=["p"], narration=(
+            "A blinding flash consumes the dungeon. The river flows peacefully under the "
+            "morning sun.")),
+        ScriptBeat(beat_id=3, panel_ids=["p"], narration="He heads toward the site."),
+    ]
+    assert sorted(lint_time_shift_marker(beats, plot)) == [2]
+
+    fixed = [beats[0].model_copy(update={"narration": (
+        "A blinding flash consumes the dungeon. Hours earlier, the river flows peacefully "
+        "under the morning sun.")}), beats[1]]
+    assert lint_time_shift_marker(fixed, plot) == {}
+
+
+def test_lint_repeated_setting_needs_a_real_modifier_chain():
+    """Describe a place once. The article of a DIFFERENT noun must not anchor the match:
+    "A shout from the Gate" captured "shout from the" as modifiers and flagged a beat
+    that describes nothing."""
+    from manhwa2vid.script.lint import lint_repeated_setting
+
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p"],
+                   narration="He nears a swirling blue dungeon Gate behind the scaffolding."),
+        ScriptBeat(beat_id=2, panel_ids=["p"],
+                   narration="A shout from the Gate draws their attention."),
+        ScriptBeat(beat_id=3, panel_ids=["p"],
+                   narration="The party gathers at a glowing blue magical Gate."),
+    ]
+    flagged = lint_repeated_setting(beats, ["Gate"])
+    assert sorted(flagged) == [3]          # 1 establishes it, 2 is a bare reference
+    assert "beat 1" in flagged[3][0]
+
+
+def test_lint_hook_grounding_flags_invented_specifics():
+    """The hook is the first line a viewer hears and has no panel binding of its own.
+    ch1's promised "a D-rank gate" — D-rank appears in no panel of that chapter."""
+    from manhwa2vid.script.lint import lint_hook_grounding
+
+    evidence = "E-RANK HUNTER. the hunter guild's lowest rank a blue gate in seoul"
+    assert lint_hook_grounding("He steps through a D-rank gate in Seoul.", evidence) == ["d-rank"]
+    assert lint_hook_grounding("He steps through an E-rank gate in Seoul.", evidence) == []

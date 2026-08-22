@@ -1283,6 +1283,133 @@ def lint_plot_coverage(
     return out
 
 
+_FUNCTION_WORDS = frozenset(
+    """a an the of in on at to from with by for and or that this his her its their
+    into onto near behind beside toward towards through across over under""".split()
+)
+
+_TIME_SHIFT_PLOT_RE = re.compile(
+    r"\b(?:transitions?|shifts?|jumps?|cuts?|moves?|returns?)\s+(?:the scene\s+)?(?:back\s+)?to\b"
+    r"|\bthe scene (?:shifts?|changes?|transitions?)\b"
+    r"|\bflash(?:es|ing)?[- ]?(?:back|forward)\b|\bflash(?:back|forward)\b"
+    r"|\b(?:back|earlier|later) that (?:morning|day|night|week|month|year)\b"
+    r"|\bpresent[- ]day\b|\bto the present\b|\bmoments? before\b"
+    r"|\b(?:hours?|days?|weeks?|months?|years?) (?:earlier|later|before|ago)\b",
+    re.I,
+)
+# Explicit cues a LISTENER can hear. A visual dissolve is not one: on the page a white
+# flash and a change of scenery reads as a time jump, but read aloud it is just the next
+# sentence, so the narration has to say so in words.
+_TIME_CUE_RE = re.compile(
+    r"\b(earlier|later|before (?:all )?(?:this|that)|beforehand|until then|by then|"
+    r"back (?:then|in|at)|that (?:morning|afternoon|evening|night|day)|"
+    r"hours?|days?|weeks?|months?|years? (?:earlier|later|before|ago)|ago|"
+    r"rewind|now|at the time|once|前)\b",
+    re.I,
+)
+
+
+def lint_time_shift_marker(
+    beats: list[ScriptBeat], plot_by_id: dict[int, str]
+) -> dict[int, list[str]]:
+    """A beat that crosses a time boundary must SAY SO in words.
+
+    Solo Leveling ch1 opens on the protagonist bleeding out, then jumps back to an
+    ordinary morning. The outline knew ("a blinding flash transitions the scene back to a
+    normal day in Seoul") and the narration rendered the jump entirely visually — a flash,
+    then a river in sunshine. On the page that reads as a flashback because the ART
+    changes; spoken aloud over those same panels it is just the next sentence, and a
+    listener has no idea the story moved backwards in time.
+
+    Detection is on the OUTLINE, not the narration: the outline is written with
+    whole-chapter context and names the transition, while the narration is exactly the
+    artefact that failed to. Every manhwa opens in media res sooner or later, so this is
+    a structural property of the genre rather than a Solo Leveling quirk.
+    """
+    out: dict[int, list[str]] = {}
+    for beat in beats:
+        plot = plot_by_id.get(beat.beat_id) or ""
+        if not _TIME_SHIFT_PLOT_RE.search(plot):
+            continue
+        if _TIME_CUE_RE.search(beat.narration):
+            continue
+        out[beat.beat_id] = [
+            "this beat crosses a time jump but never says so — a viewer HEARS narration "
+            "and cannot see a scene dissolve. Open the shifted part with an explicit "
+            "spoken cue (\"Hours earlier,\" / \"Back at the start of that morning,\")"
+        ]
+    return out
+
+
+def lint_repeated_setting(
+    beats: list[ScriptBeat], terms: list[str], *, min_modifiers: int = 1
+) -> dict[int, list[str]]:
+    """A place or prop is DESCRIBED once; later beats refer to it plainly.
+
+    Rule 4 already does this for people — name plus role clause on first mention, bare
+    name ever after — and nothing did it for the world. ch1 established "a construction
+    site where a swirling blue dungeon Gate vibrates behind industrial scaffolding" in
+    beat 3 and then re-established "a glowing blue magical Gate inside a construction
+    site" in beat 13, which a viewer hears as arriving somewhere new.
+
+    Flags for rewrite rather than editing the text: the repeated sentence usually also
+    carries NEW story ("the raid party gathers at the entrance"), so deleting it loses a
+    beat, and stripping modifiers by regex is the kind of surgery that has twice broken
+    correct prose in this module. The rewriter is told which term is already established.
+    """
+    out: dict[int, list[str]] = {}
+    established: dict[str, int] = {}
+    for beat in beats:
+        for term in terms:
+            if not term:
+                continue
+            pattern = re.compile(
+                r"\b(?:a|an|the)\s+((?:[a-z][\w'’-]*\s+){%d,4})%s\b" % (min_modifiers, re.escape(term)),
+                re.I,
+            )
+            match = pattern.search(beat.narration)
+            # The captured run must be a real premodifier chain. Without this the article
+            # of a DIFFERENT noun anchors the match: "A shout from the Gate" captured
+            # "shout from the" as modifiers of Gate and flagged a beat that describes
+            # nothing. A function word in the run means the chain was never one.
+            if match and _FUNCTION_WORDS & {w.lower() for w in match.group(1).split()}:
+                match = None
+            if not match:
+                continue
+            first = established.get(term.lower())
+            if first is None:
+                established[term.lower()] = beat.beat_id
+            elif first != beat.beat_id:
+                out.setdefault(beat.beat_id, []).append(
+                    f"'{term}' was already described in beat {first}; name it plainly here "
+                    f"(the/that {term}) and spend the words on what HAPPENS instead"
+                )
+    return out
+
+
+def lint_hook_grounding(hook: str, evidence_text: str) -> list[str]:
+    """Specific claims in the hook must exist in the panels.
+
+    The ch1 hook promised "a D-rank gate in Seoul". D-rank appears in no panel of the
+    chapter — it is an E-rank dungeon, and the hook is the first line a viewer hears.
+    The hook is generated from the synopsis with no panel binding of its own, so nothing
+    downstream ever checked it.
+
+    Narrow by design: only tokens carrying a hyphen or a digit are treated as specific
+    claims (ranks, tiers, levels, counts, dates — the litRPG idiom this genre runs on).
+    Prose words are left alone, because a hook is allowed to characterise while a rank is
+    a fact that is either on the page or invented.
+    """
+    haystack = evidence_text.lower()
+    bad: list[str] = []
+    for token in re.findall(r"\b[a-z]+-[a-z]+\b|\b[a-z]*\d[\w-]*\b", (hook or "").lower()):
+        if len(token) < 3 or token in bad:
+            continue
+        if token not in haystack:
+            bad.append(token)
+    return bad
+
+
 def lint_beats(
     beats: list[ScriptBeat],
     config: dict[str, Any],
