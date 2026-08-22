@@ -1450,6 +1450,12 @@ def lint_contentless_report(beats: list[ScriptBeat]) -> dict[int, list[str]]:
     return out
 
 
+_CLAUSE_BREAKERS = frozenset(
+    """because that when while if since as and or but so though although before after
+    until unless whether where which who from of in on at to with by for""".split()
+)
+
+
 # "A dejected he walks away" — a determiner and modifiers stranded on a pronoun, left
 # behind when a name is swapped out of a premodified noun phrase.
 _ARTICLE_PRONOUN_RE = re.compile(
@@ -1484,6 +1490,12 @@ def lint_malformed_phrases(beats: list[ScriptBeat]) -> dict[int, list[str]]:
         if stranded:
             after = beat.narration[stranded.end():].split()
             if not after or not _looks_like_verb(after[0]):
+                stranded = None
+            # A conjunction or preposition between the determiner and the pronoun means a
+            # new clause started and the pronoun heads THAT one: "he is used to the pain
+            # because he is weak" matches article + two words + pronoun + verb and is
+            # perfectly correct. Only an unbroken determiner-modifier-pronoun run is wrong.
+            elif _CLAUSE_BREAKERS & {w.lower().strip(",") for w in stranded.group(0).split()}:
                 stranded = None
         for match, why in (
             (stranded,

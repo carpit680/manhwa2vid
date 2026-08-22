@@ -1532,5 +1532,9 @@ def test_lint_malformed_phrases_catches_rewrite_wreckage():
         ScriptBeat(beat_id=4, panel_ids=["p"], narration="A hunter and a vendor both shout."),
         # Object pronoun: article, two words, pronoun — matches the shape, is correct.
         ScriptBeat(beat_id=5, panel_ids=["p"], narration="The healer treats him after the raid."),
+        # A conjunction between determiner and pronoun starts a new clause, so the pronoun
+        # heads THAT one. This shape flagged a correct beat until _CLAUSE_BREAKERS existed.
+        ScriptBeat(beat_id=6, panel_ids=["p"],
+                   narration="He tells her he is used to the pain because he is weak."),
     ]
     assert sorted(lint_malformed_phrases(beats)) == [1, 2]
