@@ -1535,3 +1535,31 @@ def test_corrections_tolerate_stale_panel_ids_and_bad_json(tmp_path):
 
     paths["corrections_json"].write_text("{not json")
     assert apply_corrections(paths, cards)[0].action == "original"
+
+
+def test_llm_link_pass_survives_malformed_merges(monkeypatch):
+    """A model returning merges as a list of LISTS crashed the entire cast stage on
+    item.get(...). A malformed entry costs that entry, never the run."""
+    import json as _json
+
+    from manhwa2vid.characters import link as link_mod
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SceneCard, SeriesBible
+
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="char_mc",
+        characters={"char_mc": CharacterProfile(
+            id="char_mc", canonical_name="MC", tier=CharacterTier.MAIN)},
+    )
+    cards = [SceneCard(panel_ids=["p1"], action="a man walks", source_text="", is_story=True)]
+
+    class _LLM:
+        def complete(self, *a, **k):
+            return _json.dumps({
+                "merges": [["descriptor", "char_mc"], {"descriptor_or_name": "x"}],
+                "panel_updates": [],
+            })
+
+    monkeypatch.setattr(link_mod, "get_stage_llm", lambda *a, **k: _LLM())
+    monkeypatch.setattr(link_mod, "apply_stage_model", lambda llm, *a, **k: llm, raising=False)
+    merges, updates = link_mod._llm_link_pass(cards, bible, {})
+    assert merges == {} and updates == []

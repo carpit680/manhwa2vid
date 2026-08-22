@@ -527,7 +527,15 @@ def _llm_link_pass(
         return {}, []
 
     merges: dict[str, str] = {}
-    for item in data.get("merges", []):
+    # Shape-guard the model's output. The envelope is asked for as a list of objects and
+    # one run returned a list of LISTS, which crashed the whole cast stage on
+    # item.get(...). A malformed entry must cost that entry, never the run — the same
+    # reason panel_updates is type-checked below.
+    if not isinstance(data, dict):
+        return {}, []
+    for item in data.get("merges", []) or []:
+        if not isinstance(item, dict):
+            continue
         key = normalize_descriptor(str(item.get("descriptor_or_name", "")))
         char_id = str(item.get("char_id", "")).strip()
         if not key or not char_id or char_id not in bible.characters:
