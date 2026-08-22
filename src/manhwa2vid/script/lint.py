@@ -1742,7 +1742,21 @@ def strip_internal_labels(beats: list[ScriptBeat], bible: SeriesBible | None = N
             name = _short_name_form(profile.canonical_name)
     out: list[ScriptBeat] = []
     for beat in beats:
-        text = _LABEL_APPOSITIVE_RE.sub(lambda m: "," if m.group(1) else "", beat.narration)
+        def _label_sub(m: re.Match) -> str:
+            # A PRECEDING comma does not make this an appositive. "Now, the protagonist
+            # walks safely through the crosswalk" opens with a sentence adverbial, and
+            # deleting the label there left "Now, walks safely" — which repair_subject_comma
+            # then tidied into the headless "Now walks safely". Two correct steps, one
+            # destroyed sentence. If a verb follows, the label is the SUBJECT: leave it for
+            # the name swap below, which is what the comment on _LABEL_SUBJECT_RE has
+            # always promised.
+            after = beat.narration[m.end():].lstrip()
+            first = after.split()[0] if after.split() else ""
+            if _looks_like_verb(first):
+                return m.group(0)
+            return "," if m.group(1) else ""
+
+        text = _LABEL_APPOSITIVE_RE.sub(_label_sub, beat.narration)
         # Whatever survived is a subject; swap in the name, or leave it rather than
         # producing a sentence with no subject at all.
         if name:

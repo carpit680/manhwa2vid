@@ -1458,3 +1458,27 @@ def test_lint_contentless_report_flags_reports_with_no_content():
     ]
     flagged = lint_contentless_report(beats)
     assert sorted(flagged) == [1, 2]
+
+
+def test_strip_internal_labels_keeps_the_label_when_it_is_the_subject():
+    """A PRECEDING comma does not make a label an appositive. "Now, the protagonist walks
+    safely through the crosswalk" opens with a sentence adverbial; deleting the label
+    there left "Now, walks safely", which repair_subject_comma then tidied into the
+    headless "Now walks safely". Two correct steps, one destroyed sentence."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import repair_subject_comma, strip_internal_labels
+
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="char_mc",
+        characters={"char_mc": CharacterProfile(
+            id="char_mc", canonical_name="Sung Jin-Woo", tier=CharacterTier.MAIN)},
+    )
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p"],
+                   narration="Now, the protagonist walks safely through a crowded crosswalk."),
+        ScriptBeat(beat_id=2, panel_ids=["p"],
+                   narration="The protagonist walks away from the stall."),
+    ]
+    out = [b.narration for b in repair_subject_comma(strip_internal_labels(beats, bible))]
+    assert out[0] == "Now, Jin-Woo walks safely through a crowded crosswalk."
+    assert out[1] == "Jin-Woo walks away from the stall."
