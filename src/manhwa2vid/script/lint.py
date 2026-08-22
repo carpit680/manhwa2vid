@@ -1871,8 +1871,19 @@ def lock_transition_line(
         marker = re.compile(r"\bpresent[- ]day\b|\bthe sky clears\b|\bback in the present\b", re.I)
         if marker.search(sentences[-1]):
             sentences[-1] = line
+            locked_at = len(sentences) - 1
         else:
-            sentences.append(line)
+            # Place it where the shift actually happens. Appending unconditionally put the
+            # cue at the END of a beat whose FIRST panel was the last flashforward frame,
+            # so three panels of present-day narration played before the line announcing
+            # the return — the marker arrived after the thing it marks. Sentences track
+            # panels in order, so the panel's position in the beat gives the position in
+            # the prose: first panel -> the line opens the beat, last panel -> it closes.
+            idx = beat.panel_ids.index(transition_panel)
+            span = max(1, len(beat.panel_ids) - 1)
+            pos = max(0, min(len(sentences), round(idx / span * len(sentences))))
+            sentences.insert(pos, line)
+            locked_at = pos
         # The model often writes the shift twice, e.g. "Quiet bridges now span the wide
         # river under the distant skyline of Seoul." right before the locked line. Any
         # EARLIER sentence naming the destination is that same restatement.
@@ -1880,9 +1891,13 @@ def lock_transition_line(
         # what an earlier restatement would also name.
         destination = line.rsplit(" ", 1)[-1].strip(".,").lower()
         if destination and len(destination) > 3:
+            # Protect the locked line BY INDEX. This used to keep "the last sentence",
+            # which was the same thing only while the line was always appended; once
+            # placement follows the panel, an early-placed line names the destination and
+            # the filter deleted the very sentence it was meant to preserve.
             sentences = [
                 s for i, s in enumerate(sentences)
-                if i == len(sentences) - 1 or destination not in s.lower()
+                if i == locked_at or destination not in s.lower()
             ]
         text = " ".join(sentences)
         out.append(beat.model_copy(update={"narration": text}) if text != beat.narration else beat)

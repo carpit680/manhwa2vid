@@ -1482,3 +1482,38 @@ def test_strip_internal_labels_keeps_the_label_when_it_is_the_subject():
     out = [b.narration for b in repair_subject_comma(strip_internal_labels(beats, bible))]
     assert out[0] == "Now, Jin-Woo walks safely through a crowded crosswalk."
     assert out[1] == "Jin-Woo walks away from the stall."
+
+
+def test_lock_transition_line_placed_where_the_shift_happens():
+    """The cue must not arrive after the thing it marks. Appending unconditionally put it
+    at the END of a beat whose FIRST panel was the last flashforward frame, so three
+    panels of present-day narration played before the line announcing the return."""
+    from manhwa2vid.script.lint import lock_transition_line
+
+    line = "The story returns to a sunny day in the city of Seoul."
+    front = lock_transition_line(
+        [ScriptBeat(beat_id=3, panel_ids=["p0008_01", "p0008_02", "p0009_01", "p0009_02"],
+                    narration="He walks a crowded crosswalk. He thinks the job risks his life. Cars pass.")],
+        "p0008_01", {}, line)[0].narration
+    assert front.startswith(line)
+
+    back = lock_transition_line(
+        [ScriptBeat(beat_id=2, panel_ids=["p0005_01", "p0006_01", "p0008_01"],
+                    narration="A sentinel strikes. He grits his teeth. The vision vanishes.")],
+        "p0008_01", {}, line)[0].narration
+    assert back.endswith(line)
+
+
+def test_lock_transition_line_keeps_itself_when_placed_early():
+    """The destination-dedup kept "the last sentence", which was the locked line only
+    while it was always appended. Once placement follows the panel, an early-placed line
+    names the destination and the filter deleted the sentence it existed to preserve."""
+    from manhwa2vid.script.lint import lock_transition_line
+
+    line = "The story returns to a sunny day in the city of Seoul."
+    out = lock_transition_line(
+        [ScriptBeat(beat_id=3, panel_ids=["p0008_01", "p0009_01"],
+                    narration="Quiet bridges span the river under the skyline of Seoul. He walks on.")],
+        "p0008_01", {}, line)[0].narration
+    assert line in out                      # survived
+    assert "Quiet bridges" not in out       # the model's restatement went
