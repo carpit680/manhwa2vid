@@ -81,6 +81,42 @@ def card_by_panel(cards: list[SceneCard]) -> dict[str, SceneCard]:
     return mapping
 
 
+_UTTERANCE_RE = re.compile(r"^(?P<who>[^:]{1,120}?):\s*(?P<text>.+)$", re.S)
+
+
+def split_utterances(source_text: str) -> tuple[list[str], list[str], list[str]]:
+    """Split a card's transcribed text into (addressed, monologue, unattributed).
+
+    The panel text of a manhwa mixes three devices that must be narrated differently —
+    speech bubbles, inner monologue / caption boxes, and ownerless text — and the vision
+    schema already records which is which: an ADDRESSED line carries "Speaker -> Listener",
+    a monologue line carries a speaker and no listener, and a caption carries neither.
+
+    This used to be left to the writer. Every line went out under one "SPOKEN (convert to
+    reported speech)" header, with a prompt rule asking the model to notice the exception
+    — and it read Solo Leveling's opening monologue ("MY NAME IS SUNG JIN-WOO." / "E-RANK
+    HUNTER.") as dialogue, narrating that a man bleeding to death alone was "introducing
+    himself". 27 of that chapter's 78 lines are ownerless or listener-less, so the
+    exception is a third of the evidence, not an edge case. The arrow is data; deciding
+    it here is free and leaves the writer only the judgement it is actually good at.
+    """
+    addressed: list[str] = []
+    monologue: list[str] = []
+    unattributed: list[str] = []
+    for raw in (source_text or "").split(" / "):
+        line = raw.strip()
+        if not line:
+            continue
+        m = _UTTERANCE_RE.match(line)
+        if not m or m.group("who").strip().startswith(('"', "'", "\u201c")):
+            unattributed.append(line)
+        elif "->" in m.group("who"):
+            addressed.append(line)
+        else:
+            monologue.append(line)
+    return addressed, monologue, unattributed
+
+
 def evidence_for_panels(panel_ids: list[str], cards: list[SceneCard]) -> str:
     by_panel = card_by_panel(cards)
     lines: list[str] = []
@@ -107,12 +143,29 @@ def evidence_for_panels(panel_ids: list[str], cards: list[SceneCard]) -> str:
                 if (p.name_used or p.descriptor or p.ref)
             )
         )
-        said = card.source_text.strip()
-        lines.append(
+        addressed, monologue, unattributed = split_utterances(card.source_text)
+        parts = [
             f"{','.join(card.panel_ids)} | who={who or '(nobody)'} | action={card.action}"
-            + (f"\n    SPOKEN (convert to reported speech, keep the owner): {said}" if said else "")
-            + (f"\n    terms={card.key_terms}" if card.key_terms else "")
-        )
+        ]
+        if addressed:
+            parts.append(
+                "\n    SAYS ALOUD (convert to reported speech, keep speaker AND listener): "
+                + " / ".join(addressed)
+            )
+        if monologue:
+            parts.append(
+                "\n    THINKS (inner monologue or caption — voice it as this person's own "
+                "thought; NEVER as something said to anyone, and never name the device): "
+                + " / ".join(monologue)
+            )
+        if unattributed:
+            parts.append(
+                "\n    UNOWNED TEXT (no speaker shown — narrate the content without "
+                "assigning an owner): " + " / ".join(unattributed)
+            )
+        if card.key_terms:
+            parts.append(f"\n    terms={card.key_terms}")
+        lines.append("".join(parts))
     return "\n".join(lines) or "(no scene evidence)"
 
 

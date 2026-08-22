@@ -111,11 +111,23 @@ def _cast_context_for_beats(
             n_beats=n_beats_total,
             n_chapters=n_chapters,
         )
+        # plot_beat is the SPINE, not metadata. It used to ride on the same line as
+        # char_ids under an evidence block headed "narrate ONLY this", and the writer
+        # read that ranking exactly as written: for Solo Leveling ch1 beat 8 the outline
+        # said "Jin-Woo overhears them calling him the world's weakest, before he tries
+        # to order a coffee only to find the vendor has run out" — 25 words, inside a
+        # 40-word cap — and the narration covered NEITHER event, describing the panel
+        # instead. The outline is the only artefact built with whole-chapter context;
+        # when it and a panel description compete, the outline has to win.
         lines.append(
             f"Beat {beat.beat_id} [{', '.join(beat.panel_ids)}]: "
-            f"char_ids={char_ids}; on_screen={'; '.join(people) or '(none)'}; plot={beat.plot_beat}\n"
-            f"  MAX {max_words} words for this beat — hard limit, cut the weakest detail first.\n"
-            f"  EVIDENCE (narrate ONLY this):\n{evid or '(none)'}\n"
+            f"char_ids={char_ids}; on_screen={'; '.join(people) or '(none)'}\n"
+            f"  MUST COVER — the story this beat exists to tell. Every event named here\n"
+            f"  survives into your narration; the evidence below supplies the WORDS, not\n"
+            f"  the plot:\n    {beat.plot_beat}\n"
+            f"  MAX {max_words} words — hard limit. Cut DESCRIPTION first; never drop an\n"
+            f"  event named above to make room for what a panel merely shows.\n"
+            f"  EVIDENCE (your only source of detail — narrate nothing absent here):\n{evid or '(none)'}\n"
             f"  Do not preview later locations — protagonist id={bible.protagonist_id or '?'}"
         )
     return "\n".join(lines)
@@ -1180,6 +1192,41 @@ def generate_script(
         config,
         scene_cards=cards,
     )
+
+    # Omission pass. Every other gate here audits what the narration ASSERTS; this one
+    # audits what it silently dropped, against the outline that was built with
+    # whole-chapter context. See lint_plot_coverage for why this is warn-and-rewrite.
+    from manhwa2vid.script.lint import lint_plot_coverage, rewrite_beat as _rewrite_beat
+
+    plot_by_id_all = {ob.beat_id: ob.plot_beat for ob in outline_beats}
+    min_cov = float(get_nested(config, "script", "min_plot_coverage", default=0.25))
+    uncovered = lint_plot_coverage(beats, plot_by_id_all, min_ratio=min_cov)
+    if uncovered:
+        console.print(
+            f"[yellow]Plot coverage:[/] {len(uncovered)} beat(s) dropped their outline "
+            f"story — rewriting: {sorted(uncovered)}"
+        )
+        recovered: list[ScriptBeat] = []
+        for beat in beats:
+            if beat.beat_id in uncovered:
+                new_text = _rewrite_beat(
+                    beat, bible, attribution, config,
+                    issues=uncovered[beat.beat_id], scene_cards=cards,
+                )
+                recovered.append(beat.model_copy(update={"narration": new_text}))
+            else:
+                recovered.append(beat)
+        beats = recovered
+    still_uncovered = lint_plot_coverage(beats, plot_by_id_all, min_ratio=min_cov)
+    cov_report = QAReport(stage="script-coverage")
+    cov_report.add(
+        "plot-coverage",
+        True if not still_uncovered else "warn",
+        (f"{len(still_uncovered)} beat(s) still below {min_cov:.0%} of their outline "
+         f"story after rewrite: {sorted(still_uncovered)}") if still_uncovered else "",
+        flagged=len(uncovered), remaining=len(still_uncovered), threshold=min_cov,
+    )
+    enforce(cov_report, paths["root"], force=qa_forced(config))
 
     if get_nested(config, "script", "verify_alignment", default=True):
         from manhwa2vid.panels.filter import load_story_panels

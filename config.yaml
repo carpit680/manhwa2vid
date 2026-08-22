@@ -135,6 +135,9 @@ script:
   # author checked by a sighted critic. Requires a multimodal script model.
   sighted_narration: true
   words_per_panel_target: 14 # per-beat word ceiling = panels x this; enforced by lint rewrite
+  min_plot_coverage: 0.25   # fraction of a beat's outline plot_beat vocabulary that must
+                            # survive into its narration; below this the beat is rewritten.
+                            # Audits OMISSION — the mirror of verify_alignment below.
   verify_alignment: true    # adversarial VLM pass: flag narration claims unsupported by panels
   verify_max_beats: 24      # sample cap for the alignment audit on long chapters
 

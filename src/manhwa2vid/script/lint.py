@@ -1242,6 +1242,47 @@ def lint_panel_grounding(
     return report
 
 
+def lint_plot_coverage(
+    beats: list[ScriptBeat],
+    plot_by_id: dict[int, str],
+    *,
+    min_ratio: float = 0.25,
+) -> dict[int, list[str]]:
+    """Flag beats whose narration abandoned the outline's plot_beat.
+
+    Every gate in this pipeline audits the HALLUCINATION direction — claims the panels
+    do not support. Nothing audited the mirror, and that is where the damage was: the
+    outline for Solo Leveling ch1 beat 8 read "Jin-Woo overhears them calling him the
+    world's weakest hunter, before he tries to order a coffee only to find the vendor has
+    run out", and the shipped narration contained NEITHER event, describing two men
+    chatting instead. It passed every gate, because everything it said was true.
+
+    The outline is the only artefact built with whole-chapter context, so it is the
+    reference: score each beat by how much of its plot_beat's content vocabulary survives
+    into the narration.
+
+    Deliberately a WARN-and-rewrite signal, not a hard gate. The score is a lexical proxy
+    for a semantic property, and it moves for honest reasons — heavy paraphrase scores
+    low, repeated character names score high for free. Measured on the ch1 draft the
+    distribution ran 0.00-0.81 with a 0.30 median, and the three beats a human reader
+    independently called broken sat at 0.00, 0.06 and 0.07; 0.25 separates those from the
+    honest paraphrases without chasing the middle. Tune the threshold, never the metric.
+    """
+    out: dict[int, list[str]] = {}
+    for beat in beats:
+        plot = (plot_by_id.get(beat.beat_id) or "").split("/ CLOSER")[0].strip()
+        plot_tokens = _stemmed_words(plot)
+        if not plot_tokens:
+            continue  # continuity beats legitimately carry no plot_beat
+        ratio = len(plot_tokens & _stemmed_words(beat.narration)) / len(plot_tokens)
+        if ratio < min_ratio:
+            out[beat.beat_id] = [
+                f"narration covers only {ratio:.0%} of the beat's required story; it MUST "
+                f"tell: {plot}"
+            ]
+    return out
+
+
 def lint_beats(
     beats: list[ScriptBeat],
     config: dict[str, Any],

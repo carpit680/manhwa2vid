@@ -16,20 +16,21 @@ THE TEN RULES:
 1. PRESENT tense, ~15-word flowing sentences (vary 8–21), ~{target_wpm} spoken words/min.
    Each sentence pushes the last one forward — never three flat statements in a row,
    never three sentences opening with the same pronoun.
-2. Dialogue is the engine. Each beat's evidence lists SPOKEN lines as
-   `Speaker -> Listener: "the actual words"`. Build the beat around those lines: convert
-   them to reported speech (says, asks, tells, replies, admits, snaps, mutters, thinks)
-   and NEVER quote verbatim or use quotation marks. The attribution is binding:
-   - the line belongs to its Speaker alone — never to a group, a mood, or the person the
-     beat happens to be following ("MY sick mother's bills" is HIS worry, not "hunters'");
-   - it is aimed at its Listener — "you" means that person, and a name in the words
-     ("MR. SONG, take care of us") names who is being spoken to;
-   - when a line has no Speaker shown, write it without an owner rather than assigning one;
-   - a line with a Speaker but NO Listener is inner monologue: VOICE it as that
-     person's thought, never describe the device. Write "Rell needs the bounty to cover
-     her sister's passage" — never "narration explains that...", never "a caption
-     reads...". And never hand the thought to whoever is merely visible in the panel:
-     it stays the speaker's worry even while the art is looking at somebody else.
+2. Dialogue is the engine. Each beat's evidence sorts every line into ONE of three
+   headers, and the header decides how you narrate it — this is already settled, do not
+   re-interpret it. Convert to reported speech (says, asks, tells, replies, admits,
+   snaps, mutters, thinks) and NEVER quote verbatim or use quotation marks.
+   - SAYS ALOUD `Speaker -> Listener: "words"` — speech. The attribution is binding: the
+     line belongs to its Speaker alone, never to a group, a mood, or the person the beat
+     happens to be following; and it is aimed at its Listener, so "you" means that
+     person and a name in the words ("MR. SONG, take care of us") names who is addressed.
+   - THINKS `Speaker: "words"` — inner monologue or a caption box. VOICE it as that
+     person's own thought and NEVER as speech: a man alone and bleeding who thinks his
+     name and rank is not "introducing himself" to anyone. Never describe the device
+     ("narration explains that...", "a caption reads..."), and never hand the thought to
+     whoever merely happens to be visible — it stays the speaker's, even while the art
+     is looking at somebody else.
+   - UNOWNED TEXT — no speaker shown. Narrate the content with no owner attached.
 3. Never caption. Banned: "is visible", "can be seen", "in the foreground/background",
    "with a ... expression", objects resting/sitting anywhere, "wearing ..." after intro.
    If a sentence would work as image alt-text, replace it with what HAPPENS.
@@ -39,7 +40,10 @@ THE TEN RULES:
    and ALWAYS in a beat that names another man (bare "he" would be ambiguous aloud).
 5. Anonymous extras appear only when they act on the story. Never narrate scenery people.
 6. Scene-setting is one short clause folded into an event sentence, at most, per beat.
-7. Narrate ONLY what each beat's EVIDENCE supports; never preview later scenes. World
+7. Two different limits, do not confuse them: MUST COVER fixes WHAT the beat tells
+   and is not optional; EVIDENCE bounds the DETAIL you may use to tell it. Never
+   narrate a detail absent from the evidence, and never drop a MUST COVER event
+   because a panel description was more vivid. Never preview later scenes. World
    terms (gates, ranks) get a six-word gloss on first use only.
    - ONCE ONLY: a fact, exchange, or reaction is narrated in exactly one beat. When a
      beat's evidence covers ground an earlier beat already told, carry the moment FORWARD

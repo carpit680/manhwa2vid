@@ -554,3 +554,69 @@ def test_truncation_reason_detects_both_tells():
 
     # a single-beat retry legitimately returns an envelope with one beat
     assert truncation_reason({"beats": [{"beat_id": 3, "narration": "x"}]}, "stop") == ""
+
+
+def test_split_utterances_separates_monologue_from_speech():
+    """The device is data, not a judgement call. Solo Leveling ch1 opens on Jin-Woo
+    bleeding out alone while a caption carries his name and rank; every line went to the
+    writer under one "SPOKEN" header and the narration had a dying man alone in a chamber
+    "introducing himself as an E-rank hunter". A listener arrow decides this."""
+    from manhwa2vid.script.grounding import split_utterances
+
+    said, thought, unowned = split_utterances(
+        'Sung Jin-Woo: "MY NAME IS SUNG JIN-WOO." / '
+        'char_bak -> char_kim: "IT\'S BEEN A WHILE." / '
+        '"THE WORLD\'S WEAKEST?"'
+    )
+    assert thought == ['Sung Jin-Woo: "MY NAME IS SUNG JIN-WOO."']
+    assert said == ['char_bak -> char_kim: "IT\'S BEEN A WHILE."']
+    assert unowned == ['"THE WORLD\'S WEAKEST?"']
+
+
+def test_evidence_labels_monologue_distinctly():
+    """The three headers must reach the prompt — a regression here is invisible in tests
+    that only check that evidence is non-empty."""
+    from manhwa2vid.script.grounding import evidence_for_panels
+
+    card = SceneCard(
+        panel_ids=["p0002_01"],
+        action="The injured man lies on the ground.",
+        source_text='Sung Jin-Woo: "MY NAME IS SUNG JIN-WOO."',
+    )
+    evid = evidence_for_panels(["p0002_01"], [card])
+    assert "THINKS" in evid
+    assert "SAYS ALOUD" not in evid
+
+
+def test_lint_plot_coverage_catches_dropped_story():
+    """The omission direction. This is Solo Leveling ch1 beat 8 verbatim: the outline
+    named the two events that make the scene land, the narration described two men
+    chatting instead, and every existing gate passed it because nothing it said was
+    false."""
+    from manhwa2vid.script.lint import lint_plot_coverage
+
+    plot = {
+        8: ("Sung Jin-Woo overhears them calling him the world's weakest hunter, before "
+            "he tries to order a coffee only to find the vendor has run out."),
+        3: "Sung Jin-Woo heads toward a glowing blue Gate at a construction site.",
+    }
+    beats = [
+        ScriptBeat(beat_id=8, panel_ids=["p1"], narration=(
+            "Kim Sangshik chuckles to Bak while walking with his warm drink. He tells Bak "
+            "that the dungeon is bound to be weak today.")),
+        ScriptBeat(beat_id=3, panel_ids=["p2"], narration=(
+            "Sung Jin-Woo heads toward the glowing blue Gate looming over the construction "
+            "site.")),
+    ]
+    flagged = lint_plot_coverage(beats, plot)
+    assert 8 in flagged and 3 not in flagged
+    assert "coffee" in flagged[8][0]
+
+
+def test_lint_plot_coverage_ignores_empty_plot_beats():
+    """Continuity beats legitimately carry no plot_beat; scoring them would flag every
+    one of them forever."""
+    from manhwa2vid.script.lint import lint_plot_coverage
+
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p1"], narration="He walks on.")]
+    assert lint_plot_coverage(beats, {1: ""}) == {}
