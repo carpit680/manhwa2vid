@@ -1219,10 +1219,27 @@ def generate_script(
 
     # One rewrite round for every story-integrity defect, so a beat with two problems is
     # regenerated once against both rather than twice against one each.
+    # The deterministic transition mechanism OWNS the rewind cue when the whole-chapter
+    # read supplied one: lock_transition_line writes a single sentence, in a fixed place,
+    # from whole-chapter context. Asking the writer for a cue as WELL produced two — beat
+    # 2 opening "Hours earlier," and beat 3 opening with the locked line — and the extra
+    # rewrite went on to invent "Hours later, night falls over the city" in a chapter that
+    # never leaves the morning. The lint is the FALLBACK for a chapter with no locked
+    # line, not a second opinion.
+    has_locked_cue = False
+    try:
+        if paths["scene_story_map_json"].exists():
+            has_locked_cue = bool(
+                str(json.loads(paths["scene_story_map_json"].read_text())
+                    .get("return_to_present_line", "") or "").strip()
+            )
+    except Exception:
+        has_locked_cue = False
+
     issues_by_beat: dict[int, list[str]] = {}
     for finding in (
         lint_plot_coverage(beats, plot_by_id_all, min_ratio=min_cov),
-        lint_time_shift_marker(beats, plot_by_id_all),
+        {} if has_locked_cue else lint_time_shift_marker(beats, plot_by_id_all),
         lint_repeated_setting(beats, world_terms),
     ):
         for bid, msgs in finding.items():
