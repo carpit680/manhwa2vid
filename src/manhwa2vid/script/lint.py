@@ -1510,6 +1510,96 @@ def lint_malformed_phrases(beats: list[ScriptBeat]) -> dict[int, list[str]]:
     return out
 
 
+# Category nouns. Each names a CLASS of thing rather than a thing, which is exactly the
+# move that turns a panel fact into vapor: "his financial situation" for "my wife is
+# pregnant", "his career path" for a job that gets him killed. Rule 7 already forbids this
+# ("Concrete events only") and the model declines it, so it belongs here — the same
+# reasoning that moved every other twice-declined rule into the deterministic pass.
+_ABSTRACTION_NOUNS = frozenset(
+    """situation situations circumstance circumstances condition conditions status
+    matter matters issue issues problem problems case cases aspect aspects factor
+    factors element elements nature thing things stuff way ways path point points
+    level levels degree extent reality experience experiences activity process
+    processes state career careers detail details topic subject""".split()
+)
+
+# Function words and transcription noise: never useful as "the detail you dropped".
+_UNINFORMATIVE = frozenset(
+    """after already because become been being didn dont doesn wasn couldn wouldn
+    shouldn about above again against along among around before below beneath beside
+    between beyond during except inside into onto over since through toward under
+    until upon within without with from that this these those they them their there
+    here what when where which while will would could should have has had was were
+    are our your you him her his she who whom whose then than each every some any
+    much many more most other another such only just even also very really quite
+    haha hahaha yeah yep nope huh hmm ahh ugh oh ow eh well okay yes not
+    com net org www""".split()
+)
+
+
+def lint_abstraction_drift(
+    beats: list[ScriptBeat],
+    scene_cards: list[SceneCard] | None,
+    *,
+    min_dropped: int = 2,
+) -> dict[int, list[str]]:
+    """Flag a beat that swapped a panel's concrete fact for a category word.
+
+    This is the "lifeless description" failure. The panels of Solo Leveling ch1 have a man
+    explaining he came back to hunting because his wife is pregnant with their second son;
+    the narration said his "financial situation got worse during his break". Nothing there
+    is false, no gate fired, and the one human detail in the scene was gone. Same instinct
+    produced "his highly dangerous career path" for a job that nearly kills him.
+
+    Detection is a CONJUNCTION, and both halves are load-bearing. Retention alone is not
+    the signal: the beat where a spear comes down scores 0.00 because its dialogue is
+    grunts, and it is correctly narrated. An abstraction noun alone is not the signal
+    either — sometimes there is nothing more specific available. The defect is a category
+    word standing in a beat whose own panels supplied specifics that never made it.
+
+    Reports the dropped specifics rather than a score, because "too abstract" is not
+    actionable and "the panels say wife, pregnant, son" is. Ranked by length as a rough
+    proxy for informativeness — there is no POS tagger here, and a wrong ordering costs a
+    less helpful hint, never a wrong edit.
+    """
+    if not scene_cards:
+        return {}
+    from manhwa2vid.script.grounding import split_utterances
+
+    by_panel: dict[str, str] = {}
+    for card in scene_cards:
+        for pid in card.panel_ids:
+            by_panel[pid] = card.source_text or ""
+
+    out: dict[int, list[str]] = {}
+    for beat in beats:
+        narration_stems = _stemmed_words(beat.narration)
+        abstractions = sorted(
+            {w.lower().strip(".,!?;:'\"") for w in beat.narration.split()}
+            & _ABSTRACTION_NOUNS
+        )
+        if not abstractions:
+            continue
+        spoken: list[str] = []
+        for pid in beat.panel_ids:
+            addressed, monologue, unowned = split_utterances(by_panel.get(pid, ""))
+            spoken += [ln.split(":", 1)[-1] for ln in addressed + monologue + unowned]
+        if not spoken:
+            continue
+        dropped = [
+            w for w in (_stemmed_words(" ".join(spoken)) - narration_stems)
+            if w not in _UNINFORMATIVE and len(w) > 3
+        ]
+        if len(dropped) < min_dropped:
+            continue  # nothing specific was available to keep
+        dropped.sort(key=lambda w: (-len(w), w))
+        out[beat.beat_id] = [
+            f"narration reaches for {abstractions} where this beat's own panels say "
+            f"{dropped[:6]} — name the specific fact instead of its category"
+        ]
+    return out
+
+
 def lint_beats(
     beats: list[ScriptBeat],
     config: dict[str, Any],

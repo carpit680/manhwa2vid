@@ -1538,3 +1538,33 @@ def test_lint_malformed_phrases_catches_rewrite_wreckage():
                    narration="He tells her he is used to the pain because he is weak."),
     ]
     assert sorted(lint_malformed_phrases(beats)) == [1, 2]
+
+
+def test_lint_abstraction_drift_needs_both_halves():
+    """The "lifeless description" failure: a category word standing where the beat's own
+    panels supplied a specific. Both halves of the conjunction are load-bearing — an
+    action beat whose dialogue is grunts legitimately retains nothing, and an abstraction
+    with no specific available is sometimes the only thing to say."""
+    from manhwa2vid.models import SceneCard
+    from manhwa2vid.script.lint import lint_abstraction_drift
+
+    cards = [
+        # Specifics available AND an abstraction used -> flag.
+        SceneCard(panel_ids=["p1"], action="two men talk",
+                  source_text='Rell -> Vesh: "MY SISTER IS SICK AND THE PASSAGE COSTS EVERYTHING."'),
+        # Wordless action: nothing to retain, no abstraction -> silent.
+        SceneCard(panel_ids=["p2"], action="a spear comes down", source_text='Rell: "Haah"'),
+        # Abstraction used but the panel offers nothing more specific -> silent.
+        SceneCard(panel_ids=["p3"], action="he waits", source_text='Rell: "..."'),
+    ]
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p1"],
+                   narration="Rell admits to Vesh that his financial situation got worse."),
+        ScriptBeat(beat_id=2, panel_ids=["p2"],
+                   narration="A spear descends as the stone giant strikes."),
+        ScriptBeat(beat_id=3, panel_ids=["p3"], narration="He considers the situation."),
+    ]
+    flagged = lint_abstraction_drift(beats, cards)
+    assert sorted(flagged) == [1]
+    # The hint must name what to restore, not just score the beat.
+    assert "sister" in flagged[1][0] or "passage" in flagged[1][0]

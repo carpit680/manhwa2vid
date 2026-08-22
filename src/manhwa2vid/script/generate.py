@@ -1197,6 +1197,7 @@ def generate_script(
     # audits what it silently dropped, against the outline that was built with
     # whole-chapter context. See lint_plot_coverage for why this is warn-and-rewrite.
     from manhwa2vid.script.lint import (
+        lint_abstraction_drift,
         lint_hook_grounding,
         lint_plot_coverage,
         lint_repeated_setting,
@@ -1241,6 +1242,7 @@ def generate_script(
         lint_plot_coverage(beats, plot_by_id_all, min_ratio=min_cov),
         {} if has_locked_cue else lint_time_shift_marker(beats, plot_by_id_all),
         lint_repeated_setting(beats, world_terms),
+        lint_abstraction_drift(beats, cards),
     ):
         for bid, msgs in finding.items():
             issues_by_beat.setdefault(bid, []).extend(msgs)
