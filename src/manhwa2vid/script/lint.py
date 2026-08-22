@@ -1929,12 +1929,32 @@ _SUBJECT_COMMA_VERB_RE = re.compile(
 
 def repair_subject_comma(beats: list[ScriptBeat]) -> list[ScriptBeat]:
     """"Seo Jun-Ho, stands in the throne room" — a comma splice between subject and
-    verb, unspeakable aloud. Only fires on a comma DIRECTLY before a finite motion/
-    stance verb, so lists and genuine appositives are untouched."""
+    verb, unspeakable aloud.
+
+    The verb match alone does NOT identify a splice, and the claim that it left genuine
+    appositives untouched was simply wrong: the word before the comma is the last word of
+    the appositive, not the subject, so "Lee Joo-hee, the party's healer, arrives" matched
+    on "healer, arrives" and shipped as "the party's healer arrives" — the model had
+    punctuated it correctly and the polish pass broke it, on every run.
+
+    An earlier comma in the same sentence is the discriminator: it means this comma CLOSES
+    a clause rather than separating a subject from its verb. Precision over recall, as
+    everywhere in this module — a missed splice reads slightly off, a wrongly deleted
+    comma changes what the sentence means.
+    """
     out: list[ScriptBeat] = []
     for beat in beats:
-        text = _SUBJECT_COMMA_VERB_RE.sub(r"\1 \2", beat.narration)
-        out.append(beat.model_copy(update={"narration": text}) if text != beat.narration else beat)
+        text = beat.narration
+
+        def _sub(m: re.Match) -> str:
+            head = text[: m.start(1)]
+            sentence_so_far = re.split(r"[.!?]\s+", head)[-1]
+            if "," in sentence_so_far:
+                return m.group(0)  # closing an appositive, not splicing a subject
+            return f"{m.group(1)} {m.group(2)}"
+
+        fixed = _SUBJECT_COMMA_VERB_RE.sub(_sub, text)
+        out.append(beat.model_copy(update={"narration": fixed}) if fixed != text else beat)
     return out
 
 

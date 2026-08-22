@@ -1366,3 +1366,25 @@ def test_appositive_span_stops_before_resuming_verb():
     assert len(spans) == 1
     assert spans[0][2] == "a member of the original five heroes, currently frozen in ice"
     assert "spoke" not in spans[0][2]
+
+
+def test_repair_subject_comma_spares_closing_appositive_comma():
+    """Regression, shipped: the match lands on the LAST WORD OF THE APPOSITIVE, not the
+    subject, so "Lee Joo-hee, the party's healer, arrives" was rewritten to "...healer
+    arrives". The model had punctuated both beats correctly and the polish pass broke
+    them. An earlier comma in the sentence means this one closes a clause."""
+    from manhwa2vid.script.lint import repair_subject_comma
+
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p"],
+                   narration="Lee Joo-hee, the party's healer, arrives in a panic."),
+        ScriptBeat(beat_id=2, panel_ids=["p"],
+                   narration="Song Chi-yul, the party leader, steps forward."),
+        ScriptBeat(beat_id=3, panel_ids=["p"], narration="Seo Jun-Ho, stands in the hall."),
+        ScriptBeat(beat_id=4, panel_ids=["p"], narration="He nods. Rell, walks away."),
+    ]
+    out = [b.narration for b in repair_subject_comma(beats)]
+    assert out[0] == "Lee Joo-hee, the party's healer, arrives in a panic."
+    assert out[1] == "Song Chi-yul, the party leader, steps forward."
+    assert out[2] == "Seo Jun-Ho stands in the hall."       # real splice still repaired
+    assert out[3] == "He nods. Rell walks away."             # splice after a sentence end
