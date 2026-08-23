@@ -103,11 +103,18 @@ script:
   # gemini-2.5-flash fallback (also now dead on this key — see llm.gemini above).
   provider: gemini
   model: gemini-3.5-flash
-  commentary_level: light
+  commentary_level: wry   # the reference has a dry read on events without ever saying
+                          # "I" — 8.2 evaluative asides per 1k words measured
   # Values below are measured from the Mamoru Manhwa reference — see reference/style_profile.md
   target_wpm: 235       # reference speaks 237 WPM, stable across the whole 5h video
-  genz_level: none      # reference uses ~0 slang (0.07 per 1k words)
-  max_narrator_asides: 0  # reference has 18 first-person tokens in 75k words
+  genz_level: light     # reference measures ~0 SLANG (0.07/1k) but 7.2/1k casual
+                        # epithets for the hero ("bro", "the guy") — those are register,
+                        # not slang, and reading 0.07 as "no personality" was the error
+                        # that made our narration read like a report
+  max_narrator_asides: 4  # the 0.24 first-person per 1k measurement means the narrator
+                          # never says "I" — NOT that he has no voice. He runs 8.2
+                          # evaluative asides and 2.0 similes per 1k.
+  casual_mc_epithet: true # allow one vivid casual label for the protagonist
   beats_per_chapter: 14 # beat budget scales with chapters (from pages/sources.json);
                         # golds and the reference channel all measure ~12-17/chapter
   min_beats: 10
