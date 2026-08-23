@@ -1984,3 +1984,43 @@ def test_ensure_first_mention_role_lowercases_the_inserted_article():
     acro = ensure_first_mention_role(
         [ScriptBeat(beat_id=1, panel_ids=["p"], narration="Rell greets Vesh.")], bible)
     assert acro[0].narration == "Rell greets Vesh, the NASA liaison."
+
+
+def test_sanitize_role_trims_a_truncated_relative_clause():
+    """The quest pass once stored 'The final boss of the Antarctic dungeon whose' — its
+    source sentence continued past the truncation point — and the introduction inserter
+    shipped the dangling "whose," verbatim on Frozen Player."""
+    from manhwa2vid.characters.bible import sanitize_role
+
+    assert sanitize_role("The final boss of the Antarctic dungeon whose") == \
+        "The final boss of the Antarctic dungeon"
+    assert sanitize_role("guardian of the") == "guardian"
+    assert sanitize_role("whose") == ""
+    assert sanitize_role("raid leader") == "raid leader"     # untouched when clean
+
+
+def test_first_mention_role_respects_a_role_the_writer_already_used():
+    """Four teammates can share one bible role. When the WRITER already introduced one of
+    them with it, the inserter must treat that role as taken — used_roles previously only
+    learned what the inserter itself wrote, so a second character got the same clause and
+    a rewrite round stamped it three times into one beat."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import ensure_first_mention_role
+
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="mc",
+        characters={
+            "mc": CharacterProfile(id="mc", canonical_name="Rell", tier=CharacterTier.MAIN),
+            "a": CharacterProfile(id="a", canonical_name="Skaya", tier=CharacterTier.SUPPORTING,
+                                  role="A member of the original five heroes"),
+            "b": CharacterProfile(id="b", canonical_name="Khali", tier=CharacterTier.SUPPORTING,
+                                  role="A member of the original five heroes"),
+        },
+    )
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p"],
+                   narration="Skaya, a member of the original five heroes, urges the group on."),
+        ScriptBeat(beat_id=2, panel_ids=["p"], narration="Skaya tells Khali that they agree."),
+    ]
+    out = ensure_first_mention_role(beats, bible)
+    assert out[1].narration == "Skaya tells Khali that they agree."   # role already taken

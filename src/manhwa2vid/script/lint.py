@@ -2034,6 +2034,11 @@ def ensure_first_mention_role(
                 beat.narration, re.I,
             ):
                 introduced.add(name)
+                # And their role is now TAKEN. Without this, four teammates sharing the
+                # bible role "member of the five heroes" got the clause stamped onto a
+                # second character because the first carried it from the writer, not
+                # from this function — used_roles only learned what IT inserted.
+                used_roles.add(roles[name])
 
     out: list[ScriptBeat] = []
     for beat in beats:

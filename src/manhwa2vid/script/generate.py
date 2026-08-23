@@ -1604,8 +1604,14 @@ def generate_script(
         bs = repair_truncated_sentences(bs)
         bs = strip_internal_labels(bs, bible)
         # Rule 4's FLOOR, before the ceiling: insert the one clause each named character
-        # is owed, then let strip_repeated_appositives remove every later one.
+        # is owed, then let the two removers strip every later one. Both removers must
+        # live INSIDE this chain, not only in the one-shot pass before it: rewrites
+        # re-enter _final_polish, and a rewrite that reintroduces a stamped clause
+        # ("Skaya, a member of the five heroes, tells Khali, a member of the five
+        # heroes, ...") previously shipped because nothing deduped after it.
         bs = ensure_first_mention_role(bs, bible)
+        bs = dedupe_appositive_clauses(bs)
+        bs = strip_repeated_appositives(bs, bible)
         bs = strip_appearance_descriptors(bs, bible)
         bs = dedupe_intra_beat_sentences(bs)
         bs = dedupe_cross_beat_sentences(bs)

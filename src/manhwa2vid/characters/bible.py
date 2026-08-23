@@ -177,8 +177,21 @@ def sanitize_role(role: str) -> str:
         return ""
     tier_words = {t.value.lower() for t in CharacterTier}
     kept = [w for w in text.split() if w.lower().strip(",") not in tier_words]
-    if len(kept) == len(text.split()):
-        return text  # no tier word present; leave the role exactly as written
+    # A role that ends mid-clause is a truncation artifact, not a role: the quest pass
+    # once stored 'The final boss of the Antarctic dungeon whose' (its source sentence
+    # continued "...whose blizzard froze the Pacific") and the introduction inserter
+    # shipped that dangling "whose," verbatim. Trim trailing function words until the
+    # role ends on a content word.
+    _dangling = {
+        "whose", "who", "which", "that", "and", "or", "but", "of", "with", "for",
+        "from", "to", "in", "on", "at", "by", "the", "a", "an", "is", "was", "as",
+    }
+    while kept and kept[-1].lower().strip(",.") in _dangling:
+        kept.pop()
+    if not kept:
+        return ""
+    if kept == text.split():
+        return text  # nothing removed; leave the role exactly as written
     if not kept or all(w.lower().strip(",") in _EMPTY_ROLE_NOUNS for w in kept):
         return ""
     return " ".join(kept)
