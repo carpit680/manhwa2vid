@@ -1636,18 +1636,42 @@ def test_lint_narration_order_flags_reversed_beat():
     cards = [
         SceneCard(panel_ids=["p1"], action="Rell smiles weakly while explaining himself",
                   source_text='Rell -> Vesh: "IT IS ONLY BECAUSE I AM WEAK."'),
-        SceneCard(panel_ids=["p2"], action="Doran addresses the gathered party",
+        SceneCard(panel_ids=["p2"], action="Vesh looks back in silence", source_text=""),
+        SceneCard(panel_ids=["p3"], action="a shout goes up across the yard",
+                  source_text='the crew: "EVERYONE!"'),
+        SceneCard(panel_ids=["p4"], action="Doran addresses the gathered party",
                   source_text='Doran -> the party: "I WILL TAKE THE LEAD TODAY."'),
     ]
-    reversed_beat = ScriptBeat(beat_id=1, panel_ids=["p1", "p2"], narration=(
+    span = ["p1", "p2", "p3", "p4"]
+    reversed_beat = ScriptBeat(beat_id=1, panel_ids=span, narration=(
         "Doran addresses the gathered party and offers to take the lead today. "
         "Rell explains weakly to Vesh that it is only because he is weak."))
-    correct_beat = ScriptBeat(beat_id=2, panel_ids=["p1", "p2"], narration=(
+    correct_beat = ScriptBeat(beat_id=2, panel_ids=span, narration=(
         "Rell explains weakly to Vesh that it is only because he is weak. "
         "Doran addresses the gathered party and offers to take the lead today."))
     flagged = lint_narration_order([reversed_beat, correct_beat], cards)
     assert sorted(flagged) == [1]
     assert "reading order" in flagged[1][0]
+
+
+def test_lint_narration_order_ignores_adjacent_swaps():
+    """Lexical matching cannot resolve NEIGHBOURING panels — a scene-setting or monologue
+    sentence routinely scores higher against the next panel than its own — and two
+    consecutive panels sit about 2.5s apart on screen, which no viewer reads as out of
+    order. Three such false positives were measured on a real draft."""
+    from manhwa2vid.models import SceneCard
+    from manhwa2vid.script.lint import lint_narration_order
+
+    cards = [
+        SceneCard(panel_ids=["p1"], action="Rell greets Vesh at the gate",
+                  source_text='Rell -> Vesh: "IT HAS BEEN A WHILE."'),
+        SceneCard(panel_ids=["p2"], action="Rell explains his wife is expecting",
+                  source_text='Rell -> Vesh: "MY WIFE IS EXPECTING OUR SECOND."'),
+    ]
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p1", "p2"], narration=(
+        "Rell returns to the trade because his wife is expecting their second child. "
+        "He greets Vesh at the gate before they move off."))]
+    assert lint_narration_order(beats, cards) == {}
 
 
 def test_lint_narration_order_ignores_unmatched_sentences():

@@ -1688,6 +1688,7 @@ def lint_narration_order(
     scene_cards: list[SceneCard] | None,
     *,
     min_match: float = 0.10,
+    min_gap: int = 2,
 ) -> dict[int, list[str]]:
     """Flag a beat whose sentences do not run in its panels' reading order.
 
@@ -1740,11 +1741,18 @@ def lint_narration_order(
                     best_i, best_score = i, score
             if best_i is not None and best_score >= min_match:
                 seq.append((best_i, sentence))
+        # An ADJACENT swap is not evidence of anything. Lexical matching cannot resolve
+        # neighbouring panels — a scene-setting or monologue sentence routinely scores
+        # higher against the next panel than its own — and two consecutive panels are
+        # about 2.5s apart on screen, which no viewer perceives as out of order. The
+        # observed real defect told a sentence from the END of a five-panel beat before
+        # one from its start: a gap of 3. Requiring a gap removes three false positives
+        # measured on a later ch1 draft while keeping that case.
         inversions = [
             (seq[a], seq[b])
             for a in range(len(seq))
             for b in range(a + 1, len(seq))
-            if seq[a][0] > seq[b][0]
+            if seq[a][0] - seq[b][0] >= min_gap
         ]
         if inversions:
             (early_i, early_s), (late_i, late_s) = inversions[0]
