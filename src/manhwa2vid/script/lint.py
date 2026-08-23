@@ -2006,11 +2006,24 @@ def ensure_first_mention_role(
         return beats
 
     introduced: set[str] = set()
-    # Pre-scan: a character already carrying an appositive anywhere keeps it, and gets no
-    # second one inserted earlier in the script.
+    # Pre-scan: a character already introduced ANYWHERE keeps that introduction and never
+    # gets a second one inserted.
+    #
+    # Both shapes count, which lint_missing_introduction also accepts and an earlier
+    # version of this function did not: the appositive "Kim Sangshik, a veteran hunter,"
+    # and the premodifier "Veteran hunter Kim Sangshik". Missing the second shipped
+    # "Veteran hunter Kim Sangshik, the hunter, grabs a warm drink" — introduced twice in
+    # four words. The test is the role's own head noun appearing near the name, which
+    # catches both without needing to parse either.
+    role_heads = {name: role.split()[-1].lower() for name, role in roles.items() if role.split()}
     for beat in beats:
         for name in roles:
-            if re.search(rf"\b{re.escape(name)},\s+(?:a|an|the|his|her|their)\s", beat.narration, re.I):
+            head = role_heads.get(name, "")
+            if head and re.search(
+                rf"(?:\b{re.escape(head)}\b[\w\s'’-]{{0,20}}?\b{re.escape(name)}\b"
+                rf"|\b{re.escape(name)}\b[\w\s'’,-]{{0,20}}?\b{re.escape(head)}\b)",
+                beat.narration, re.I,
+            ):
                 introduced.add(name)
 
     out: list[ScriptBeat] = []

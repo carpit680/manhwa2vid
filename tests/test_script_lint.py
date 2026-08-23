@@ -1896,6 +1896,14 @@ def test_ensure_first_mention_role_inserts_once_and_skips_unsafe_shapes():
         [ScriptBeat(beat_id=1, panel_ids=["p"], narration="They trust Doran.")], bible)
     assert tail[0].narration == "They trust Doran, the raid leader."
 
+    # An existing PREMODIFIER introduction counts too, not just an appositive. Missing
+    # this shipped "Veteran hunter Kim Sangshik, the hunter, grabs a warm drink" —
+    # introduced twice inside four words.
+    premod = ensure_first_mention_role(
+        [ScriptBeat(beat_id=1, panel_ids=["p"],
+                    narration="Veteran raid leader Doran grabs a drink.")], bible)
+    assert premod[0].narration == "Veteran raid leader Doran grabs a drink."
+
     # A possessive is never split; the clause lands on the next plain mention.
     poss = ensure_first_mention_role(
         [ScriptBeat(beat_id=1, panel_ids=["p"],
