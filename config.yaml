@@ -28,6 +28,12 @@ ocr:
 
 llm:
   provider: groq  # groq | gemini | mistral | openai | ollama | mock
+  # Sampling temperature, per stage below, defaulting here. 0 = greedy. Before this
+  # existed nothing was ever sent, so every call ran at the provider default (~1.0) and
+  # each run resampled the scene cards, the synopsis and the outline as well as the
+  # prose — two runs of one chapter were never comparable. Hosted providers batch and
+  # route server-side, so 0 buys much LESS variance, never byte-identical runs.
+  temperature: 0.0
   groq:
     # Free tier caps TOKENS per day (200k) — images exhaust it in ~60 panels.
     text_model: openai/gpt-oss-120b
@@ -135,6 +141,10 @@ script:
   # author checked by a sighted critic. Requires a multimodal script model.
   sighted_narration: true
   words_per_panel_target: 14 # per-beat word ceiling = panels x this; enforced by lint rewrite
+  # Narration keeps a little warmth: greedy decoding is the classic cause of repetitive
+  # text, and every extra repetition-lint firing routes a beat into the rewrite path,
+  # which is the most defect-prone path here. Structured stages inherit llm.temperature.
+  narration_temperature: 0.3
   min_plot_coverage: 0.25   # fraction of a beat's outline plot_beat vocabulary that must
                             # survive into its narration; below this the beat is rewritten.
                             # Audits OMISSION — the mirror of verify_alignment below.

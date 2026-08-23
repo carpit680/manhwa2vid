@@ -176,6 +176,13 @@ def _extract_json_object(text: str) -> str:
 
 
 class LLMProvider(ABC):
+    #: Sampling temperature for this provider instance, set per stage by
+    #: `apply_stage_model`. None means "send no temperature and take the provider
+    #: default" — which is roughly 1.0 and was the pipeline's behaviour for its whole
+    #: life, so every run resampled the scene cards, the synopsis and the outline as well
+    #: as the prose. Structured stages run greedy; only narration keeps any warmth.
+    temperature: float | None = None
+
     @abstractmethod
     def complete(self, system: str, user: str, *, json_mode: bool = False) -> str:
         ...
@@ -215,6 +222,8 @@ class OpenAIProvider(LLMProvider):
         }
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
+        if self.temperature is not None:
+            kwargs["temperature"] = self.temperature
         resp = self.client.chat.completions.create(**kwargs)
         return resp.choices[0].message.content or ""
 
@@ -232,6 +241,7 @@ class OpenAIProvider(LLMProvider):
             model=self.vision_model,
             messages=[{"role": "user", "content": content}],
             response_format={"type": "json_object"},
+            **({"temperature": self.temperature} if self.temperature is not None else {}),
         )
         return resp.choices[0].message.content or "{}"
 
@@ -343,6 +353,8 @@ class OpenAICompatProvider(LLMProvider):
                 kwargs["extra_body"] = extra
             if use_json:
                 kwargs["response_format"] = {"type": "json_object"}
+            if self.temperature is not None:
+                kwargs["temperature"] = self.temperature
             return self.client.chat.completions.create(**kwargs)
 
         resp = None
@@ -408,6 +420,8 @@ class OpenAICompatProvider(LLMProvider):
                 kwargs["extra_body"] = extra
             if json_mode:
                 kwargs["response_format"] = {"type": "json_object"}
+            if self.temperature is not None:
+                kwargs["temperature"] = self.temperature
             return self.client.chat.completions.create(**kwargs)
 
         try:
@@ -743,6 +757,24 @@ def get_stage_llm(stage: str, config: dict[str, Any] | None = None) -> LLMProvid
     return get_llm_provider(name, config=config)
 
 
+def stage_temperature(stage: str, config: dict[str, Any]) -> float | None:
+    """Per-stage sampling temperature, falling back to the global default.
+
+    Greedy decoding on the structured stages is what makes two runs of a chapter
+    comparable: the same cards, the same synopsis, the same beat partition and panel
+    bindings. Narration keeps a little warmth because greedy decoding is the classic cause
+    of repetitive text, and this module already carries lints for that failure whose every
+    extra firing routes a beat into the rewrite path.
+
+    Note this buys much LESS variance, not reproducibility: hosted providers batch and
+    route requests server-side, so none of them promise identical output even at 0.
+    """
+    value = get_nested(config, stage, "temperature")
+    if value is None:
+        value = get_nested(config, "llm", "temperature")
+    return None if value is None else float(value)
+
+
 def apply_stage_model(llm: LLMProvider, stage: str, config: dict[str, Any]) -> LLMProvider:
     """Apply the stage's configured model pin — UNLESS an env override redirected the
     stage to a different provider. Model ids are provider-specific: pinning
@@ -750,6 +782,7 @@ def apply_stage_model(llm: LLMProvider, stage: str, config: dict[str, Any]) -> L
     SCRIPT_LLM_PROVIDER=mistral) is a guaranteed 400."""
     if os.getenv(f"{stage.upper()}_LLM_PROVIDER"):
         return llm  # provider overridden — its own default/config model applies
+    llm.temperature = stage_temperature(stage, config)
     model = get_nested(config, stage, "model")
     if model:
         if stage == "scene" and hasattr(llm, "vision_model"):

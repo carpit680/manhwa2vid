@@ -394,3 +394,32 @@ def test_record_finish_captures_truncation():
 
     p._record_finish(Bare())
     assert p.last_finish_reason == ""
+
+
+def test_stage_temperature_falls_back_to_the_global_default():
+    """Nothing sent a temperature before this existed, so every call ran at the provider
+    default (~1.0) and each run resampled the cards, the synopsis and the outline as well
+    as the prose."""
+    from manhwa2vid.llm.provider import stage_temperature
+
+    config = {"llm": {"temperature": 0.0}, "script": {"temperature": 0.4}}
+    assert stage_temperature("script", config) == 0.4      # stage override wins
+    assert stage_temperature("scene", config) == 0.0       # falls back to llm.
+    assert stage_temperature("scene", {}) is None          # unset -> send nothing
+
+
+def test_apply_stage_model_sets_the_stage_temperature():
+    from manhwa2vid.llm.provider import LLMProvider, apply_stage_model
+
+    class _P(LLMProvider):
+        model = "m"
+
+        def complete(self, system, user, *, json_mode=False):
+            return ""
+
+        def describe_panels(self, image_paths, prompt):
+            return "{}"
+
+    llm = _P()
+    apply_stage_model(llm, "script", {"llm": {"temperature": 0.0}})
+    assert llm.temperature == 0.0

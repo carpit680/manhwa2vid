@@ -222,3 +222,37 @@ def test_bible_prompt_never_prints_tier_as_role():
     text = format_bible_for_prompt(bible)
     assert "role: supporting hunter" not in text
     assert "role: hunter" in text
+
+
+def test_protagonist_signal_uses_the_series_own_word():
+    """The +5 bonus was the literal "hunter" — Solo Leveling's noun. Dead weight on most
+    titles and actively wrong on one with a large non-protagonist cast sharing it. It is
+    now derived from the bible's own roles, so it resolves to whatever the title calls its
+    people with no code change."""
+    from manhwa2vid.characters.quest import detect_protagonist
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+
+    # A title whose people are "knights" and whose protagonist is one.
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="",
+        characters={
+            "char_a": CharacterProfile(id="char_a", canonical_name="Rell",
+                                       tier=CharacterTier.MAIN, role="wandering knight",
+                                       appearances=["p1", "p2", "p3"], confidence=0.9),
+            "char_b": CharacterProfile(id="char_b", canonical_name="Vesh",
+                                       tier=CharacterTier.SUPPORTING, role="knight",
+                                       appearances=["p1"], confidence=0.5),
+            "char_c": CharacterProfile(id="char_c", canonical_name="Doran",
+                                       tier=CharacterTier.SUPPORTING, role="knight",
+                                       appearances=["p2"], confidence=0.5),
+        },
+    )
+    assert detect_protagonist(bible, {}) == "char_a"
+    # No franchise term is required for the election to work at all.
+    bare = SeriesBible(
+        series_slug="s", title="S", protagonist_id="",
+        characters={"char_a": CharacterProfile(
+            id="char_a", canonical_name="Rell", tier=CharacterTier.MAIN,
+            appearances=["p1"], confidence=0.9)},
+    )
+    assert detect_protagonist(bare, {}) == "char_a"

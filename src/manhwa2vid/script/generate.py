@@ -786,6 +786,12 @@ def _sighted_complete_json(
             llm.MAX_VISION_TOKENS = max_output_tokens or int(
                 get_nested(config, "script", "narration_max_output_tokens", default=16384)
             )
+        # This is the ONE call that writes prose, so it is the one call that keeps any
+        # warmth; every structured stage runs greedy so the cards, the outline and the
+        # panel bindings stop moving between runs. Set the same way the budget above is.
+        narration_temp = get_nested(config, "script", "narration_temperature")
+        if narration_temp is not None:
+            llm.temperature = float(narration_temp)
         raw = llm.describe_labeled_panels(labeled, prompt)
         finish = str(getattr(llm, "last_finish_reason", "") or "")
         # Keep the last raw narration response for forensics — "which field did the
@@ -1040,10 +1046,19 @@ def generate_script(
     config: dict[str, Any],
     *,
     force: bool = False,
+    keep_upstream: bool = False,
 ) -> ScriptDraft:
     if paths["script_draft"].exists() and not force:
         console.print(f"[dim]Using existing script draft[/] → {paths['script_draft']}")
         return load_script_beats(paths)
+
+    # --force means "re-roll this chapter", so it must invalidate the stage's own cached
+    # sub-artifacts too — the repo's rule that a stage deletes whatever its output would
+    # falsify. Without this the synopsis and outline below would be read back and --force
+    # would silently only re-roll narration.
+    if force and not keep_upstream:
+        for key in ("script_synopsis_json", "script_outline_json"):
+            paths[key].unlink(missing_ok=True)
 
     from manhwa2vid.script.grounding import configure_grounding_keywords
 
@@ -1072,23 +1087,50 @@ def generate_script(
             for a in json.loads(paths["cast_attribution_json"].read_text(encoding="utf-8"))
         ]
 
-    synopsis = generate_chapter_synopsis(
-        meta,
-        cards,
-        bible,
-        attribution,
-        config,
-        out_path=paths["script_synopsis_json"],
-    )
+    # Cache the script stage's own sub-artifacts, the way every other stage caches on
+    # artifact existence. Without this a script run re-rolled the synopsis AND the outline
+    # AND the narration every time, so three independent samples compounded and no two
+    # runs of a chapter were comparable — a changed draft could never be attributed to a
+    # changed rule rather than to resampling. `--force` deletes these first (see
+    # pipeline.run_stage), so a full re-roll is still one flag away.
+    synopsis = None
+    if paths["script_synopsis_json"].exists():
+        try:
+            synopsis = ChapterSynopsis.model_validate(
+                json.loads(paths["script_synopsis_json"].read_text())
+            )
+            console.print("[dim]Using cached chapter synopsis[/]")
+        except Exception:
+            synopsis = None
+    if synopsis is None:
+        synopsis = generate_chapter_synopsis(
+            meta,
+            cards,
+            bible,
+            attribution,
+            config,
+            out_path=paths["script_synopsis_json"],
+        )
     # Reload bible after synopsis sticky-name merges
     bible = load_series_bible(meta.series_slug, meta.title)
 
-    hook, outline_beats = _run_outline_pass(meta, cards, bible, synopsis, config, paths)
-    outline_beats = _mark_closer_beat(outline_beats, synopsis)
-    save_json(
-        paths["script_outline_json"],
-        {"hook": hook, "beats": [b.model_dump(mode="json") for b in outline_beats]},
-    )
+    hook, outline_beats = "", []
+    if paths["script_outline_json"].exists():
+        try:
+            cached = json.loads(paths["script_outline_json"].read_text())
+            outline_beats = [ScriptOutlineBeat.model_validate(b) for b in cached.get("beats", [])]
+            hook = str(cached.get("hook", "") or "")
+            if outline_beats:
+                console.print("[dim]Using cached outline[/]")
+        except Exception:
+            hook, outline_beats = "", []
+    if not outline_beats:
+        hook, outline_beats = _run_outline_pass(meta, cards, bible, synopsis, config, paths)
+        outline_beats = _mark_closer_beat(outline_beats, synopsis)
+        save_json(
+            paths["script_outline_json"],
+            {"hook": hook, "beats": [b.model_dump(mode="json") for b in outline_beats]},
+        )
 
     beats, missing_beats, narration_fallbacks, narration_path = _run_narration_pass(
         meta, outline_beats, hook, bible, attribution, synopsis, config, cards, paths=paths

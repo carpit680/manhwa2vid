@@ -155,8 +155,19 @@ def run_script(
     project: Path = typer.Option(..., "--project"),
     force: bool = False,
     force_past_qa: bool = typer.Option(False, "--force-past-qa", help="Continue despite failed QA gates"),
+    force_narration: bool = typer.Option(
+        False,
+        "--force-narration",
+        help="Re-roll narration only, against the cached synopsis and outline",
+    ),
 ) -> None:
-    run_stage(project.resolve(), PipelineStage.SCRIPT, force=force, force_past_qa=force_past_qa)
+    run_stage(
+        project.resolve(),
+        PipelineStage.SCRIPT,
+        force=force or force_narration,
+        force_past_qa=force_past_qa,
+        keep_upstream=force_narration,
+    )
 
 
 @run_app.command("tts")

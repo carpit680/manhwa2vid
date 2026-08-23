@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import json
 from pathlib import Path
 from typing import Any
@@ -120,11 +122,34 @@ def apply_findings(profile: CharacterProfile, findings: list[CharacterFinding]) 
     )
 
 
+# Words that appear in a role without naming the series' profession.
+_ROLE_STOPWORDS = frozenset(
+    """the and for with from that this their party group team member leader main
+    supporting minor extra protagonist character person""".split()
+)
+
+
 def detect_protagonist(bible: SeriesBible, config: dict[str, Any], wiki_mc_id: str | None = None) -> str:
     if wiki_mc_id and wiki_mc_id in bible.characters:
         return wiki_mc_id
 
     scored: list[tuple[float, str]] = []
+    # The series' own word for its cast, not a franchise term. This was the literal
+    # "hunter" — Solo Leveling's noun, dead weight on most titles and actively wrong on
+    # one with a large non-protagonist hunter cast. Derived from the bible's own roles, so
+    # it resolves to "hunter" here and to whatever the next title calls its people with no
+    # code change. Ties break alphabetically so protagonist election stays deterministic.
+    role_words: dict[str, int] = {}
+    for profile in bible.characters.values():
+        if profile.merged_into:
+            continue
+        for word in re.findall(r"[a-z]{4,}", (profile.role or "").lower()):
+            if word not in _ROLE_STOPWORDS:
+                role_words[word] = role_words.get(word, 0) + 1
+    common_role = (
+        min(sorted(role_words), key=lambda w: (-role_words[w], w)) if role_words else ""
+    )
+
     for profile in bible.characters.values():
         if profile.merged_into:
             continue
@@ -135,7 +160,10 @@ def detect_protagonist(bible: SeriesBible, config: dict[str, Any], wiki_mc_id: s
             score += 20.0
         if profile.tier == CharacterTier.MAIN:
             score += 15.0
-        if "hunter" in profile.role.lower() or any("hunter" in d.lower() for d in profile.descriptors):
+        if common_role and (
+            common_role in profile.role.lower()
+            or any(common_role in d.lower() for d in profile.descriptors)
+        ):
             score += 5.0
         scored.append((score, profile.id))
 
