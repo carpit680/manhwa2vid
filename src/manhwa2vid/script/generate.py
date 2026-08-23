@@ -1489,6 +1489,9 @@ def generate_script(
         bs = repair_subject_comma(bs)
         bs = repair_truncated_sentences(bs)
         bs = strip_internal_labels(bs, bible)
+        # Rule 4's FLOOR, before the ceiling: insert the one clause each named character
+        # is owed, then let strip_repeated_appositives remove every later one.
+        bs = ensure_first_mention_role(bs, bible)
         bs = strip_appearance_descriptors(bs, bible)
         bs = dedupe_intra_beat_sentences(bs)
         bs = dedupe_cross_beat_sentences(bs)

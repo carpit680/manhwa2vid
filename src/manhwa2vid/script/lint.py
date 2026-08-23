@@ -1876,8 +1876,21 @@ def sentence_fragments(text: str, *, min_words: int = 3) -> list[str]:
         words = sentence.split()
         if len(words) < min_words:
             continue
-        if not any(_looks_like_verb(w) for w in words):
-            out.append(sentence.strip())
+        if any(_looks_like_verb(w) for w in words):
+            continue
+        # _looks_like_verb is a suffix test, so it misses bare present-tense forms that a
+        # plural or pronoun subject takes: "They trust Rell", "Hunters gather at the gate".
+        # Treat any lowercase non-function word after the first token as a possible verb —
+        # a real bare noun phrase ("Jin-Woo and Lee Joo-hee.") has none, because its only
+        # lowercase words are conjunctions and determiners. Precision over recall: missing
+        # a fragment reads slightly off, while a false one makes accept_rewrite discard a
+        # good rewrite.
+        if any(
+            w[:1].islower() and w.strip(".,!?;:'\"").lower() not in _FUNCTION_WORDS
+            for w in words[1:]
+        ):
+            continue
+        out.append(sentence.strip())
     return out
 
 
@@ -1922,6 +1935,81 @@ def accept_rewrite(original: str, rewritten: str) -> str:
     if len(narration_defects(rewritten)) > len(narration_defects(original)):
         return original
     return rewritten
+
+
+def ensure_first_mention_role(
+    beats: list[ScriptBeat],
+    bible: SeriesBible | None,
+) -> list[ScriptBeat]:
+    """Insert the role clause at a character's FIRST mention, deterministically.
+
+    The exact inverse of `strip_repeated_appositives`, which already performs mechanical
+    appositive REMOVAL — same machinery, same risk profile, opposite direction. Rule 4 has
+    two halves and the ceiling was enforced in code while the floor was left to the prompt,
+    which declined it across three separate runs: a named character kept walking into the
+    script cold, and the last one had to be fixed by hand.
+
+    The role comes from the bible through `sanitize_role`, so it can never be a tier word
+    ("a supporting hunter"). Skipped whenever the surrounding text is not a plain first
+    mention — a possessive ("Song Chi-yul's skills"), a name already followed by a comma
+    (it may already carry its clause), or a name inside an existing appositive. Skipped
+    entirely when no role is known, because inventing one is how a misattribution ships.
+
+    Only ever inserts at the FIRST occurrence in the script; `lint_reintroduction` and
+    `strip_repeated_appositives` continue to own every later mention, which is why this
+    runs before them in the polish chain.
+    """
+    if bible is None:
+        return beats
+    from manhwa2vid.characters.bible import sanitize_role
+
+    roles: dict[str, str] = {}
+    for profile in bible.characters.values():
+        if profile.merged_into or profile.id == bible.protagonist_id:
+            continue
+        if profile.tier not in (CharacterTier.MAIN, CharacterTier.SUPPORTING):
+            continue
+        name = profile.canonical_name.strip()
+        role = sanitize_role(profile.role)
+        if name and role and not is_descriptor_label(name):
+            # Bible roles are stored bare ("raid leader"); narration needs the article,
+            # and lint_missing_introduction's appositive pattern requires one too.
+            article = "" if re.match(r"^(?:a|an|the|his|her|their)\s", role, re.I) else "the "
+            roles[name] = f"{article}{role}"
+
+    if not roles:
+        return beats
+
+    introduced: set[str] = set()
+    # Pre-scan: a character already carrying an appositive anywhere keeps it, and gets no
+    # second one inserted earlier in the script.
+    for beat in beats:
+        for name in roles:
+            if re.search(rf"\b{re.escape(name)},\s+(?:a|an|the|his|her|their)\s", beat.narration, re.I):
+                introduced.add(name)
+
+    out: list[ScriptBeat] = []
+    for beat in beats:
+        text = beat.narration
+        for name in roles:
+            if name in introduced:
+                continue
+            # Plain mention only. A following COMMA is skipped (the name may already
+            # carry a clause) and so is a possessive, but a sentence-final mention is
+            # fine: "They trust Song Chi-yul." -> "They trust Song Chi-yul, the raid
+            # leader." is exactly the introduction rule 4 asks for.
+            m = re.search(rf"\b{re.escape(name)}\b(?![\u2019']s\b)(?!\s*,)", text)
+            if not m:
+                continue
+            # A clause closes with a comma mid-sentence and with nothing at a sentence
+            # end, where the existing terminator does the job — otherwise ", the raid
+            # leader,." ships.
+            tail = text[m.end():]
+            closer = "" if tail[:1] in {".", "!", "?", ";", ":"} or not tail.strip() else ","
+            text = f"{text[:m.end()]}, {roles[name]}{closer}{tail}"
+            introduced.add(name)
+        out.append(beat.model_copy(update={"narration": text}) if text != beat.narration else beat)
+    return out
 
 
 def lint_beats(
@@ -2055,7 +2143,16 @@ def rewrite_beat(
         attribution=attribution,
         scene_cards=scene_cards,
     )
-    if beat.beat_id not in remaining:
+    # A caller-supplied issue IS the contract. This used to return here whenever
+    # lint_beats came up clean, silently discarding `issues` — and lint_beats covers only
+    # the old suite (hedges, name-spam, asides, banned words, grounding, malformed
+    # openings). Every story-integrity finding — plot coverage, time shift, repeated
+    # setting, abstraction drift, missing introduction, narration order, unanchored
+    # opening — is invisible to it, so those rewrites never reached the model unless the
+    # beat happened to ALSO carry an old-style defect. "Song Chi-yul is named with no
+    # introduction" survived two full rewrite rounds untouched for exactly this reason and
+    # had to be fixed by hand. lint_beats is now an ADDITIONAL source of issues, not a gate.
+    if not issues and beat.beat_id not in remaining:
         return sanitized
 
     llm = llm or apply_stage_model(get_stage_llm("script", config), "script", config)

@@ -1813,3 +1813,102 @@ def test_mc_name_budget_keeps_the_anchor_a_bare_opening_needs():
     assert "Jin-Woo" in out[2].narration
     # And the two mechanisms now agree rather than looping.
     assert lint_unanchored_opening(out, bible) == {}
+
+
+def test_rewrite_beat_honours_caller_supplied_issues():
+    """THE bug that forced hand-editing. rewrite_beat ran lint_beats and returned early
+    when it came up clean, silently discarding the caller's `issues` — and lint_beats
+    covers only the old suite, so every story-integrity finding (coverage, order,
+    unanchored opening, missing introduction, abstraction drift...) never reached the
+    model unless the beat coincidentally had an old-style defect too."""
+    from manhwa2vid.models import CharacterProfile, CharacterRef, CharacterTier, PanelCast, SeriesBible
+    from manhwa2vid.script.lint import lint_beats, rewrite_beat
+
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="char_mc",
+        characters={
+            "char_mc": CharacterProfile(id="char_mc", canonical_name="Rell",
+                                        tier=CharacterTier.MAIN, pronoun="he"),
+            "char_d": CharacterProfile(id="char_d", canonical_name="Doran",
+                                       tier=CharacterTier.SUPPORTING, pronoun="he",
+                                       role="raid leader"),
+        },
+    )
+    attribution = [PanelCast(panel_id="p1", people=[
+        CharacterRef(ref="char_mc", name_used="Rell"),
+        CharacterRef(ref="char_d", name_used="Doran")])]
+    beat = ScriptBeat(beat_id=1, panel_ids=["p1"],
+                      narration="Rell tells Doran that the gate is open.")
+    assert 1 not in lint_beats([beat], {}, bible=bible, attribution=attribution,
+                               scene_cards=None), "fixture must be clean by the old suite"
+
+    reached = []
+
+    class _LLM:
+        def complete(self, *a, **k):
+            reached.append(True)
+            return "Rell tells Doran, the raid leader, that the gate is open."
+
+    rewrite_beat(beat, bible, attribution, {},
+                 issues=["Doran is named with no introduction"], scene_cards=None, llm=_LLM())
+    assert reached, "a caller-supplied issue must reach the model"
+
+    # With no issues AND a clean lint, the short-circuit must still hold (it is what keeps
+    # the rewrite loop from calling the model on every good beat).
+    reached.clear()
+    out = rewrite_beat(beat, bible, attribution, {}, issues=None, scene_cards=None, llm=_LLM())
+    assert not reached and out.strip() == beat.narration.strip()
+
+
+def test_ensure_first_mention_role_inserts_once_and_skips_unsafe_shapes():
+    """The inverse of strip_repeated_appositives: mechanical appositive INSERTION at a
+    character's first mention, after the prompt declined rule 4's floor across three runs."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import ensure_first_mention_role, lint_missing_introduction
+
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="char_mc",
+        characters={
+            "char_mc": CharacterProfile(id="char_mc", canonical_name="Rell",
+                                        tier=CharacterTier.MAIN),
+            "char_d": CharacterProfile(id="char_d", canonical_name="Doran",
+                                       tier=CharacterTier.SUPPORTING, role="raid leader"),
+            "char_v": CharacterProfile(id="char_v", canonical_name="Vesh",
+                                       tier=CharacterTier.SUPPORTING, role="field medic"),
+        },
+    )
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p"], narration="Rell tells Doran that nobody objects."),
+        ScriptBeat(beat_id=2, panel_ids=["p"], narration="Doran commands the party to enter."),
+        # Already introduced elsewhere -> never given a second clause.
+        ScriptBeat(beat_id=3, panel_ids=["p"], narration="Vesh, the field medic, binds it."),
+        ScriptBeat(beat_id=4, panel_ids=["p"], narration="Vesh works quickly."),
+    ]
+    out = ensure_first_mention_role(beats, bible)
+    assert out[0].narration == "Rell tells Doran, the raid leader, that nobody objects."
+    assert out[1].narration == "Doran commands the party to enter."   # only the FIRST
+    assert out[2].narration == beats[2].narration
+    assert out[3].narration == beats[3].narration
+    assert lint_missing_introduction(out, bible) == {}
+
+    # Sentence-final mention closes with the existing terminator, not ",."
+    tail = ensure_first_mention_role(
+        [ScriptBeat(beat_id=1, panel_ids=["p"], narration="They trust Doran.")], bible)
+    assert tail[0].narration == "They trust Doran, the raid leader."
+
+    # A possessive is never split; the clause lands on the next plain mention.
+    poss = ensure_first_mention_role(
+        [ScriptBeat(beat_id=1, panel_ids=["p"],
+                    narration="Doran's skills are famous. Doran nods.")], bible)
+    assert poss[0].narration.startswith("Doran's skills are famous.")
+    assert "Doran, the raid leader, nods." in poss[0].narration
+
+
+def test_sentence_fragments_allows_bare_present_tense_verbs():
+    """_looks_like_verb is a suffix test and misses bare forms a plural or pronoun subject
+    takes. Flagging those would make accept_rewrite discard good rewrites."""
+    from manhwa2vid.script.lint import sentence_fragments
+
+    assert sentence_fragments("They trust Doran, the raid leader.") == []
+    assert sentence_fragments("Hunters gather at the gate.") == []
+    assert sentence_fragments("Rell and Vesh.") == ["Rell and Vesh."]
