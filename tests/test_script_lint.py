@@ -1912,3 +1912,38 @@ def test_sentence_fragments_allows_bare_present_tense_verbs():
     assert sentence_fragments("They trust Doran, the raid leader.") == []
     assert sentence_fragments("Hunters gather at the gate.") == []
     assert sentence_fragments("Rell and Vesh.") == ["Rell and Vesh."]
+
+
+def test_mc_name_budget_restores_an_anchor_the_beat_never_had():
+    """Every other path here can only ROTATE a name already present, so a beat the writer
+    produced with no proper noun at all stayed unanchored through every rewrite round.
+    Substituting the protagonist is the inverse of what this function does —
+    rotate_protagonist_name turns the MC's name INTO "he" — so a bare "he" in this
+    pipeline's own output is the MC by construction."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import enforce_mc_name_budget, lint_unanchored_opening
+
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="char_mc",
+        characters={
+            "char_mc": CharacterProfile(id="char_mc", canonical_name="Sung Jin-Woo",
+                                        tier=CharacterTier.MAIN, pronoun="he"),
+            "char_k": CharacterProfile(id="char_k", canonical_name="Kim Sangshik",
+                                       tier=CharacterTier.SUPPORTING, pronoun="he"),
+        },
+    )
+    cfg = {"script": {"mc_anchor_every_beats": 2}}
+    beats = [
+        # Names a same-pronoun rival, so the next beat's bare "He" is ambiguous.
+        ScriptBeat(beat_id=1, panel_ids=["p"], narration="Kim Sangshik waves them onward.",
+                   character_ids=["char_k"]),
+        ScriptBeat(beat_id=2, panel_ids=["p"], narration="He takes a sharp breath and steps through.",
+                   character_ids=["char_k", "char_mc"]),
+    ]
+    out = enforce_mc_name_budget(beats, bible, cfg)
+    assert out[1].narration.startswith("Jin-Woo takes a sharp breath")
+    assert lint_unanchored_opening(out, bible) == {}
+
+    # Not in the beat's own cast -> never substituted, because that would misattribute.
+    other = [beats[0], beats[1].model_copy(update={"character_ids": ["char_k"]})]
+    assert enforce_mc_name_budget(other, bible, cfg)[1].narration.startswith("He takes")

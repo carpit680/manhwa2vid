@@ -1124,6 +1124,31 @@ def enforce_mc_name_budget(
         else:
             text = rotate_protagonist_name(beat.narration, bible, keep=0)
             beats_since_anchor += 1
+
+        # Restore an anchor the beat never had. Everything above can only ROTATE a name
+        # already present, so a beat the writer produced with no proper noun at all stayed
+        # unanchored through every rewrite round — ch1 beat 14, "He takes a sharp breath",
+        # with three men named in the beat before it.
+        #
+        # Substituting the protagonist is the inverse of what this function does:
+        # rotate_protagonist_name turns the MC's name INTO "he", so a bare "he" in this
+        # pipeline's own output is the MC by construction. Guarded to where that reading is
+        # safe — the beat names nobody at all, the protagonist is in its own cast list, and
+        # a same-pronoun rival in the previous beat makes the pronoun genuinely ambiguous.
+        if (
+            short
+            and prev_rivals
+            and beat.character_ids
+            and bible.protagonist_id in beat.character_ids
+            and _OPENING_PRONOUN_RE.match(text.strip())
+            and not any(
+                re.search(rf"\b{re.escape(n)}\b", text, re.I)
+                for n in [*rivals, mc.canonical_name if mc else "", short] if n
+            )
+        ):
+            text = _OPENING_PRONOUN_RE.sub(short, text, count=1)
+            anchors += 1
+            beats_since_anchor = 0
         out.append(beat.model_copy(update={"narration": fix_pronoun_case(text, bible)}))
     return out
 
