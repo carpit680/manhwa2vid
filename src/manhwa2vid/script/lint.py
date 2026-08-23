@@ -1817,6 +1817,70 @@ def lint_unanchored_opening(
     return out
 
 
+def sentence_fragments(text: str, *, min_words: int = 3) -> list[str]:
+    """Sentences carrying no verb at all — "Jin-Woo and Lee Joo-hee."
+
+    Not reachable by lint_malformed_opening, which only asks whether the first character
+    is lowercase, so a capitalised fragment passes every existing check and is then spoken
+    aloud as a dead stub.
+
+    `min_words` keeps one- and two-word sentences out of it: those are deliberate beats
+    ("Silence." / "Not this time.") and the present-tense register means a real clause
+    almost always carries an -s/-ed/-ing verb that _looks_like_verb catches.
+    """
+    out: list[str] = []
+    for sentence in _SENTENCE_SPLIT_RE.split((text or "").strip()):
+        words = sentence.split()
+        if len(words) < min_words:
+            continue
+        if not any(_looks_like_verb(w) for w in words):
+            out.append(sentence.strip())
+    return out
+
+
+def narration_defects(text: str) -> list[str]:
+    """Cheap deterministic defects in one narration string, for comparing two candidates.
+
+    Used to guarantee a REWRITE does no harm. Every rewrite path here hands an LLM a
+    defect to fix and accepts whatever comes back, and the damage that causes is now
+    documented three times over: a beat came back shortened from three sentences to one,
+    and beat 12 of ch1 came back as "Jin-Woo and Lee Joo-hee. He murmurs a quiet greeting,
+    and he simply nods back" — a fragment, two unresolvable pronouns, and the raid leader
+    the beat existed to introduce deleted outright. The model's ORIGINAL text for that
+    beat was clean.
+
+    The pairwise judge was supposed to be the backstop and returned "undecided", whose
+    default is to keep the rewrite. That default is defensible for a coherent rewrite and
+    indefensible for a malformed one, so well-formedness is settled here — deterministically
+    and before the judge is ever consulted.
+    """
+    defects: list[str] = []
+    defects += [f"fragment: {s[:60]}" for s in sentence_fragments(text)]
+    stripped = (text or "").strip()
+    if stripped and stripped.split() and stripped.split()[0][:1].islower():
+        defects.append("opens mid-sentence")
+    if _ARTICLE_PRONOUN_RE.search(text or ""):
+        defects.append("stranded determiner on a pronoun")
+    if _ECHOED_AGENT_RE.search(text or ""):
+        defects.append("same descriptor for two people")
+    return defects
+
+
+def accept_rewrite(original: str, rewritten: str) -> str:
+    """Take a rewrite only when it introduces no NEW deterministic defect.
+
+    A rewrite is aimed at a named defect, so it earns the benefit of the doubt on content
+    — that judgement belongs to the pairwise judge, which can see the panels. It does not
+    earn the benefit of the doubt on well-formedness, which is decidable here for free.
+    Equal counts keep the rewrite; strictly worse keeps the original.
+    """
+    if not (rewritten or "").strip():
+        return original
+    if len(narration_defects(rewritten)) > len(narration_defects(original)):
+        return original
+    return rewritten
+
+
 def lint_beats(
     beats: list[ScriptBeat],
     config: dict[str, Any],
@@ -2031,14 +2095,14 @@ def lint_and_rewrite_script(
     fixed: list[ScriptBeat] = []
     for beat in pre_sanitized:
         if beat.beat_id in report:
-            new_text = rewrite_beat(
+            new_text = accept_rewrite(beat.narration, rewrite_beat(
                 beat,
                 bible,
                 attribution,
                 config,
                 issues=report[beat.beat_id],
                 scene_cards=scene_cards,
-            )
+            ))
             fixed.append(beat.model_copy(update={"narration": new_text}))
         else:
             fixed.append(beat)

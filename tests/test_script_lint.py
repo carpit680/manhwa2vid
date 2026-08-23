@@ -1696,3 +1696,35 @@ def test_lint_unanchored_opening_flags_a_beat_that_names_nobody():
     flagged = lint_unanchored_opening(beats, bible)
     assert sorted(flagged) == [1]
     assert "Doran" in flagged[1][0]      # names the rival that makes "He" ambiguous
+
+
+def test_accept_rewrite_refuses_a_malformed_rewrite():
+    """Every rewrite path hands an LLM a defect and accepted whatever came back. ch1 beat
+    12's model text was clean; the alignment rewrite returned "Jin-Woo and Lee Joo-hee. He
+    murmurs a quiet greeting, and he simply nods back" — a fragment, two unresolvable
+    pronouns, and the raid leader the beat existed to introduce deleted. The pairwise
+    judge returned "undecided", whose default keeps the rewrite. Well-formedness is
+    decidable for free, so it is settled before the judge is consulted."""
+    from manhwa2vid.script.lint import accept_rewrite, narration_defects, sentence_fragments
+
+    good = ("The hunters gather their gear as a call for attention echoes through the site. "
+            "Doran, a veteran raid leader, steps forward and asks the group for consensus.")
+    bad = "Rell and Vesh. He murmurs a quiet greeting, and he simply nods back."
+
+    assert sentence_fragments(bad) == ["Rell and Vesh."]
+    assert not sentence_fragments(good)
+    assert len(narration_defects(bad)) > len(narration_defects(good))
+
+    assert accept_rewrite(good, bad) == good      # strictly worse -> keep the original
+    assert accept_rewrite(bad, good) == good      # a real fix is taken
+    assert accept_rewrite(good, "") == good       # empty rewrite never wins
+
+
+def test_sentence_fragments_spares_short_deliberate_lines():
+    """One- and two-word sentences are deliberate ("Silence."), and the present-tense
+    register means a real clause almost always carries a verb _looks_like_verb catches."""
+    from manhwa2vid.script.lint import sentence_fragments
+
+    for ok in ["Silence.", "He nods.", "The gate opens at dawn.",
+               "Rell walks the market road with her hood up."]:
+        assert sentence_fragments(ok) == [], ok

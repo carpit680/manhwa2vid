@@ -34,7 +34,12 @@ from manhwa2vid.script.grounding import (
     inject_closer_evidence,
     refresh_plot_for_span,
 )
-from manhwa2vid.script.lint import banned_words, lint_and_rewrite_script, rotate_protagonist_name
+from manhwa2vid.script.lint import (
+    accept_rewrite as _accept_rewrite,
+    banned_words,
+    lint_and_rewrite_script,
+    rotate_protagonist_name,
+)
 from manhwa2vid.script.synopsis import (
     format_synopsis_for_prompt,
     generate_chapter_synopsis,
@@ -1268,10 +1273,10 @@ def generate_script(
         recovered: list[ScriptBeat] = []
         for beat in beats:
             if beat.beat_id in issues_by_beat:
-                new_text = _rewrite_beat(
+                new_text = _accept_rewrite(beat.narration, _rewrite_beat(
                     beat, bible, attribution, config,
                     issues=issues_by_beat[beat.beat_id], scene_cards=cards,
-                )
+                ))
                 recovered.append(beat.model_copy(update={"narration": new_text}))
             else:
                 recovered.append(beat)
@@ -1306,9 +1311,9 @@ def generate_script(
             for beat in beats:
                 if beat.beat_id in major:
                     issues = [f"unsupported claim: {c}" for c in major[beat.beat_id]]
-                    new_text = rewrite_beat(
+                    new_text = _accept_rewrite(beat.narration, rewrite_beat(
                         beat, bible, attribution, config, issues=issues, scene_cards=cards
-                    )
+                    ))
                     # A rewrite was accepted unconditionally before this: it is aimed at
                     # a named defect, but nothing checked whether it actually improved
                     # the beat. Judge it against what it replaced.
@@ -1510,10 +1515,10 @@ def generate_script(
                 fixed: list[ScriptBeat] = []
                 for beat in beats:
                     if beat.beat_id in grammar_issues:
-                        new_text = rewrite_beat(
+                        new_text = _accept_rewrite(beat.narration, rewrite_beat(
                             beat, bible, attribution_rows, config,
                             issues=grammar_issues[beat.beat_id], scene_cards=cards,
-                        )
+                        ))
                         fixed.append(beat.model_copy(update={"narration": new_text}))
                     else:
                         fixed.append(beat)
