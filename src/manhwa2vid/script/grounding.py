@@ -226,6 +226,7 @@ def preassign_outline_from_facts(
 
     all_panel_ids = sorted({pid for c in story_cards for pid in c.panel_ids}, key=_panel_sort_key_local)
     assigned_panels: set[str] = set()
+    unbound_facts: list[str] = []
     seeded: list[tuple[int, list[str], str, list[str]]] = []  # sort_key, panels, plot, char_ids
 
     for fact in synopsis.plot_facts:
@@ -235,6 +236,11 @@ def preassign_outline_from_facts(
         scored.sort(key=lambda x: x[0], reverse=True)
         best_score, best_card = scored[0]
         if best_score < 0.15:
+            # No panel carries this fact well enough to seed a beat — but the fact is
+            # still true and often load-bearing. Dropping it here is how Frozen Player's
+            # two payoff facts (the third floor needs the nucleus; Frost EX can melt the
+            # seals) vanished before narration ever saw them. Keep it for placement.
+            unbound_facts.append(fact.strip())
             continue
         panels = [pid for pid in best_card.panel_ids if pid not in assigned_panels]
         if not panels:
@@ -310,6 +316,25 @@ def preassign_outline_from_facts(
         )
         combined = [*combined[:best_i], merged, *combined[best_i + 2 :]]
 
+    # Place each unbound fact on the beat whose panels score best for it — the beat where
+    # the writer is most likely to be able to land it — spreading them so one beat is not
+    # asked to carry the whole synopsis.
+    fact_context: dict[int, list[str]] = {}
+    if unbound_facts:
+        by_panel_card = card_by_panel(story_cards)
+        for fact in unbound_facts:
+            best_i, best = 0, -1.0
+            for i, (_sk, panels, _plot, _cids) in enumerate(combined):
+                score = max(
+                    (score_fact_against_card(fact, by_panel_card[pid])
+                     for pid in panels if pid in by_panel_card),
+                    default=0.0,
+                )
+                score -= 0.05 * len(fact_context.get(i, []))
+                if score > best:
+                    best_i, best = i, score
+            fact_context.setdefault(best_i, []).append(fact)
+
     outline: list[ScriptOutlineBeat] = []
     for idx, (_sk, panels, plot, char_ids) in enumerate(combined, start=1):
         panels = sorted(panels, key=_panel_sort_key_local)
@@ -318,6 +343,7 @@ def preassign_outline_from_facts(
                 beat_id=idx,
                 panel_ids=panels,
                 character_ids=char_ids,
+                required_context=fact_context.get(idx - 1, []),
                 plot_beat=plot[:400],
             )
         )

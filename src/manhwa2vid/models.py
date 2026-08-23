@@ -212,6 +212,12 @@ class ScriptOutlineBeat(BaseModel):
     panel_ids: list[str]
     character_ids: list[str] = Field(default_factory=list)
     plot_beat: str = ""
+    #: Synopsis facts that bind to no single panel well enough to seed a beat of their
+    #: own. They used to be dropped, taking the chapter's payoffs with them: Frozen
+    #: Player's "the 3rd floor needs the Frost Queen's nucleus" and "Frost (EX) can melt
+    #: his comrades' seals" are what the reference channel builds its climax on, and
+    #: neither reached our narration. Carried to the nearest beat and shown to the writer.
+    required_context: list[str] = Field(default_factory=list)
     is_closer: bool = False  # final beat: next-chapter hook written from open_threads
 
 

@@ -131,6 +131,13 @@ def _cast_context_for_beats(
             f"  MUST COVER — the story this beat exists to tell. Every event named here\n"
             f"  survives into your narration; the evidence below supplies the WORDS, not\n"
             f"  the plot:\n    {beat.plot_beat}\n"
+            + (
+                "  ALSO TRUE HERE — chapter facts this beat is the right place to land.\n"
+                "  State them as story, not as a footnote:\n"
+                + "".join(f"    - {c}\n" for c in beat.required_context)
+                if beat.required_context else ""
+            )
+            +
             f"  MAX {max_words} words — hard limit. Cut DESCRIPTION first; never drop an\n"
             f"  event named above to make room for what a panel merely shows.\n"
             f"  EVIDENCE (your only source of detail — narrate nothing absent here).\n"
@@ -1274,6 +1281,34 @@ def generate_script(
         f"{rehomed} of {len(all_panels)} story-inventory panel(s) re-homed to nearest beat "
         "(includes any the scene stage dropped)" if rehomed else "",
         rehomed=rehomed, total=len(all_panels),
+    )
+
+    # Fact delivery: every synopsis plot_fact must reach SOME beat's narration. The
+    # outline could bind a fact to panels and the narration still skip it, which is how
+    # the two facts the chapter's climax rests on went missing while every gate stayed
+    # green. Same stemmed-overlap proxy lint_plot_coverage uses, so it inherits the same
+    # honest limits: heavy paraphrase scores low, which is why this warns rather than fails.
+    from manhwa2vid.script.lint import _stemmed_words as _stems
+
+    # Scored per BEAT, not across the whole script: a fact delivered as story lands in
+    # ONE beat, whereas a whole-script bag of words is satisfied by recurring vocabulary
+    # alone. Measured on the shipped Frozen Player script, the whole-script form called
+    # all five facts delivered while the two its climax rests on were plainly missing;
+    # per-beat flags exactly those two.
+    beat_stems = [_stems(b.narration) for b in beats]
+    undelivered = []
+    for fact in (synopsis.plot_facts if synopsis else []):
+        ft = _stems(fact)
+        if not fact.strip() or not ft:
+            continue
+        if max((len(ft & bs) / len(ft) for bs in beat_stems), default=0.0) < 0.34:
+            undelivered.append(fact)
+    report.add(
+        "fact-delivery",
+        True if not undelivered else "warn",
+        (f"{len(undelivered)} synopsis fact(s) never reached the narration: "
+         + "; ".join(f[:70] for f in undelivered[:3])) if undelivered else "",
+        undelivered=len(undelivered),
     )
 
     inventory_n = len(all_panels) + len(dropped_panels)

@@ -85,3 +85,30 @@ def test_continuity_floor_breaks_long_dropped_runs():
         run = run + 1 if pid in dropped else 0
         worst = max(worst, run)
     assert worst <= 3
+
+
+def test_unbound_facts_become_required_context_not_silence():
+    """A synopsis fact that binds to no single panel used to be dropped, taking the
+    chapter's payoffs with it: Frozen Player's "the 3rd floor needs the Frost Queen's
+    nucleus" and "Frost (EX) can melt the seals" are what the reference channel builds its
+    climax on, and neither reached our narration."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.grounding import preassign_outline_from_facts
+
+    cards = [
+        _card("p0001_01", dialogue='Rell -> Vesh: "THE GATE OPENS AT DAWN."', people=1,
+              action="Rell and Vesh stand at the gate at dawn"),
+        _card("p0002_01", dialogue='Vesh: "WE MOVE OUT."', people=1, action="they move out"),
+    ]
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="mc",
+        characters={"mc": CharacterProfile(id="mc", canonical_name="Rell",
+                                           tier=CharacterTier.MAIN)},
+    )
+    synopsis = _synopsis([
+        "The gate opens at dawn and Rell is waiting for it.",          # binds to p0001_01
+        "Nobody has cleared the seventh vault because the seal needs a drake's heart.",
+    ])
+    beats = preassign_outline_from_facts(synopsis, cards, bible, max_beats=4)
+    carried = [c for b in beats for c in b.required_context]
+    assert any("drake" in c for c in carried), "the unbindable fact must survive somewhere"
