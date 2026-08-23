@@ -1455,6 +1455,12 @@ def test_lint_contentless_report_flags_reports_with_no_content():
         ScriptBeat(beat_id=3, panel_ids=["p"],
                    narration="Kim tells Bak that the dungeon will be easy today."),
         ScriptBeat(beat_id=4, panel_ids=["p"], narration="She tells him the truth about the raid."),
+        # Zero-complementizer clause: "explains THAT he needs the money" with "that"
+        # dropped. Real reported speech; flagging it sent a good beat to a rewrite.
+        ScriptBeat(beat_id=5, panel_ids=["p"], narration="Bak explains he needs the money."),
+        # Irregular past defeats any suffix-based verb test, so the rule is tail LENGTH:
+        # only a tail short enough to be a bare listener is contentless.
+        ScriptBeat(beat_id=6, panel_ids=["p"], narration="He explains Rell stole the ledger."),
     ]
     flagged = lint_contentless_report(beats)
     assert sorted(flagged) == [1, 2]
@@ -1604,3 +1610,17 @@ def test_lint_missing_introduction_is_the_floor_of_rule_4():
     assert sorted(flagged) == [3]                 # first mention, not every mention
     assert "Doran" in flagged[3][0]
     assert "raid leader" in flagged[3][0]         # suggests the role from the bible
+
+
+def test_lint_abstraction_drift_ignores_compound_nouns():
+    """A gerund before the noun makes a COMPOUND, not a category reference: "the gate
+    gathering point" is a place, "his financial situation" is a category standing where a
+    fact belongs. Without this the check flagged a correct beat."""
+    from manhwa2vid.models import SceneCard
+    from manhwa2vid.script.lint import lint_abstraction_drift
+
+    cards = [SceneCard(panel_ids=["p1"], action="hunters gather",
+                       source_text='Vesh -> Rell: "THE GATE OPENS AT DAWN AND THE PAY IS DOUBLE."')]
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p1"],
+                        narration="A hunter welcomes Rell to the gate gathering point.")]
+    assert lint_abstraction_drift(beats, cards) == {}

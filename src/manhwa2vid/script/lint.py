@@ -1418,6 +1418,11 @@ _REPORT_VERB_RE = re.compile(
 _REPORT_COMPLEMENT_RE = re.compile(
     r"\b(that|how|why|what|whether|if|about|to\s+\w+|not\s+to)\b|[,:]", re.I
 )
+# English drops "that" freely: "explains he needs the money" is "explains THAT he needs
+# the money" and is perfectly good reported speech. Without this the check flagged a
+# correct beat, and a false positive here is not free — it sends a good beat to an LLM
+# rewrite, which is how one ch1 beat came back shortened to a single sentence.
+
 
 
 def lint_contentless_report(beats: list[ScriptBeat]) -> dict[int, list[str]]:
@@ -1442,6 +1447,17 @@ def lint_contentless_report(beats: list[ScriptBeat]) -> dict[int, list[str]]:
                 continue
             tail = sentence[m.end():].strip(" .!?")
             if len(tail.split()) > 4 or _REPORT_COMPLEMENT_RE.search(tail):
+                continue
+            tail_words = tail.split()
+            # Only a tail short enough to be a bare LISTENER is contentless: "tells Bak",
+            # "tells Lee Joo-hee". Anything longer is a clause with its "that" dropped
+            # ("explains he needs the money", "explains Rell stole the ledger") and is
+            # real reported speech. Testing for a verb instead was tried and fails on
+            # irregular pasts, the same suffix-check limitation documented at
+            # _OBJECT_PREV_WORDS — and a false positive here is not free: it sends a good
+            # beat to an LLM rewrite, which is how one ch1 beat came back shortened to a
+            # single sentence.
+            if len(tail_words) > 2 or any(_looks_like_verb(w) for w in tail_words):
                 continue
             out.setdefault(beat.beat_id, []).append(
                 f'"{sentence.strip()}" reports nothing — say WHAT was said, or cut the '
@@ -1518,7 +1534,7 @@ def lint_malformed_phrases(beats: list[ScriptBeat]) -> dict[int, list[str]]:
 _ABSTRACTION_NOUNS = frozenset(
     """situation situations circumstance circumstances condition conditions status
     matter matters issue issues problem problems case cases aspect aspects factor
-    factors element elements nature thing things stuff way ways path point points
+    factors element elements nature thing things stuff path
     level levels degree extent reality experience experiences activity process
     processes state career careers detail details topic subject""".split()
 )
@@ -1574,9 +1590,16 @@ def lint_abstraction_drift(
     out: dict[int, list[str]] = {}
     for beat in beats:
         narration_stems = _stemmed_words(beat.narration)
+        # A gerund before the noun makes it a COMPOUND, not a category reference:
+        # "the gate gathering point" is a place, "his financial situation" is a category
+        # standing where a fact belongs. Without this the check flagged a correct beat.
+        words = [w.lower().strip(".,!?;:'\"") for w in beat.narration.split()]
         abstractions = sorted(
-            {w.lower().strip(".,!?;:'\"") for w in beat.narration.split()}
-            & _ABSTRACTION_NOUNS
+            {
+                w for i, w in enumerate(words)
+                if w in _ABSTRACTION_NOUNS
+                and not (i and words[i - 1].endswith("ing"))
+            }
         )
         if not abstractions:
             continue
