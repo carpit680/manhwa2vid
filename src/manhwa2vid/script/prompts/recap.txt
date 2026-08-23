@@ -90,12 +90,16 @@ THE TEN RULES:
    The phrase "the protagonist" at most once per script. FORBIDDEN words: {ban_words}.
    No hedging: possibly, likely, maybe, seems, appears. Slang level: {genz_level}.
    Commentary: {commentary_level} — plot-forward, no essays.
-10. TEMPORAL FRAMING: mark every frame shift ONCE, as an IMAGE CHANGE rather than an
-    announcement — one short sentence that simply names where the story now is, the way
-    a cut does. A flashforward cold open returns to the present in EXACTLY ONE beat: the
-    last flashforward beat. Beats before it are inside the flashforward and never mention
-    the shift; beats after it are simply in the present and never re-announce the time.
-    Never rewind twice.
+10. TEMPORAL FRAMING: a listener cannot see a scene dissolve, and cannot look back the
+    way a reader can. SAY every time jump, in words, in the first sentence of the beat
+    that makes it: "Twenty-five years earlier, five heroes stand at that door." "Seventy-
+    six hours before the fight, they are still arguing." "Twenty-five years later, the
+    ice is a museum exhibit." The Narrative structure line above is the chapter's time
+    map — use the interval IT states, never a rounder one you assume.
+    Repeating the interval is not a fault: the gap IS the story, and naming it again when
+    the story returns is how a listener stays oriented. What you must not do is drift —
+    two different intervals for the same jump, or a jump nobody announced.
+    Beats inside one time frame never re-announce it; only the beat that CROSSES does.
     The CLOSER lands deliberately: tie to the chapter's core tension, end on a concrete
     forward hook. No trailing off.
 

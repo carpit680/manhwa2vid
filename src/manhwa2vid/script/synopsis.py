@@ -77,6 +77,10 @@ def format_synopsis_for_prompt(synopsis: ChapterSynopsis) -> str:
     thread_lines = [f"  - {t}" for t in synopsis.open_threads] or ["  (none)"]
     parts = [
         f"Logline: {synopsis.logline}",
+        # The chapter's TIME MAP. It was computed and then never shown to the writer,
+        # which is half of why time jumps arrived unannounced.
+        *([f"Narrative structure: {synopsis.narrative_structure}"]
+          if getattr(synopsis, "narrative_structure", "") else []),
         "Arc:",
         *[f"  {i}. {act}" for i, act in enumerate(synopsis.arc, 1)],
         "Named cast:",
