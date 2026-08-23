@@ -2014,6 +2014,7 @@ def ensure_first_mention_role(
         return beats
 
     introduced: set[str] = set()
+    used_roles: set[str] = set()
     # Pre-scan: a character already introduced ANYWHERE keeps that introduction and never
     # gets a second one inserted.
     #
@@ -2052,6 +2053,16 @@ def ensure_first_mention_role(
             # leader,." ships.
             tail = text[m.end():]
             closer = "" if tail[:1] in {".", "!", "?", ";", ":"} or not tail.strip() else ","
+            # A role that does not DISTINGUISH is not an introduction. Both supporting
+            # hunters in Solo Leveling ch1 carry the bare role "hunter", and inserting it
+            # for each produced "Kim Sangshik, a hunter, ... Bak, the hunter, calls out
+            # his name" in one beat — repetitive and no more informative than the bare
+            # names. The first character to claim a role keeps it; later ones are left
+            # alone, and lint_missing_introduction still reports them so the gap stays
+            # visible rather than being papered over with a duplicate.
+            if roles[name] in used_roles:
+                continue
+            used_roles.add(roles[name])
             text = f"{text[:m.end()]}, {roles[name]}{closer}{tail}"
             introduced.add(name)
         out.append(beat.model_copy(update={"narration": text}) if text != beat.narration else beat)
