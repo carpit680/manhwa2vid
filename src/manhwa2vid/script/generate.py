@@ -1340,15 +1340,6 @@ def generate_script(
         f"{c.source_text or ''} {c.action or ''} {' '.join(c.key_terms or [])}" for c in cards
     ))
     cov_report = QAReport(stage="script-coverage")
-    # Say what SURVIVED. The previous report only counted what was flagged, so a rewrite
-    # that fixed nothing still read as a clean run.
-    cov_report.add(
-        "story-integrity",
-        True if not issues_by_beat else "warn",
-        (f"{len(issues_by_beat)} beat(s) still flagged after two rewrite rounds: "
-         f"{sorted(issues_by_beat)}") if issues_by_beat else "",
-        flagged=sorted(first_round), remaining=sorted(issues_by_beat),
-    )
     cov_report.add(
         "hook-grounding",
         True if not hook_bad else "warn",
@@ -1610,6 +1601,19 @@ def generate_script(
             f"{sum(len(v) for v in grammar_residuals.values())} finding(s) in beat(s) "
             f"{sorted(grammar_residuals)} survived auto-fix and one rewrite",
         )
+    # Report the story-integrity residual HERE, against the shipped text. Reporting it
+    # right after the rewrite rounds was pessimistic: the deterministic polish below fixes
+    # several of those classes outright (ensure_first_mention_role, the restored MC
+    # anchor), so the gate warned about beats the reader never sees a problem in. Say what
+    # survived everything, which is the only number that means anything.
+    residual = _story_findings(beats)
+    final_report.add(
+        "story-integrity",
+        True if not residual else "warn",
+        (f"{len(residual)} beat(s) still flagged after two rewrite rounds and the "
+         f"deterministic polish: {sorted(residual)}") if residual else "",
+        flagged=sorted(first_round), remaining=sorted(residual),
+    )
     malformed = sorted(lint_malformed_opening(beats))
     final_report.add(
         "beats-wellformed",
