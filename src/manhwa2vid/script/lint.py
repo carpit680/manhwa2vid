@@ -1135,18 +1135,31 @@ def enforce_mc_name_budget(
         # pipeline's own output is the MC by construction. Guarded to where that reading is
         # safe — the beat names nobody at all, the protagonist is in its own cast list, and
         # a same-pronoun rival in the previous beat makes the pronoun genuinely ambiguous.
-        if (
-            short
-            and prev_rivals
-            and beat.character_ids
-            and bible.protagonist_id in beat.character_ids
-            and _OPENING_PRONOUN_RE.match(text.strip())
-            and not any(
-                re.search(rf"\b{re.escape(n)}\b", text, re.I)
-                for n in [*rivals, mc.canonical_name if mc else "", short] if n
+        if short and (
+            # Opens on a bare pronoun with a same-pronoun rival live in the beat before.
+            (
+                prev_rivals
+                and beat.character_ids
+                and bible.protagonist_id in beat.character_ids
+                and _OPENING_PRONOUN_RE.match(text.strip())
+                and not any(
+                    re.search(rf"\b{re.escape(n)}\b", text, re.I)
+                    for n in [*rivals, mc.canonical_name if mc else "", short] if n
+                )
             )
+            # Or acts through a pronoun anywhere in the beat while never being named —
+            # the ice-break shape, which does not open bare and so slipped the clause
+            # above entirely.
+            or mc_acts_unnamed(beat.model_copy(update={"narration": text}), bible)
         ):
-            text = _OPENING_PRONOUN_RE.sub(short, text, count=1)
+            # Substitute the FIRST subject pronoun, wherever it sits. Restricting this to
+            # the beat's opening missed the ice-break shape entirely, where the beat opens
+            # on somebody else ("The presenter introduces...") and the protagonist's only
+            # appearance is a mid-beat "he".
+            if _OPENING_PRONOUN_RE.match(text.strip()):
+                text = _OPENING_PRONOUN_RE.sub(short, text, count=1)
+            else:
+                text = re.sub(r"\b(?:he|she|they)\b", short, text, count=1, flags=re.I)
             anchors += 1
             beats_since_anchor = 0
         out.append(beat.model_copy(update={"narration": fix_pronoun_case(text, bible)}))
@@ -2077,6 +2090,70 @@ def ensure_first_mention_role(
             introduced.add(name)
         out.append(beat.model_copy(update={"narration": text}) if text != beat.narration else beat)
     return out
+
+
+_SUBJECT_PRONOUN_RE = re.compile(r"\b(he|she|they)\b", re.I)
+def mc_acts_unnamed(beat: ScriptBeat, bible: SeriesBible | None) -> bool:
+    """The protagonist acts in this beat through a pronoun and is never named in it.
+
+    Shipped on Frozen Player: "The presenter introduces the frozen figures as the five
+    heroes. When a schoolboy points out a moving statue, HE shatters his icy prison."
+    The beat's cast contains the protagonist, the narration never names him, and the
+    nearest antecedent a listener has is the schoolboy — so nobody watching could tell who
+    broke out of the ice. Every lint was green on that beat.
+
+    Cast membership is the signal, not pronoun agreement: bibles carry wrong pronouns
+    often enough (this title records two women as "he") that a pronoun-matched rule fires
+    on garbage. Nor can the OTHER people be identified from the prose — the presenter's
+    canonical name in that bible is "man in a black suit with black hair", so neither a
+    name match nor a "the <noun> <verb>" regex finds them; the regex version read "the
+    frozen statues" as a person doing something.
+
+    Shared by the repair (`enforce_mc_name_budget`) and the gate
+    (`lint_ambiguous_pronoun`) so the two can never disagree — the loop where a lint
+    demands a name and the name budget rotates it straight back out has already cost this
+    project two rounds.
+    """
+    if bible is None or not beat.character_ids:
+        return False
+    mc = bible.characters.get(bible.protagonist_id or "")
+    if mc is None or bible.protagonist_id not in beat.character_ids:
+        return False
+    name = mc.canonical_name.strip()
+    if not name:
+        return False
+    if not _OPENING_PRONOUN_RE.search(beat.narration) and not re.search(
+        r"\b(he|she|they)\b", beat.narration, re.I
+    ):
+        return False
+    short = _short_name_form(name)
+    return not re.search(rf"\b{re.escape(short)}\b", beat.narration, re.I) and not re.search(
+        rf"\b{re.escape(name)}\b", beat.narration, re.I
+    )
+
+
+def lint_ambiguous_pronoun(
+    beats: list[ScriptBeat],
+    bible: SeriesBible | None,
+) -> dict[int, list[str]]:
+    """Gate for `mc_acts_unnamed` — see it for the failure this exists for.
+
+    Normally silent: `enforce_mc_name_budget` repairs this deterministically in the polish
+    chain. It fires only when the repair could not (no name form to restore), which is
+    worth surfacing rather than shipping.
+    """
+    if bible is None:
+        return {}
+    mc = bible.characters.get(bible.protagonist_id or "")
+    who = mc.canonical_name if mc else "the protagonist"
+    return {
+        beat.beat_id: [
+            f"this beat acts through a pronoun and never names {who}, who its own cast "
+            "says is present — a listener cannot tell who is doing it. Name them"
+        ]
+        for beat in beats
+        if mc_acts_unnamed(beat, bible)
+    }
 
 
 def lint_beats(

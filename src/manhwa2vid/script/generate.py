@@ -1332,6 +1332,7 @@ def generate_script(
     # whole-chapter context. See lint_plot_coverage for why this is warn-and-rewrite.
     from manhwa2vid.script.lint import (
         lint_abstraction_drift,
+        lint_ambiguous_pronoun,
         lint_hook_grounding,
         lint_missing_introduction,
         lint_narration_order,
@@ -1384,6 +1385,7 @@ def generate_script(
             lint_missing_introduction(bs, bible),
             lint_narration_order(bs, cards),
             lint_unanchored_opening(bs, bible),
+            lint_ambiguous_pronoun(bs, bible),
         ):
             for bid, msgs in finding.items():
                 found.setdefault(bid, []).extend(msgs)

@@ -2024,3 +2024,44 @@ def test_first_mention_role_respects_a_role_the_writer_already_used():
     ]
     out = ensure_first_mention_role(beats, bible)
     assert out[1].narration == "Skaya tells Khali that they agree."   # role already taken
+
+
+def test_mc_acting_unnamed_is_detected_and_repaired():
+    """Shipped on Frozen Player: "The presenter introduces the frozen figures... When a
+    schoolboy points out a moving statue, HE shatters his icy prison." The beat's cast
+    contains the protagonist, the narration never names him, and the nearest antecedent is
+    the schoolboy — nobody watching could tell who broke out of the ice.
+
+    The gate and the deterministic repair share one predicate on purpose: a lint that
+    demands a name while the name budget rotates it back out is a loop this project has
+    already paid for twice."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import (
+        enforce_mc_name_budget,
+        lint_ambiguous_pronoun,
+        mc_acts_unnamed,
+    )
+
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="mc",
+        characters={"mc": CharacterProfile(id="mc", canonical_name="Sung Jin-Woo",
+                                           tier=CharacterTier.MAIN, pronoun="he")},
+    )
+    acts_unnamed = ScriptBeat(beat_id=1, panel_ids=["p"], character_ids=["mc"], narration=(
+        "The presenter introduces the frozen figures. When a schoolboy points at a "
+        "statue, he shatters the ice."))
+    names_him = ScriptBeat(beat_id=2, panel_ids=["p"], character_ids=["mc"], narration=(
+        "Jin-Woo flops onto the bed, and he struggles to take it in."))
+    not_in_cast = ScriptBeat(beat_id=3, panel_ids=["p"], character_ids=["other"],
+                             narration="He waves the group through the gate.")
+
+    assert mc_acts_unnamed(acts_unnamed, bible)
+    assert not mc_acts_unnamed(names_him, bible)      # already anchored
+    assert not mc_acts_unnamed(not_in_cast, bible)    # not his beat to anchor
+    assert sorted(lint_ambiguous_pronoun([acts_unnamed, names_him, not_in_cast], bible)) == [1]
+
+    # The repair closes it without an LLM round, and the gate then falls silent.
+    fixed = enforce_mc_name_budget(
+        [names_him, acts_unnamed], bible, {"script": {"mc_anchor_every_beats": 2}})
+    assert "Jin-Woo" in fixed[1].narration
+    assert lint_ambiguous_pronoun(fixed, bible) == {}
