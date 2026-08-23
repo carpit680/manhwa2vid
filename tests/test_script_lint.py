@@ -1955,3 +1955,32 @@ def test_mc_name_budget_restores_an_anchor_the_beat_never_had():
     # Not in the beat's own cast -> never substituted, because that would misattribute.
     other = [beats[0], beats[1].model_copy(update={"character_ids": ["char_k"]})]
     assert enforce_mc_name_budget(other, bible, cfg)[1].narration.startswith("He takes")
+
+
+def test_ensure_first_mention_role_lowercases_the_inserted_article():
+    """Roles are stored however the bible captured them. "The final boss of the Antarctic
+    dungeon" arrived title-cased and shipped as "the Frost Queen, The final boss...". An
+    inserted appositive always sits mid-sentence."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import ensure_first_mention_role
+
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="mc",
+        characters={
+            "mc": CharacterProfile(id="mc", canonical_name="Rell", tier=CharacterTier.MAIN),
+            "q": CharacterProfile(id="q", canonical_name="Frost Queen",
+                                  tier=CharacterTier.SUPPORTING,
+                                  role="The final boss of the Antarctic dungeon"),
+            "n": CharacterProfile(id="n", canonical_name="Vesh",
+                                  tier=CharacterTier.SUPPORTING, role="NASA liaison"),
+        },
+    )
+    out = ensure_first_mention_role(
+        [ScriptBeat(beat_id=1, panel_ids=["p"], narration="Rell tells Frost Queen to stand down.")],
+        bible)
+    assert "Frost Queen, the final boss of the Antarctic dungeon," in out[0].narration
+
+    # An acronym keeps its case — lowercasing blindly would give "the nASA liaison".
+    acro = ensure_first_mention_role(
+        [ScriptBeat(beat_id=1, panel_ids=["p"], narration="Rell greets Vesh.")], bible)
+    assert acro[0].narration == "Rell greets Vesh, the NASA liaison."

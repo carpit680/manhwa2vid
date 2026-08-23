@@ -1999,8 +1999,16 @@ def ensure_first_mention_role(
         if name and role and not is_descriptor_label(name):
             # Bible roles are stored bare ("raid leader"); narration needs the article,
             # and lint_missing_introduction's appositive pattern requires one too.
-            article = "" if re.match(r"^(?:a|an|the|his|her|their)\s", role, re.I) else "the "
-            roles[name] = f"{article}{role}"
+            # Roles are stored however the bible captured them — "The final boss of the
+            # Antarctic dungeon" arrived title-cased and shipped as "the Frost Queen, The
+            # final boss...". An inserted appositive always sits mid-sentence, so its
+            # first letter is lowercase unless the role opens on a proper noun.
+            if re.match(r"^(?:a|an|the|his|her|their)\s", role, re.I):
+                head, rest = role.split(" ", 1)
+                role = f"{head.lower()} {rest}"
+            else:
+                role = f"the {role[0].lower()}{role[1:]}" if role[:1].isupper() and not role.split()[0].isupper() else f"the {role}"
+            roles[name] = role
 
     if not roles:
         return beats
