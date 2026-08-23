@@ -1085,9 +1085,31 @@ def enforce_mc_name_budget(
     beats_since_anchor = 999  # first eligible beat anchors
     anchors = 0
     out: list[ScriptBeat] = []
-    for beat in beats:
+    for idx, beat in enumerate(beats):
         ambiguous = any(rx.search(beat.narration) for rx in rival_res)
-        anchor_here = beat.beat_id <= 1 or beats_since_anchor >= cadence or ambiguous
+        # A beat that would OPEN on a bare pronoun must keep its name, whatever the
+        # cadence says. Without this clause the budget and lint_unanchored_opening
+        # contradict each other: the lint demands the beat name someone, the rewrite adds
+        # the name, and this function — seeing no same-pronoun rival NAMED in the beat —
+        # rotates it straight back out. ch1 beat 14 survived two rewrite rounds unfixed
+        # for exactly that reason. Cadence exists to stop name spam, not to strip the one
+        # anchor a listener needs to know who is acting.
+        # Test the ROTATED text, not the input: the rotation is what creates the bare
+        # opening. "Jin-Woo takes a sharp breath" becomes "He takes a sharp breath" and
+        # only then leaves the listener without a subject.
+        stripped = rotate_protagonist_name(beat.narration, bible, keep=0)
+        prev_rivals = (
+            [r for r in rivals if re.search(rf"\b{re.escape(r)}\b", beats[idx - 1].narration, re.I)]
+            if idx else []
+        )
+        opens_bare = (
+            bool(_OPENING_PRONOUN_RE.match(stripped.strip()))
+            and stripped != beat.narration
+            and bool(prev_rivals)
+        )
+        anchor_here = (
+            beat.beat_id <= 1 or beats_since_anchor >= cadence or ambiguous or opens_bare
+        )
         if anchor_here:
             # Full name for the very first anchor (the hook introduction); the short,
             # spoken form after that.
@@ -1806,21 +1828,34 @@ def lint_unanchored_opening(
     if not known:
         return {}
     rivals = _same_pronoun_rivals(bible)
-    for beat in beats:
+
+    def _names_in(text: str, pool: list[str]) -> list[str]:
+        return [
+            n for n in pool
+            if re.search(rf"\b{re.escape(_short_name_form(n))}\b", text, re.I)
+            or re.search(rf"\b{re.escape(n)}\b", text, re.I)
+        ]
+
+    for i, beat in enumerate(beats):
         text = beat.narration.strip()
         if not _OPENING_PRONOUN_RE.match(text):
             continue
-        if any(
-            re.search(rf"\b{re.escape(_short_name_form(n))}\b", text, re.I)
-            or re.search(rf"\b{re.escape(n)}\b", text, re.I)
-            for n in known
-        ):
+        if _names_in(text, known):
             continue  # the beat names somebody; the anchor lints own the rest
+        # A bare pronoun is only AMBIGUOUS when a same-pronoun rival is live. "He checks
+        # his pack" after a beat that named only the protagonist is ordinary prose, and
+        # flagging it fought `enforce_mc_name_budget`'s cadence — the lint demanded a
+        # name, the budget rotated it out, and the beat could never satisfy both. The
+        # observed defect always had rivals in play: "He replies quickly to reassure her"
+        # followed a beat naming three other men.
+        live = _names_in(beats[i - 1].narration, rivals) if i else []
+        if not live:
+            continue
         opening = text.split()[0]
-        hint = f" ({', '.join(rivals[:3])} are all live candidates)" if rivals else ""
         out[beat.beat_id] = [
-            f'this beat opens on "{opening}" and never names anyone in it, so a listener '
-            f"cannot tell who is acting{hint}. Name the person in the first sentence"
+            f'this beat opens on "{opening}" and never names anyone in it, but the beat '
+            f"before it named {', '.join(live[:3])} — a listener cannot tell who is "
+            f"acting. Name the person in the first sentence"
         ]
     return out
 

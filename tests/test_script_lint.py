@@ -1709,17 +1709,43 @@ def test_lint_unanchored_opening_flags_a_beat_that_names_nobody():
         },
     )
     beats = [
+        # Establishes a same-pronoun RIVAL, which is what makes the next "He" ambiguous.
         ScriptBeat(beat_id=1, panel_ids=["p"],
+                   narration="Doran gathers the party and calls for the gate to be opened."),
+        ScriptBeat(beat_id=2, panel_ids=["p"],
                    narration="He replies quickly to reassure her, steeling his resolve."),
         # Opens on a pronoun but names its subject in the same sentence: fine.
-        ScriptBeat(beat_id=2, panel_ids=["p"],
+        ScriptBeat(beat_id=3, panel_ids=["p"],
                    narration="He turns, and Rell tells Doran the gate is already open."),
         # Opens on a name: fine.
-        ScriptBeat(beat_id=3, panel_ids=["p"], narration="Rell steps through the gate."),
+        ScriptBeat(beat_id=4, panel_ids=["p"], narration="Rell steps through the gate."),
     ]
     flagged = lint_unanchored_opening(beats, bible)
-    assert sorted(flagged) == [1]
-    assert "Doran" in flagged[1][0]      # names the rival that makes "He" ambiguous
+    assert sorted(flagged) == [2]
+    assert "Doran" in flagged[2][0]      # names the rival that makes "He" ambiguous
+
+
+def test_lint_unanchored_opening_allows_a_bare_pronoun_with_no_rival():
+    """A bare pronoun is only AMBIGUOUS when a same-pronoun rival is live. "He checks his
+    pack" after a beat naming only the protagonist is ordinary prose — flagging it fought
+    enforce_mc_name_budget's cadence, and the beat could satisfy neither."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import lint_unanchored_opening
+
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="char_mc",
+        characters={
+            "char_mc": CharacterProfile(id="char_mc", canonical_name="Rell",
+                                        tier=CharacterTier.MAIN, pronoun="he"),
+            "char_d": CharacterProfile(id="char_d", canonical_name="Doran",
+                                       tier=CharacterTier.SUPPORTING, pronoun="he"),
+        },
+    )
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p"], narration="Rell shoulders his pack."),
+        ScriptBeat(beat_id=2, panel_ids=["p"], narration="He checks the road ahead."),
+    ]
+    assert lint_unanchored_opening(beats, bible) == {}
 
 
 def test_accept_rewrite_refuses_a_malformed_rewrite():
@@ -1752,3 +1778,38 @@ def test_sentence_fragments_spares_short_deliberate_lines():
     for ok in ["Silence.", "He nods.", "The gate opens at dawn.",
                "Rell walks the market road with her hood up."]:
         assert sentence_fragments(ok) == [], ok
+
+
+def test_mc_name_budget_keeps_the_anchor_a_bare_opening_needs():
+    """The name budget and lint_unanchored_opening contradicted each other: the lint
+    demands the beat name someone, the rewrite adds the name, and the budget — seeing no
+    same-pronoun rival NAMED in the beat — rotated it straight back out. ch1 beat 14
+    survived two rewrite rounds unfixed for exactly that reason."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import enforce_mc_name_budget, lint_unanchored_opening
+
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="char_mc",
+        characters={
+            "char_mc": CharacterProfile(
+                id="char_mc", canonical_name="Sung Jin-Woo", tier=CharacterTier.MAIN,
+                pronoun="he"),
+            "char_k": CharacterProfile(
+                id="char_k", canonical_name="Kim Sangshik",
+                tier=CharacterTier.SUPPORTING, pronoun="he"),
+        },
+    )
+    cfg = {"script": {"mc_anchor_every_beats": 2}}
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p"], narration="Sung Jin-Woo steps onto the road."),
+        # A same-pronoun rival acts here, so the next beat's bare "He" would be ambiguous.
+        ScriptBeat(beat_id=2, panel_ids=["p"],
+                   narration="Kim Sangshik tells the party to move out."),
+        # Inside the cadence window, so the old rule stripped this name anyway.
+        ScriptBeat(beat_id=3, panel_ids=["p"],
+                   narration="Jin-Woo takes a sharp breath and steps through the gate."),
+    ]
+    out = enforce_mc_name_budget(beats, bible, cfg)
+    assert "Jin-Woo" in out[2].narration
+    # And the two mechanisms now agree rather than looping.
+    assert lint_unanchored_opening(out, bible) == {}
