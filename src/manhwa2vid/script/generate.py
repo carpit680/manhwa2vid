@@ -1252,23 +1252,34 @@ def generate_script(
     except Exception:
         has_locked_cue = False
 
-    issues_by_beat: dict[int, list[str]] = {}
-    for finding in (
-        lint_plot_coverage(beats, plot_by_id_all, min_ratio=min_cov),
-        {} if has_locked_cue else lint_time_shift_marker(beats, plot_by_id_all),
-        lint_repeated_setting(beats, world_terms),
-        lint_abstraction_drift(beats, cards),
-        lint_missing_introduction(beats, bible),
-        lint_narration_order(beats, cards),
-        lint_unanchored_opening(beats, bible),
-    ):
-        for bid, msgs in finding.items():
-            issues_by_beat.setdefault(bid, []).extend(msgs)
+    def _story_findings(bs: list[ScriptBeat]) -> dict[int, list[str]]:
+        found: dict[int, list[str]] = {}
+        for finding in (
+            lint_plot_coverage(bs, plot_by_id_all, min_ratio=min_cov),
+            {} if has_locked_cue else lint_time_shift_marker(bs, plot_by_id_all),
+            lint_repeated_setting(bs, world_terms),
+            lint_abstraction_drift(bs, cards),
+            lint_missing_introduction(bs, bible),
+            lint_narration_order(bs, cards),
+            lint_unanchored_opening(bs, bible),
+        ):
+            for bid, msgs in finding.items():
+                found.setdefault(bid, []).extend(msgs)
+        return found
 
-    if issues_by_beat:
+    # Converge, mirroring the alignment audit right below: a single pass rewrote each
+    # flagged beat once and never looked again, so anything the rewrite failed to fix —
+    # or introduced — shipped silently while the console still said "rewriting 5 beats".
+    # Two rounds, because measured across runs the second clears most of what the first
+    # leaves and a third mostly churns text that is already acceptable.
+    issues_by_beat = _story_findings(beats)
+    first_round = dict(issues_by_beat)
+    for round_no in range(2):
+        if not issues_by_beat:
+            break
         console.print(
-            f"[yellow]Story integrity:[/] rewriting {len(issues_by_beat)} beat(s): "
-            f"{sorted(issues_by_beat)}"
+            f"[yellow]Story integrity:[/] round {round_no + 1}, rewriting "
+            f"{len(issues_by_beat)} beat(s): {sorted(issues_by_beat)}"
         )
         recovered: list[ScriptBeat] = []
         for beat in beats:
@@ -1281,11 +1292,21 @@ def generate_script(
             else:
                 recovered.append(beat)
         beats = recovered
+        issues_by_beat = _story_findings(beats)
 
     hook_bad = lint_hook_grounding(hook, " ".join(
         f"{c.source_text or ''} {c.action or ''} {' '.join(c.key_terms or [])}" for c in cards
     ))
     cov_report = QAReport(stage="script-coverage")
+    # Say what SURVIVED. The previous report only counted what was flagged, so a rewrite
+    # that fixed nothing still read as a clean run.
+    cov_report.add(
+        "story-integrity",
+        True if not issues_by_beat else "warn",
+        (f"{len(issues_by_beat)} beat(s) still flagged after two rewrite rounds: "
+         f"{sorted(issues_by_beat)}") if issues_by_beat else "",
+        flagged=sorted(first_round), remaining=sorted(issues_by_beat),
+    )
     cov_report.add(
         "hook-grounding",
         True if not hook_bad else "warn",
