@@ -256,3 +256,33 @@ def test_protagonist_signal_uses_the_series_own_word():
             appearances=["p1"], confidence=0.9)},
     )
     assert detect_protagonist(bare, {}) == "char_a"
+
+
+def test_pronoun_is_inferred_from_the_descriptors_vision_already_wrote():
+    """The pronoun field is filled by the quest/search passes and is wrong often enough to
+    corrupt narration. Frozen Player recorded Skaya as "he" while three descriptors call
+    her a "woman in white robes", and shipped "He nominates Jun-Ho" in one beat with "her
+    staff" for the same character two beats later. Solo Leveling had the same bug on its
+    healer. The gender words are English, never a title's own vocabulary."""
+    from manhwa2vid.characters.bible import effective_pronoun, infer_pronoun_from_descriptors
+    from manhwa2vid.models import CharacterProfile, CharacterTier
+
+    woman = CharacterProfile(
+        id="a", canonical_name="Skaya", tier=CharacterTier.SUPPORTING, pronoun="he",
+        descriptors=["woman in white robes holding a staff",
+                     "woman with long light blue hair"])
+    man = CharacterProfile(
+        id="b", canonical_name="Vesh", tier=CharacterTier.SUPPORTING, pronoun="they",
+        descriptors=["man in a cowboy hat and tan coat", "man with long blonde hair"])
+    assert effective_pronoun(woman) == "she"
+    assert effective_pronoun(man) == "he"
+
+    # One mention decides nothing, and a mixed set is left alone rather than guessed.
+    thin = CharacterProfile(id="c", canonical_name="Rell", tier=CharacterTier.SUPPORTING,
+                            pronoun="they", descriptors=["woman in a long coat"])
+    mixed = CharacterProfile(id="d", canonical_name="Kai", tier=CharacterTier.SUPPORTING,
+                             pronoun="they",
+                             descriptors=["woman in armour", "man in armour", "figure in armour"])
+    assert infer_pronoun_from_descriptors(thin) == ""
+    assert infer_pronoun_from_descriptors(mixed) == ""
+    assert effective_pronoun(mixed) == "they"      # the recorded value survives

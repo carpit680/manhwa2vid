@@ -1037,6 +1037,8 @@ def _short_name_form(name: str) -> str:
 
 
 def _same_pronoun_rivals(bible: SeriesBible) -> list[str]:
+    from manhwa2vid.characters.bible import effective_pronoun
+
     """Names of non-protagonist characters who share the protagonist's pronoun.
 
     When one of these is named in a beat, a bare 'he' is ambiguous out loud — the listener
@@ -1049,7 +1051,7 @@ def _same_pronoun_rivals(bible: SeriesBible) -> list[str]:
     for profile in bible.characters.values():
         if profile.id == bible.protagonist_id or profile.merged_into:
             continue
-        if (profile.pronoun or "").lower() != mc_pron:
+        if (effective_pronoun(profile) or "").lower() != mc_pron:
             continue
         name = profile.canonical_name.strip()
         if name and not is_descriptor_label(name):

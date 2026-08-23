@@ -153,6 +153,58 @@ _EMPTY_ROLE_NOUNS = frozenset(
 )
 
 
+# Gendered nouns/titles in English. Language-level, not series vocabulary — a title's
+# own words ("queen", "cowboy") never enter this list.
+_FEMALE_WORDS = frozenset(
+    """woman women girl girls lady ladies queen princess mother mom daughter sister
+    wife widow nun priestess witch goddess maid waitress actress heroine she her hers""".split()
+)
+_MALE_WORDS = frozenset(
+    """man men boy boys gentleman king prince father dad son brother husband widower
+    monk priest wizard god butler waiter actor hero he him his""".split()
+)
+
+
+def effective_pronoun(profile: CharacterProfile) -> str:
+    """The pronoun to actually use: the descriptors win when they clearly disagree.
+
+    Applied on the READ path as well as the write path, because bibles persist at SERIES
+    level across every chapter of a title and existing ones never rebuild themselves —
+    the same reason sanitize_role is applied twice.
+    """
+    inferred = infer_pronoun_from_descriptors(profile)
+    return inferred or (profile.pronoun or "they")
+
+
+def infer_pronoun_from_descriptors(profile: CharacterProfile) -> str:
+    """Read a character's gender off the descriptors the vision pass already wrote.
+
+    The pronoun field is filled by the quest/search passes and is wrong often enough to
+    corrupt narration: Frozen Player's bible records Skaya as "he" while three separate
+    descriptors call her a "woman in white robes", and the Marksman as "they" while three
+    call him a "man in a cowboy hat". That shipped "He nominates Jun-Ho" for a woman in
+    one beat and "her staff" for the same character two beats later — the kind of
+    contradiction a viewer notices immediately.
+
+    Requires agreement: at least two descriptors pointing the same way and none pointing
+    the other. A single mention decides nothing, and a genuinely mixed set is left alone
+    rather than guessed at — "they" is a legitimate answer, just not one that should
+    survive three descriptors saying "man".
+    """
+    female = male = 0
+    for text in [*profile.descriptors, profile.role or ""]:
+        words = {w.strip(".,'\u2019s").lower() for w in text.split()}
+        if words & _FEMALE_WORDS:
+            female += 1
+        if words & _MALE_WORDS:
+            male += 1
+    if female >= 2 and male == 0:
+        return "she"
+    if male >= 2 and female == 0:
+        return "he"
+    return ""
+
+
 def sanitize_role(role: str) -> str:
     """Strip internal TAXONOMY out of a character's story role.
 
@@ -220,7 +272,8 @@ def format_bible_for_prompt(bible: SeriesBible, *, active_ids: set[str] | None =
         label_text = ", ".join(profile.narration_labels) if profile.narration_labels else ""
         mc_tag = " [MC]" if profile.id == bible.protagonist_id else ""
         parts = [
-            f"- [{profile.tier.value}]{mc_tag} {profile.canonical_name} (id={profile.id}, pronoun={profile.pronoun})"
+            f"- [{profile.tier.value}]{mc_tag} {profile.canonical_name} "
+            f"(id={profile.id}, pronoun={effective_pronoun(profile)})"
         ]
         role_text = sanitize_role(profile.role)
         if role_text:
