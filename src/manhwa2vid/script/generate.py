@@ -1437,6 +1437,7 @@ def generate_script(
         dedupe_intra_beat_sentences,
         repair_malformed_openings,
         strip_duplicate_transitions,
+        ensure_first_mention_role,
         strip_repeated_appositives,
         dedupe_appositive_clauses,
         trim_overlong_beats,
