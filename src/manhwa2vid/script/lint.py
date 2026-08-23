@@ -2028,9 +2028,14 @@ def ensure_first_mention_role(
     for beat in beats:
         for name in roles:
             head = role_heads.get(name, "")
+            # The window must span a full appositive: "Skaya, a member of the original
+            # five heroes" runs 32 characters between name and head noun, and a 20-char
+            # window missed it — so Skaya was never marked introduced and her clause was
+            # inserted AGAIN at her next bare mention. 48 covers every observed clause
+            # while staying too short to bridge into a neighbouring sentence.
             if head and re.search(
-                rf"(?:\b{re.escape(head)}\b[\w\s'’-]{{0,20}}?\b{re.escape(name)}\b"
-                rf"|\b{re.escape(name)}\b[\w\s'’,-]{{0,20}}?\b{re.escape(head)}\b)",
+                rf"(?:\b{re.escape(head)}\b[\w\s'’-]{{0,48}}?\b{re.escape(name)}\b"
+                rf"|\b{re.escape(name)}\b[\w\s'’,-]{{0,48}}?\b{re.escape(head)}\b)",
                 beat.narration, re.I,
             ):
                 introduced.add(name)
