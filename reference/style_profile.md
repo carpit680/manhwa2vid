@@ -29,8 +29,17 @@ Regenerate with `reference/profile_srt.py <file.srt>`.
 2. **Reported speech is the signature move.** A dialogue verb every ~32 words means the
    narrator constantly relays what people say and ask, rather than summarizing scenes
    abstractly. "The judge asks X, and he answers Y" is the dominant sentence shape.
-3. **No narrator persona.** 18 first-person tokens across 75k words. The narrator never
-   becomes a character; there are no diary asides and no direct address to the viewer.
+3. **No FIRST PERSON — but a large persona.** 18 first-person tokens across 75k words:
+   the narrator never becomes a character and never addresses the viewer. That is a rule
+   about the pronoun "I", and reading it as "no personality" was an expensive mistake —
+   it was encoded as `max_narrator_asides: 0`, `genz_level: none` and a
+   "concrete events only" prompt rule, and the resulting narration read like a report.
+   Measured over one two-chapter segment, the same narrator runs **8.2 evaluative asides,
+   7.2 casual epithets for the hero and 2.0 similes per 1k words**, at **11.9-word mean
+   sentences with 23% under seven words**. He interprets constantly ("scrolling headlines
+   like a grandpa who just discovered the internet", "trading blows at Goku's speed"); he
+   simply never says "I". Voice bands in `script/scorecard.py` now hold these as FLOORS,
+   because too few is the failure mode.
 4. **Label rotation over name repetition.** `the protagonist` and `MC` together appear ~7.7
    times per 1k words, alongside the character's actual name — confirming the rotation
    strategy already implemented in `characters/bible.py::naming_priority_rules`.

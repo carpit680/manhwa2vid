@@ -17,7 +17,7 @@ from manhwa2vid.qa import QAReport
 
 # metric -> (min_ok, max_ok, reference_value); None = unbounded on that side
 BANDS: dict[str, tuple[float | None, float | None, float | None]] = {
-    "sentence_len_mean": (8.0, 17.0, 12.8),
+"sentence_len_mean": (8.0, 15.0, 11.9),
     "dialogue_verbs_per_1k": (18.0, None, 31.3),
     "first_person_per_1k": (None, 1.5, 0.24),
     "slang_per_1k": (None, 1.0, 0.07),
@@ -26,6 +26,15 @@ BANDS: dict[str, tuple[float | None, float | None, float | None]] = {
     "anchor_gap_words": (40.0, 130.0, 80.0),
     "pronouns_per_anchor": (1.5, None, 6.4),
     "anonymous_agents_per_1k": (None, 8.0, None),
+    # Voice bands, measured from the reference over the same two chapters. These exist
+    # because the profile's "0.24 first-person per 1k" was once read as "no narrator
+    # persona" and encoded as max_narrator_asides: 0 — the narrator never says "I", but
+    # he interprets constantly, and suppressing that is what made our narration read like
+    # a report. Floors, not ceilings: too FEW is the failure mode here.
+    "similes_per_1k": (0.7, None, 2.0),
+    "evaluative_asides_per_1k": (3.0, None, 8.2),
+    "time_markers_per_1k": (4.0, None, 13.3),
+    "short_sentence_fraction": (0.12, None, 0.23),
     "register_verbs_total": (None, 0.0, 0.0),
     "art_words_total": (None, 0.0, 0.0),
     # Spoken words per panel, mean over beats. Too high = long static dwells (a 25-word
@@ -44,6 +53,36 @@ BANDS: dict[str, tuple[float | None, float | None, float | None]] = {
 
 
 _PRONOUN_START_RE = re.compile(r"^\s*(?:he|she|they|it)\b", re.I)
+
+
+# Voice measures. Patterns are English constructions, never series vocabulary.
+_SIMILE_RE = re.compile(r"\blike (?:a|an|the|he|she|they|somebody|someone)\b|\bas if\b", re.I)
+_EVAL_RE = re.compile(
+    r"\b(?:barely|almost|completely|hardly|just like|nothing but|not exactly|"
+    r"in no hurry|for once|of course|somehow|apparently|the \w+est\b)", re.I
+)
+_TIME_MARK_RE = re.compile(
+    r"\b\d+\s*(?:years?|hours?|days?|months?|weeks?|minutes?)\b"
+    r"|\b(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|ten|twelve|fifteen)"
+    r"[- ]?\w*\s*(?:years?|hours?|days?)\b"
+    r"|\b(?:years?|hours?|days?|moments?)\s+(?:later|earlier|before|ago)\b"
+    r"|\bback (?:then|when)\b|\bby then\b|\bthat night\b|\bthat morning\b", re.I
+)
+
+
+def _short_sentence_fraction(beats: list[ScriptBeat]) -> float:
+    """Share of sentences under seven words — the reference runs 23%, we ran 7%.
+
+    The punch comes from rhythm, not vocabulary: "He dodges by a hair." "Twenty years."
+    A script of uniformly mid-length sentences reads as a report however good the words.
+    """
+    sentences = [
+        s for beat in beats
+        for s in re.split(r"(?<=[.!?])\s+", beat.narration.strip()) if s.strip()
+    ]
+    if not sentences:
+        return 0.0
+    return sum(1 for s in sentences if len(s.split()) <= 6) / len(sentences)
 
 
 def _pronoun_start_fraction(beats) -> float:
@@ -162,6 +201,10 @@ def score_script(
         "anchor_gap_words": anchor_gap,
         "pronouns_per_anchor": pron_per_anchor,
         "anonymous_agents_per_1k": sum(len(re.findall(p, text.lower())) for p in _ANON) / n * 1000,
+        "similes_per_1k": len(_SIMILE_RE.findall(text)) / n * 1000,
+        "evaluative_asides_per_1k": len(_EVAL_RE.findall(text)) / n * 1000,
+        "time_markers_per_1k": len(_TIME_MARK_RE.findall(text)) / n * 1000,
+        "short_sentence_fraction": _short_sentence_fraction(beats),
         "register_verbs_total": float(len(_REGISTER_RE.findall(text))),
         "art_words_total": float(len(_ART_RE.findall(text))),
         "words_per_panel": sum(
