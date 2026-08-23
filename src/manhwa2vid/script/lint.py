@@ -17,7 +17,7 @@ from manhwa2vid.characters.bible import (
 )
 from manhwa2vid.config import get_nested
 from manhwa2vid.llm.provider import apply_stage_model, get_stage_llm
-from manhwa2vid.models import PanelCast, SceneCard, ScriptBeat, SeriesBible
+from manhwa2vid.models import CharacterTier, PanelCast, SceneCard, ScriptBeat, SeriesBible
 from manhwa2vid.script.grounding import (
     GROUNDING_KEYWORDS,
     evidence_for_panels,
@@ -1597,6 +1597,66 @@ def lint_abstraction_drift(
             f"narration reaches for {abstractions} where this beat's own panels say "
             f"{dropped[:6]} — name the specific fact instead of its category"
         ]
+    return out
+
+
+def lint_missing_introduction(
+    beats: list[ScriptBeat],
+    bible: SeriesBible | None,
+) -> dict[int, list[str]]:
+    """The other half of rule 4: a named character must be introduced ONCE — at least.
+
+    lint_reintroduction has always enforced the ceiling (no appositive after the first)
+    and nothing enforced the floor, so characters kept walking into the script as bare
+    names. ch1 has done it to a different person on three separate runs — Bak once, Song
+    Chi-yul in the current draft, where a listener meets "He tells Song Chi-yul that there
+    are no objections" having never been told who that is or why his opinion settles
+    anything.
+
+    Accepts either shape the style actually uses:
+        "Song Chi-yul, the raid leader, steps forward"   (appositive)
+        "the raid leader Song Chi-yul steps forward"     (premodifier)
+
+    The protagonist is exempt — the hook and the anchor cadence establish them, and rule 4
+    separately budgets how often their name recurs. Characters whose canonical_name is
+    itself a descriptor ("the coffee vendor") are exempt too: they arrive self-describing,
+    and demanding a role clause for them produces "the coffee vendor, a vendor".
+    """
+    if bible is None:
+        return {}
+    out: dict[int, list[str]] = {}
+    from manhwa2vid.characters.bible import sanitize_role
+
+    for profile in bible.characters.values():
+        if profile.merged_into or profile.id == bible.protagonist_id:
+            continue
+        if profile.tier not in (CharacterTier.MAIN, CharacterTier.SUPPORTING):
+            continue
+        name = profile.canonical_name.strip()
+        if not name or is_descriptor_label(name):
+            continue
+        appositive = re.compile(
+            rf"\b{re.escape(name)},\s+(?:a|an|the|his|her|their)\s+[^,.;!?]+[,.]", re.I
+        )
+        premodifier = re.compile(
+            rf"\b(?:a|an|the)\s+(?:[\w'’-]+\s+){{0,4}}{re.escape(name)}\b", re.I
+        )
+        first_beat = None
+        for beat in beats:
+            if not re.search(rf"\b{re.escape(name)}\b", beat.narration, re.I):
+                continue
+            if first_beat is None:
+                first_beat = beat
+            if appositive.search(beat.narration) or premodifier.search(beat.narration):
+                first_beat = None  # introduced somewhere; the ceiling lint owns the rest
+                break
+        if first_beat is not None:
+            role = sanitize_role(profile.role) or "their role in this scene"
+            out.setdefault(first_beat.beat_id, []).append(
+                f"{name} is named here for the first time with no introduction — a "
+                f"listener has never met them. Give the first mention a short role clause "
+                f"(\"{name}, {role},\") and leave later mentions bare"
+            )
     return out
 
 

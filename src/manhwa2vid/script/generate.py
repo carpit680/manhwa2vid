@@ -1199,6 +1199,7 @@ def generate_script(
     from manhwa2vid.script.lint import (
         lint_abstraction_drift,
         lint_hook_grounding,
+        lint_missing_introduction,
         lint_plot_coverage,
         lint_repeated_setting,
         lint_time_shift_marker,
@@ -1243,6 +1244,7 @@ def generate_script(
         {} if has_locked_cue else lint_time_shift_marker(beats, plot_by_id_all),
         lint_repeated_setting(beats, world_terms),
         lint_abstraction_drift(beats, cards),
+        lint_missing_introduction(beats, bible),
     ):
         for bid, msgs in finding.items():
             issues_by_beat.setdefault(bid, []).extend(msgs)

@@ -1568,3 +1568,39 @@ def test_lint_abstraction_drift_needs_both_halves():
     assert sorted(flagged) == [1]
     # The hint must name what to restore, not just score the beat.
     assert "sister" in flagged[1][0] or "passage" in flagged[1][0]
+
+
+def test_lint_missing_introduction_is_the_floor_of_rule_4():
+    """lint_reintroduction enforces the CEILING (no appositive after the first) and
+    nothing enforced the floor, so named characters kept walking in as bare names — a
+    listener meets "He tells Song Chi-yul there are no objections" never having been told
+    who that is."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import lint_missing_introduction
+
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="char_mc",
+        characters={
+            "char_mc": CharacterProfile(id="char_mc", canonical_name="Rell",
+                                        tier=CharacterTier.MAIN),
+            "char_a": CharacterProfile(id="char_a", canonical_name="Vesh",
+                                       tier=CharacterTier.SUPPORTING, role="field medic"),
+            "char_b": CharacterProfile(id="char_b", canonical_name="Doran",
+                                       tier=CharacterTier.SUPPORTING, role="raid leader"),
+            "char_c": CharacterProfile(id="char_c", canonical_name="Kade",
+                                       tier=CharacterTier.SUPPORTING, role="scout"),
+        },
+    )
+    beats = [
+        # Appositive form: introduced.
+        ScriptBeat(beat_id=1, panel_ids=["p"], narration="Vesh, the field medic, binds the wound."),
+        # Premodifier form: also introduced.
+        ScriptBeat(beat_id=2, panel_ids=["p"], narration="Nearby the scout Kade watches the road."),
+        # Bare name, never introduced anywhere -> flagged at first mention.
+        ScriptBeat(beat_id=3, panel_ids=["p"], narration="Rell tells Doran there are no objections."),
+        ScriptBeat(beat_id=4, panel_ids=["p"], narration="Doran leads them through the gate."),
+    ]
+    flagged = lint_missing_introduction(beats, bible)
+    assert sorted(flagged) == [3]                 # first mention, not every mention
+    assert "Doran" in flagged[3][0]
+    assert "raid leader" in flagged[3][0]         # suggests the role from the bible
