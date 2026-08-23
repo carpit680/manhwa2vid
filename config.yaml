@@ -116,6 +116,14 @@ script:
   # Chapter word budget: narration is audio-locked, so word count IS runtime.
   # Measured references: Mamoru ~490/chapter, golds 525 and 677.
   words_per_chapter: 550
+  words_per_beat: 40        # every measured reference (both golds, the channel) sits at
+                            # 40-45; beats = words_per_chapter x chapters / this
+  curate_panels: true       # narrate only the salient panels, at the reference's measured
+                            # density (~10 words per shown panel = target_wpm x
+                            # video.target_panel_seconds / 60). A sparse chapter selects
+                            # everything; a dense one selects ~half, which is what the
+                            # reference channel does. Drops are recorded in
+                            # panels.curated.json and audited by panel-conservation.
   # The narration response is an order of magnitude bigger than a vision window and was
   # silently truncated at the shared 4096 vision cap for three runs, yielding zero beats.
   narration_max_output_tokens: 16384

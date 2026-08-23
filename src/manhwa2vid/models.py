@@ -305,6 +305,7 @@ def project_paths(project_dir: Path) -> dict[str, Path]:
         "panels": project_dir / "panels",
         "panels_json": project_dir / "panels.json",
         "panels_story_json": project_dir / "panels.story.json",
+        "panels_curated_json": project_dir / "panels.curated.json",
         "excluded_panels_json": project_dir / "excluded_panels.json",
         "ocr_json": project_dir / "ocr.json",
         "scene_json": project_dir / "scene_cards.json",

@@ -378,10 +378,23 @@ def _target_beat_count(meta: ProjectMeta, paths: dict[str, Path] | None, config:
     (hand-written golds: 17 and ~12/chapter; the reference channel: ~12/chapter), so
     the budget derives from chapter count, clamped by min_beats and the max_beats cap.
     """
-    per_chapter = int(get_nested(config, "script", "beats_per_chapter", default=14))
     min_beats = int(get_nested(config, "script", "min_beats", default=10))
     cap = int(get_nested(config, "script", "max_beats", default=45))
-    return max(min_beats, min(cap, per_chapter * _chapter_count(meta, paths)))
+    # Words are the stable currency, not beats-per-chapter: narration is audio-locked,
+    # so word count IS runtime, and every measured reference (both golds, the reference
+    # channel) sits near 40-45 words per beat. words_per_chapter x chapters / 40 gives
+    # exactly the same numbers the old beats_per_chapter formula produced on both test
+    # titles (14 and 28), so this change is provably behavior-preserving there — but it
+    # keeps scaling correctly when a title's words_per_chapter is tuned, where a
+    # beats-per-chapter constant would silently fall out of step.
+    words_per_chapter = get_nested(config, "script", "words_per_chapter")
+    words_per_beat = float(get_nested(config, "script", "words_per_beat", default=40))
+    if words_per_chapter:
+        derived = round(float(words_per_chapter) * _chapter_count(meta, paths) / words_per_beat)
+    else:
+        per_chapter = int(get_nested(config, "script", "beats_per_chapter", default=14))
+        derived = per_chapter * _chapter_count(meta, paths)
+    return max(min_beats, min(cap, derived))
 
 
 
@@ -1114,6 +1127,54 @@ def generate_script(
     # Reload bible after synopsis sticky-name merges
     bible = load_series_bible(meta.series_slug, meta.title)
 
+    # Reference-paced curation: choose which story panels the SCRIPT narrates, at the
+    # density the reference channel actually runs (~10 words per shown panel — derived
+    # from target_wpm x target_panel_seconds, both measured values, not tuned here). On a
+    # sparse chapter the budget exceeds the inventory and this selects everything, which
+    # is why the title that already worked is untouched. On a dense range it selects the
+    # salient ~half, which is what the reference does on the same chapters — and what
+    # makes 4-panels-per-beat beats possible instead of physically impossible 7-panel
+    # ones. Every drop is written to panels.curated.json with a reason, and the
+    # conservation gate audits narrated + dropped == the full story inventory.
+    dropped_panels: dict[str, str] = {}
+    if get_nested(config, "script", "curate_panels", default=True):
+        from manhwa2vid.script.curate import select_narrated_panels, write_curation
+
+        pinned: set[str] = set()
+        try:
+            if paths["scene_story_map_json"].exists():
+                tp = str(json.loads(paths["scene_story_map_json"].read_text())
+                         .get("last_flashforward_panel", "") or "").strip()
+                if tp:
+                    pinned.add(tp)
+        except Exception:
+            pass
+        all_story_sorted = sorted(
+            {pid for c in cards if c.is_story for pid in c.panel_ids}, key=_panel_sort_key
+        )
+        pinned.update(all_story_sorted[-3:])  # the chapter's chosen ending
+        narrated, dropped_panels = select_narrated_panels(
+            cards, synopsis, config,
+            n_chapters=_chapter_count(meta, paths), pinned=pinned,
+        )
+        write_curation(paths, narrated, dropped_panels)
+        if dropped_panels:
+            console.print(
+                f"[cyan]Curation:[/] narrating {len(narrated)}/{len(all_story_sorted)} "
+                f"story panels (reference-paced); {len(dropped_panels)} recorded in "
+                f"panels.curated.json"
+            )
+            narrated_set = set(narrated)
+            kept_cards = []
+            for card in cards:
+                if not card.is_story:
+                    kept_cards.append(card)
+                    continue
+                ids = [pid for pid in card.panel_ids if pid in narrated_set]
+                if ids:
+                    kept_cards.append(card.model_copy(update={"panel_ids": ids}))
+            cards = kept_cards
+
     hook, outline_beats = "", []
     if paths["script_outline_json"].exists():
         try:
@@ -1194,7 +1255,15 @@ def generate_script(
     # a panel the scene stage dropped must count as uncovered here, not vanish silently.
     from manhwa2vid.panels.filter import load_story_panels
 
-    all_panels = sorted({p.id for p in load_story_panels(paths)}, key=_panel_sort_key)
+    # Universe = the story inventory MINUS the panels curation explicitly dropped.
+    # Curation is not a leak: every dropped id sits in panels.curated.json with a reason,
+    # and curation-fraction below bounds how much may go. Without this subtraction the
+    # re-homing at the next line would silently attach every curated-out panel back onto
+    # the nearest beat — undoing the curation before the gate even reported it.
+    all_panels = sorted(
+        {p.id for p in load_story_panels(paths)} - set(dropped_panels),
+        key=_panel_sort_key,
+    )
     covered = _covered_panel_ids(beats)
     rehomed = len(all_panels) - len(covered & set(all_panels))
     if covered != set(all_panels) and rehomed:
@@ -1205,6 +1274,17 @@ def generate_script(
         f"{rehomed} of {len(all_panels)} story-inventory panel(s) re-homed to nearest beat "
         "(includes any the scene stage dropped)" if rehomed else "",
         rehomed=rehomed, total=len(all_panels),
+    )
+
+    inventory_n = len(all_panels) + len(dropped_panels)
+    frac_dropped = len(dropped_panels) / max(1, inventory_n)
+    report.add(
+        "curation-fraction",
+        True if frac_dropped <= 0.6 else "warn",
+        (f"curation dropped {len(dropped_panels)}/{inventory_n} story panels "
+         f"({frac_dropped:.0%}) — above 60% this is a split/scan problem, not pacing")
+        if frac_dropped > 0.6 else "",
+        dropped=len(dropped_panels), inventory=inventory_n,
     )
 
     hook_overlap = _token_overlap(hook, beats[0].narration if beats else "")
