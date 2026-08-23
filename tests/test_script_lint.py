@@ -2065,3 +2065,32 @@ def test_mc_acting_unnamed_is_detected_and_repaired():
         [names_him, acts_unnamed], bible, {"script": {"mc_anchor_every_beats": 2}})
     assert "Jin-Woo" in fixed[1].narration
     assert lint_ambiguous_pronoun(fixed, bible) == {}
+
+
+def test_anchor_restore_never_replaces_a_plural_they():
+    """Shipped: "proves they all share the same opinion" became "proves Jun-Ho all share
+    the same opinion". A plural "they" is not the protagonist, and substituting it is
+    ungrammatical as well as wrong. Only the MC's own pronoun may be replaced."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import enforce_mc_name_budget
+
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="mc",
+        characters={
+            "mc": CharacterProfile(id="mc", canonical_name="Seo Jun-Ho",
+                                   tier=CharacterTier.MAIN, pronoun="he",
+                                   descriptors=["man in a black coat"]),
+            "k": CharacterProfile(id="k", canonical_name="Khali",
+                                  tier=CharacterTier.SUPPORTING, pronoun="he",
+                                  descriptors=["man with tattoos"]),
+        },
+    )
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p"], character_ids=["k"],
+                   narration="Khali shouts at the group."),
+        ScriptBeat(beat_id=2, panel_ids=["p"], character_ids=["mc", "k"],
+                   narration="Skaya tells Khali his quick acceptance proves they all agree."),
+    ]
+    out = enforce_mc_name_budget(beats, bible, {"script": {"mc_anchor_every_beats": 2}})
+    assert "they all agree" in out[1].narration
+    assert "Jun-Ho all agree" not in out[1].narration

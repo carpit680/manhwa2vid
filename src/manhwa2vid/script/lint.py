@@ -1158,10 +1158,19 @@ def enforce_mc_name_budget(
             # the beat's opening missed the ice-break shape entirely, where the beat opens
             # on somebody else ("The presenter introduces...") and the protagonist's only
             # appearance is a mid-beat "he".
-            if _OPENING_PRONOUN_RE.match(text.strip()):
+            # Only the MC's OWN pronoun may be replaced. Substituting any of he/she/they
+            # turned "proves they all share the same opinion" into "proves Jun-Ho all
+            # share the same opinion" — a plural "they" is not the protagonist, and the
+            # result is ungrammatical as well as wrong.
+            from manhwa2vid.characters.bible import effective_pronoun
+
+            mc_pronoun = effective_pronoun(mc) if mc else "he"
+            if mc_pronoun not in {"he", "she"}:
+                pass  # a they/them protagonist is indistinguishable from a plural here
+            elif _OPENING_PRONOUN_RE.match(text.strip()):
                 text = _OPENING_PRONOUN_RE.sub(short, text, count=1)
             else:
-                text = re.sub(r"\b(?:he|she|they)\b", short, text, count=1, flags=re.I)
+                text = re.sub(rf"\b{mc_pronoun}\b", short, text, count=1, flags=re.I)
             anchors += 1
             beats_since_anchor = 0
         out.append(beat.model_copy(update={"narration": fix_pronoun_case(text, bible)}))
