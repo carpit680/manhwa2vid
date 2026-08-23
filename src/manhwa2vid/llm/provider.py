@@ -519,6 +519,21 @@ class MockLLMProvider(LLMProvider):
     def complete(self, system: str, user: str, *, json_mode: bool = False) -> str:
         if json_mode:
             system_lower = system.lower()
+            if "You are watching a recap video" in system:
+                # Deterministic stand-in for the viewer: complains when the narration
+                # never marks its time jumps, so fixtures can drive the loop offline.
+                first = user.strip().split(".")[0][:60]
+                marked = "years later" in user.lower() or "earlier," in user.lower()
+                lost = [] if marked else [{"quote": first, "why": "no idea when or where this is"}]
+                return json.dumps({
+                    "lost": lost, "flat": [], "best_moment": first,
+                    "score": 9 if marked else 4, "keep_watching": marked,
+                })
+            if "Pick the one a viewer would rather listen to" in system:
+                a = user.split("Candidate B:")[0]
+                marked = "years later" in a.lower() or "earlier," in a.lower()
+                return json.dumps({"winner": "A" if marked else "B",
+                                   "why": "mock prefers the candidate that marks its time jumps"})
             if "narration entry for every outline beat" in system_lower:
                 ids = sorted({int(m) for m in re.findall(r"Beat (\d+) \[", user)})
                 if not ids:

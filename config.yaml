@@ -156,10 +156,17 @@ script:
   # author checked by a sighted critic. Requires a multimodal script model.
   sighted_narration: true
   words_per_panel_target: 14 # per-beat word ceiling = panels x this; enforced by lint rewrite
-  # Narration keeps a little warmth: greedy decoding is the classic cause of repetitive
-  # text, and every extra repetition-lint firing routes a beat into the rewrite path,
-  # which is the most defect-prone path here. Structured stages inherit llm.temperature.
-  narration_temperature: 0.3
+  # Narration runs HOT while the structured stages stay greedy. Lowering it made the
+  # prose flat, and its variance stops being noise once something is choosing between
+  # samples: one Frozen Player draft dropped the ice-break entirely and the next named it.
+  # Reliability comes from selection and revision, not determinism.
+  narration_candidates: 3   # draft K whole-chapter candidates, let a viewer agent listen
+                            # to each and a judge pick. Writing the gold by hand was never
+                            # one forward pass — it was draft, re-read as a listener, fix.
+                            # Costs Kx narration tokens plus ~K viewer + 2(K-1) judge text
+                            # calls; that is the price of not being flat. 1 disables.
+  viewer_review: true
+  narration_temperature: 0.9
   min_plot_coverage: 0.25   # fraction of a beat's outline plot_beat vocabulary that must
                             # survive into its narration; below this the beat is rewritten.
                             # Audits OMISSION — the mirror of verify_alignment below.

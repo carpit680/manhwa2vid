@@ -131,3 +131,81 @@ def pick_better(
     if a_won_first:
         return a_text, f"{a_label} preferred over {b_label} (both orderings)"
     return b_text, f"{b_label} preferred over {a_label} (both orderings)"
+
+
+# Separate from _JUDGE_PROMPT: that one ranks a single beat against its panels and owns
+# accuracy. This one ranks whole scripts on TELLING, with no images at all — both
+# candidates were written from the same evidence, so accuracy is held equal here and the
+# panel-grounded audit still runs on whatever wins. Must not collide with any mock branch.
+_SCRIPT_JUDGE_PROMPT = """Two narrations of the same manhwa chapter, for a recap video.
+Pick the one a viewer would rather listen to.
+
+Judge on these, in order:
+1. FOLLOWABLE — a listener who cannot see the pages always knows who is acting and when
+   the story has moved in time or place. Jumps are spoken, not implied.
+2. TOLD, NOT LISTED — it sounds like a person telling you what happened, with stakes and
+   reactions, rather than a plot summary read aloud.
+3. RHYTHM — sentences vary; some land short and hard. A wall of same-length statements is
+   worse than a mix.
+
+Both were written from the same source, so assume they are equally accurate and do not
+try to fact-check them. Length is NOT a criterion.
+
+Return ONE JSON object: {"winner": "A" or "B", "why": "one short sentence"}"""
+
+
+def _ask_text(llm: Any, first: str, second: str) -> str | None:
+    prompt = f"Candidate A:\n{first}\n\nCandidate B:\n{second}"
+    try:
+        raw = llm.complete(_SCRIPT_JUDGE_PROMPT, prompt, json_mode=True)
+        winner = str(json.loads(raw).get("winner", "")).strip().upper()
+    except Exception as exc:
+        console.print(f"[yellow]Script judge call failed ({type(exc).__name__})[/]")
+        return None
+    return winner if winner in {"A", "B"} else None
+
+
+def pick_best_script(
+    candidates: list[str],
+    config: dict[str, Any],
+    *,
+    tiebreak: list[float] | None = None,
+    llm: Any | None = None,
+) -> tuple[int, str]:
+    """Index of the best candidate, plus a one-line trace of how it was chosen.
+
+    A knockout run down the list: the current champion meets the next candidate, and each
+    meeting is judged TWICE with the order swapped so a judge that merely prefers the
+    first slot decides nothing. When the two orderings disagree the judge genuinely cannot
+    separate them, and `tiebreak` (the viewer scores) settles it — falling back to the
+    earlier index, which keeps the whole selection deterministic given fixed model output.
+
+    K candidates cost 2*(K-1) small text calls: three candidates is four calls.
+    """
+    if not candidates:
+        return 0, "no candidates"
+    if len(candidates) == 1:
+        return 0, "single candidate"
+    scores = tiebreak or [0.0] * len(candidates)
+    llm = llm or apply_stage_model(get_stage_llm("script", config), "script", config)
+
+    champion = 0
+    notes: list[str] = []
+    for challenger in range(1, len(candidates)):
+        first = _ask_text(llm, candidates[champion], candidates[challenger])
+        second = _ask_text(llm, candidates[challenger], candidates[champion])
+        if first is None or second is None:
+            notes.append(f"{champion}v{challenger}: judge unavailable")
+            continue
+        champ_won = (first == "A") and (second == "B")
+        chall_won = (first == "B") and (second == "A")
+        if chall_won:
+            notes.append(f"{challenger} beat {champion}")
+            champion = challenger
+        elif champ_won:
+            notes.append(f"{champion} beat {challenger}")
+        else:
+            better = challenger if scores[challenger] > scores[champion] else champion
+            notes.append(f"{champion}v{challenger}: split, viewer score kept {better}")
+            champion = better
+    return champion, "; ".join(notes) or "no comparisons"

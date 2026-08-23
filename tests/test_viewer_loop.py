@@ -1,0 +1,87 @@
+"""The draft-viewer-judge loop: the listener's seat nothing else in the pipeline occupies.
+
+Every other gate checks the script against SOURCE material. These check it against the
+only question the product is judged on — can a listener follow it, and is it any fun.
+"""
+
+from __future__ import annotations
+
+from manhwa2vid.models import ScriptBeat
+from manhwa2vid.script.judge import pick_best_script
+from manhwa2vid.script.viewer import (
+    ViewerComplaint,
+    ViewerReport,
+    as_listener_hears,
+    beats_for_complaint,
+    issues_by_beat,
+    review_script,
+)
+
+BLIND = [
+    ScriptBeat(beat_id=1, panel_ids=["p"],
+               narration="Rell falls in the dark chamber as the sentinel raises its spear."),
+    # No time marker, no name: exactly the shape the reviewer kept catching.
+    ScriptBeat(beat_id=2, panel_ids=["p"],
+               narration="A crowd gathers at the museum. He shatters the ice and steps out."),
+]
+MARKED = [
+    ScriptBeat(beat_id=1, panel_ids=["p"],
+               narration="Rell falls in the dark chamber as the sentinel raises its spear."),
+    ScriptBeat(beat_id=2, panel_ids=["p"],
+               narration="Twenty-five years later, a crowd gathers at the museum. "
+                         "The ice around Rell shatters and he steps out."),
+]
+
+
+def test_listener_sees_only_what_a_listener_gets():
+    """No beat ids, no panel ids, no evidence — if a character cannot be identified from
+    the words alone, the viewer cannot identify them either. That is the whole point."""
+    heard = as_listener_hears(BLIND, hook="A hero wakes up in the wrong century.")
+    assert "p" not in heard.split()
+    assert "beat" not in heard.lower()
+    assert heard.startswith("A hero wakes up")
+    assert "shatters the ice" in heard
+
+
+def test_viewer_complains_about_an_unmarked_jump(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    blind = review_script(BLIND, "", {})
+    marked = review_script(MARKED, "", {})
+    assert blind is not None and marked is not None
+    assert blind.lost and not marked.lost
+    assert blind.score < marked.score
+
+
+def test_complaints_route_to_the_beat_they_came_from():
+    """A complaint that cannot be located does nothing, so quotes map back by exact match
+    first and stemmed overlap after — models paraphrase their own quotes constantly."""
+    exact = ViewerReport(lost=[ViewerComplaint(quote="He shatters the ice and steps out.",
+                                               why="who is he")])
+    assert beats_for_complaint("He shatters the ice and steps out.", BLIND) == [2]
+    # Paraphrased quote still lands on the right beat.
+    assert beats_for_complaint("he shatters ice and then steps out", BLIND) == [2]
+    # Unrelated text lands nowhere rather than on beat 1 by accident.
+    assert beats_for_complaint("a completely different sentence about soup", BLIND) == []
+
+    issues = issues_by_beat(exact, BLIND)
+    assert list(issues) == [2]
+    assert "viewer" in issues[2][0] and "who is he" in issues[2][0]
+
+
+def test_blind_candidate_loses_the_tournament(monkeypatch):
+    """The seeded-defect test this whole loop exists for: a candidate that narrates a time
+    jump blind must lose to one that marks it."""
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    blind_text = as_listener_hears(BLIND)
+    marked_text = as_listener_hears(MARKED)
+
+    win, _ = pick_best_script([blind_text, marked_text], {}, tiebreak=[4.0, 9.0])
+    assert win == 1
+    # And the result does not depend on which one was handed over first.
+    win2, _ = pick_best_script([marked_text, blind_text], {}, tiebreak=[9.0, 4.0])
+    assert win2 == 0
+
+
+def test_single_candidate_degrades_without_calling_a_judge():
+    win, why = pick_best_script(["only one"], {})
+    assert win == 0 and "single" in why

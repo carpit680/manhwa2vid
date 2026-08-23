@@ -670,9 +670,24 @@ def _narration_chunk_user(
             f"then land on this open thread as a concrete forward hook: {thread or '(derive from the arc)'}. "
             f"Do not trail off mid-moment.\n"
         )
+    # THE STORY comes first, before any protocol. The payload used to open with naming
+    # rules and per-beat evidence, and a writer handed a checklist writes to satisfy the
+    # checklist — which is precisely what "statements after statements" sounds like. The
+    # hand-written gold was composed from the whole chapter held in mind at once; the
+    # beats are its outline, not its cage.
+    story_first = (
+        "THE STORY YOU ARE TELLING — hold all of this in mind before you write a word.\n"
+        f"  What it is about: {synopsis.logline}\n"
+        + (f"  How time moves in it: {synopsis.narrative_structure}\n"
+           if getattr(synopsis, "narrative_structure", "") else "")
+        + "".join(f"  {i}. {act}\n" for i, act in enumerate(synopsis.arc, 1))
+        + "A listener hears this once, cannot see the pages and cannot rewind. They must\n"
+          "never wonder who is acting or when the story moved.\n\n"
+    )
     return (
         f"Title: {meta.title}\nChapters: {meta.chapters}\nHook: {hook}\n"
-        f"{scope_note}{closer_note}\n"
+        f"{scope_note}{closer_note}\n\n"
+        f"{story_first}"
         f"Already introduced (never repeat their intro clause): "
         f"{', '.join(introduced) or '(nobody yet — this chunk contains the first beats)'}\n\n"
         f"{naming_priority_rules(bible, config)}\n\n"
@@ -841,6 +856,108 @@ def _sighted_complete_json(
 
 
 def _run_narration_pass(
+    meta: ProjectMeta,
+    outline_beats: list[ScriptOutlineBeat],
+    hook: str,
+    bible: SeriesBible,
+    attribution: list[PanelCast],
+    synopsis: ChapterSynopsis,
+    config: dict[str, Any],
+    cards: list[SceneCard] | None = None,
+    paths: dict[str, Path] | None = None,
+) -> tuple[list[ScriptBeat], list[int], list[int], str]:
+    """Draft K candidates, let a viewer listen to each, and let a judge pick.
+
+    This is the part of writing that never made it into the pipeline. Writing the gold
+    scripts by hand was never one forward pass: it was draft, re-read as a listener,
+    notice "nobody said we jumped twenty-five years", fix, repeat. The pipeline drew ONE
+    sample and shipped it, and every gate it passed on the way checked the script against
+    SOURCE material — never against the experience of hearing it.
+
+    That is why the observed defects survived every gate: an unmarked time jump and an
+    unnamed actor breaking out of ice are both perfectly true sentences. Only a listener
+    can catch them.
+
+    Temperature stays HIGH here on purpose. Lowering it made the prose flat, and the
+    variance it buys is not noise once something is choosing between samples — one
+    Frozen Player draft dropped the ice-break entirely while the next named it, and with
+    K candidates that difference becomes a selection rather than a coin flip. Reliability
+    comes from selection and revision; determinism is the wrong lever for prose.
+
+    Everything downstream is unchanged: the winner goes through the same rewrite rounds,
+    deterministic polish and panel-grounded audit as before. This ranks TELLING; verify.py
+    still owns TRUTH.
+    """
+    from manhwa2vid.script.judge import pick_best_script
+    from manhwa2vid.script.viewer import issues_by_beat, review_script
+
+    k = max(1, int(get_nested(config, "script", "narration_candidates", default=1)))
+    attempts: list[tuple[list[ScriptBeat], list[int], list[int], str]] = []
+    for i in range(k):
+        result = _narrate_once(
+            meta, outline_beats, hook, bible, attribution, synopsis, config, cards, paths
+        )
+        if result[0]:
+            attempts.append(result)
+        if k > 1:
+            console.print(
+                f"[dim]Narration candidate {i + 1}/{k}: {len(result[0])} beats, "
+                f"{sum(len(b.narration.split()) for b in result[0])} words[/]"
+            )
+    if not attempts:
+        return _narrate_once(
+            meta, outline_beats, hook, bible, attribution, synopsis, config, cards, paths
+        )
+    if len(attempts) == 1:
+        beats, missing, fallbacks, path = attempts[0]
+        return beats, missing, fallbacks, path
+
+    reports = [review_script(beats, hook, config) for beats, _, _, _ in attempts]
+    scores = [float(r.score) if r else 0.0 for r in reports]
+    texts = ["\n\n".join(b.narration for b in beats) for beats, _, _, _ in attempts]
+    winner, trace = pick_best_script(texts, config, tiebreak=scores)
+
+    if paths is not None:
+        try:
+            with (paths["debug"] / "narration_candidates.jsonl").open("a", encoding="utf-8") as fh:
+                for i, (beats, _, _, path) in enumerate(attempts):
+                    report = reports[i]
+                    fh.write(json.dumps({
+                        "candidate": i, "won": i == winner, "path": path,
+                        "beats": len(beats),
+                        "words": sum(len(b.narration.split()) for b in beats),
+                        "viewer_score": scores[i],
+                        "lost": [c.model_dump() for c in (report.lost if report else [])],
+                        "flat": [c.model_dump() for c in (report.flat if report else [])],
+                        "trace": trace if i == winner else "",
+                    }) + "\n")
+        except Exception:
+            pass
+
+    console.print(
+        f"[cyan]Viewer:[/] candidate {winner + 1}/{len(attempts)} chosen "
+        f"(scores {[round(s) for s in scores]}; {trace})"
+    )
+    beats, missing, fallbacks, path = attempts[winner]
+    report = reports[winner]
+    if report is not None:
+        # The winner's own complaints ride out as rewrite issues, phrased the way the
+        # viewer put them — "a viewer could not tell who 'he' is here" carries a failure
+        # that a rule-shaped instruction loses.
+        for beat_id, issues in issues_by_beat(report, beats).items():
+            _VIEWER_ISSUES.setdefault(beat_id, []).extend(issues)
+        _VIEWER_SCORE.append(report.score)
+    return beats, missing, fallbacks, f"{path} (best of {len(attempts)})"
+
+
+#: Viewer complaints on the winning candidate, drained by the story-integrity round.
+#: Module-level because the narration pass and that round are separated by the QA gates,
+#: and threading a new return value through would touch every caller.
+_VIEWER_ISSUES: dict[int, list[str]] = {}
+_VIEWER_SCORE: list[int] = []
+
+
+def _narrate_once(
     meta: ProjectMeta,
     outline_beats: list[ScriptOutlineBeat],
     hook: str,
@@ -1432,6 +1549,13 @@ def generate_script(
     # Two rounds, because measured across runs the second clears most of what the first
     # leaves and a third mostly churns text that is already acceptable.
     issues_by_beat = _story_findings(beats)
+    # The viewer's own complaints join the deterministic findings rather than replacing
+    # them: the lints catch what is checkable, the viewer catches what is only
+    # experienceable, and a beat can fail both.
+    for bid, msgs in _VIEWER_ISSUES.items():
+        issues_by_beat.setdefault(bid, []).extend(msgs)
+    viewer_flagged = sorted(_VIEWER_ISSUES)
+    _VIEWER_ISSUES.clear()
     first_round = dict(issues_by_beat)
     for round_no in range(2):
         if not issues_by_beat:
@@ -1730,6 +1854,17 @@ def generate_script(
     # anchor), so the gate warned about beats the reader never sees a problem in. Say what
     # survived everything, which is the only number that means anything.
     residual = _story_findings(beats)
+    if _VIEWER_SCORE:
+        score = _VIEWER_SCORE[-1]
+        _VIEWER_SCORE.clear()
+        final_report.add(
+            "viewer-score",
+            True if score >= 6 else "warn",
+            (f"the viewer scored the winning candidate {score}/10 — below 6 means a "
+             "listener would not enjoy this even though every factual gate passed")
+            if score < 6 else "",
+            score=score, flagged_beats=viewer_flagged,
+        )
     final_report.add(
         "story-integrity",
         True if not residual else "warn",
