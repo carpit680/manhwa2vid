@@ -1683,6 +1683,140 @@ def lint_missing_introduction(
     return out
 
 
+def lint_narration_order(
+    beats: list[ScriptBeat],
+    scene_cards: list[SceneCard] | None,
+    *,
+    min_match: float = 0.10,
+) -> dict[int, list[str]]:
+    """Flag a beat whose sentences do not run in its panels' reading order.
+
+    `grounding.enforce_reading_order` guarantees the invariant at BEAT level and nothing
+    checked it below that, so a beat could narrate its last panel first: ch1 beat 12
+    opened on a leader addressing the party (its final panel) and only then gave the
+    conversation from its first four. Read aloud over those panels the words describe one
+    moment while the art shows another.
+
+    `lock_transition_line` already ASSUMES this ordering — it converts a panel index into
+    a sentence index to place the rewind cue — and asserted it in a comment without
+    anything verifying it. This is that verification.
+
+    Scored by argmax, deliberately, NOT by `derive_key_panels`' 0.18 threshold: that
+    number is normalized by a panel's token count and calibrated for whole-beat
+    narration, so a single sentence scored the same way sits far below it and every
+    sentence would look unmatched. Sentences that match nothing (connective or scene-
+    setting lines with no panel content of their own) are skipped rather than counted at
+    index 0, where they would manufacture inversions out of correct prose.
+
+    Reported for rewrite, never reordered in place. Sentences carry connective tissue
+    ("Behind him,", "Suddenly,") that silently breaks when moved, and nothing in this
+    module reorders prose today — every existing pass filters or substitutes and rejoins
+    in the original order.
+    """
+    if not scene_cards:
+        return {}
+    by_panel: dict[str, str] = {}
+    for card in scene_cards:
+        for pid in card.panel_ids:
+            by_panel[pid] = f"{card.source_text or ''} {card.action or ''}"
+
+    out: dict[int, list[str]] = {}
+    for beat in beats:
+        if len(beat.panel_ids) < 2:
+            continue
+        sentences = [s for s in _SENTENCE_SPLIT_RE.split(beat.narration.strip()) if s.strip()]
+        if len(sentences) < 2:
+            continue
+        seq: list[tuple[int, str]] = []
+        for sentence in sentences:
+            stems = _stemmed_words(sentence)
+            best_i, best_score = None, 0.0
+            for i, pid in enumerate(beat.panel_ids):
+                panel_stems = _stemmed_words(by_panel.get(pid, ""))
+                if not panel_stems:
+                    continue
+                score = len(stems & panel_stems) / len(panel_stems)
+                if score > best_score:
+                    best_i, best_score = i, score
+            if best_i is not None and best_score >= min_match:
+                seq.append((best_i, sentence))
+        inversions = [
+            (seq[a], seq[b])
+            for a in range(len(seq))
+            for b in range(a + 1, len(seq))
+            if seq[a][0] > seq[b][0]
+        ]
+        if inversions:
+            (early_i, early_s), (late_i, late_s) = inversions[0]
+            out[beat.beat_id] = [
+                f'narration runs out of panel order: "{early_s.strip()[:70]}" belongs to '
+                f"panel {beat.panel_ids[early_i]} but is told before "
+                f'"{late_s.strip()[:70]}", which belongs to the earlier panel '
+                f"{beat.panel_ids[late_i]}. Narrate this beat's panels in reading order"
+            ]
+    return out
+
+
+# Its own regex on purpose. _PRONOUN_START_RE exists TWICE with different semantics —
+# lint.py's is case-sensitive and includes possessives, scorecard.py's is case-insensitive,
+# includes "it" and excludes possessives — so importing either by name invites the wrong
+# one. This needs exactly third-person personal SUBJECTS at a sentence start.
+_OPENING_PRONOUN_RE = re.compile(r"^\s*(?:He|She|They)\b")
+
+
+def lint_unanchored_opening(
+    beats: list[ScriptBeat],
+    bible: SeriesBible | None,
+) -> dict[int, list[str]]:
+    """Flag a beat that opens on a pronoun and never names who it means.
+
+    ch1 beat 14 was "He replies quickly to reassure her, steeling his resolve..." — the
+    beat contains no proper noun at all, `He` was last named two beats earlier among three
+    men, and `her` two beats earlier. On the page a reader can glance back; a listener
+    cannot, and the beat boundary is also a panel cut and often a pause.
+
+    Nothing existing catches this. `enforce_mc_name_budget` forces an anchor only when a
+    same-pronoun RIVAL is named in that beat (lint.py, `_same_pronoun_rivals`), so a beat
+    naming nobody never trips it — and that function can only remove names, never add one.
+    `scorecard._pronoun_start_fraction` averages every sentence script-wide and is
+    warn-only. So this is a genuine gap, not a duplicate.
+
+    Reported for rewrite rather than repaired: choosing the referent wrongly would ship a
+    misattribution, the costliest error class in this pipeline. The message names the
+    rivals that make the pronoun ambiguous so the rewriter has to resolve it explicitly.
+    """
+    out: dict[int, list[str]] = {}
+    if bible is None:
+        return {}
+    known: list[str] = []
+    for profile in bible.characters.values():
+        if profile.merged_into:
+            continue
+        name = profile.canonical_name.strip()
+        if name and not is_descriptor_label(name):
+            known.append(name)
+    if not known:
+        return {}
+    rivals = _same_pronoun_rivals(bible)
+    for beat in beats:
+        text = beat.narration.strip()
+        if not _OPENING_PRONOUN_RE.match(text):
+            continue
+        if any(
+            re.search(rf"\b{re.escape(_short_name_form(n))}\b", text, re.I)
+            or re.search(rf"\b{re.escape(n)}\b", text, re.I)
+            for n in known
+        ):
+            continue  # the beat names somebody; the anchor lints own the rest
+        opening = text.split()[0]
+        hint = f" ({', '.join(rivals[:3])} are all live candidates)" if rivals else ""
+        out[beat.beat_id] = [
+            f'this beat opens on "{opening}" and never names anyone in it, so a listener '
+            f"cannot tell who is acting{hint}. Name the person in the first sentence"
+        ]
+    return out
+
+
 def lint_beats(
     beats: list[ScriptBeat],
     config: dict[str, Any],

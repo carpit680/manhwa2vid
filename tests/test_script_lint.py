@@ -1624,3 +1624,75 @@ def test_lint_abstraction_drift_ignores_compound_nouns():
     beats = [ScriptBeat(beat_id=1, panel_ids=["p1"],
                         narration="A hunter welcomes Rell to the gate gathering point.")]
     assert lint_abstraction_drift(beats, cards) == {}
+
+
+def test_lint_narration_order_flags_reversed_beat():
+    """enforce_reading_order guarantees the invariant at BEAT level; nothing checked below
+    it, so ch1 beat 12 narrated its LAST panel first and its first panel second. Read
+    aloud, the words describe one moment while the art shows another."""
+    from manhwa2vid.models import SceneCard
+    from manhwa2vid.script.lint import lint_narration_order
+
+    cards = [
+        SceneCard(panel_ids=["p1"], action="Rell smiles weakly while explaining himself",
+                  source_text='Rell -> Vesh: "IT IS ONLY BECAUSE I AM WEAK."'),
+        SceneCard(panel_ids=["p2"], action="Doran addresses the gathered party",
+                  source_text='Doran -> the party: "I WILL TAKE THE LEAD TODAY."'),
+    ]
+    reversed_beat = ScriptBeat(beat_id=1, panel_ids=["p1", "p2"], narration=(
+        "Doran addresses the gathered party and offers to take the lead today. "
+        "Rell explains weakly to Vesh that it is only because he is weak."))
+    correct_beat = ScriptBeat(beat_id=2, panel_ids=["p1", "p2"], narration=(
+        "Rell explains weakly to Vesh that it is only because he is weak. "
+        "Doran addresses the gathered party and offers to take the lead today."))
+    flagged = lint_narration_order([reversed_beat, correct_beat], cards)
+    assert sorted(flagged) == [1]
+    assert "reading order" in flagged[1][0]
+
+
+def test_lint_narration_order_ignores_unmatched_sentences():
+    """A connective or scene-setting sentence matches no panel. Counting it at index 0
+    would manufacture an inversion out of correct prose, so it must be skipped."""
+    from manhwa2vid.models import SceneCard
+    from manhwa2vid.script.lint import lint_narration_order
+
+    cards = [
+        SceneCard(panel_ids=["p1"], action="dawn over the harbour", source_text=""),
+        SceneCard(panel_ids=["p2"], action="Rell boards the ferry",
+                  source_text='Rell -> Vesh: "WE LEAVE BEFORE THE TIDE TURNS."'),
+    ]
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p1", "p2"], narration=(
+        "Somewhere far to the south, the war has already begun. "
+        "Rell boards the ferry and tells Vesh they leave before the tide turns."))]
+    assert lint_narration_order(beats, cards) == {}
+
+
+def test_lint_unanchored_opening_flags_a_beat_that_names_nobody():
+    """ch1 beat 14 was "He replies quickly to reassure her" — no proper noun anywhere in
+    the beat, both antecedents two beats back. enforce_mc_name_budget cannot catch this
+    (it triggers on a rival NAMED in the beat) and could not repair it anyway: it only
+    ever removes names."""
+    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
+    from manhwa2vid.script.lint import lint_unanchored_opening
+
+    bible = SeriesBible(
+        series_slug="s", title="S", protagonist_id="char_mc",
+        characters={
+            "char_mc": CharacterProfile(id="char_mc", canonical_name="Rell",
+                                        tier=CharacterTier.MAIN, pronoun="he"),
+            "char_d": CharacterProfile(id="char_d", canonical_name="Doran",
+                                       tier=CharacterTier.SUPPORTING, pronoun="he"),
+        },
+    )
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p"],
+                   narration="He replies quickly to reassure her, steeling his resolve."),
+        # Opens on a pronoun but names its subject in the same sentence: fine.
+        ScriptBeat(beat_id=2, panel_ids=["p"],
+                   narration="He turns, and Rell tells Doran the gate is already open."),
+        # Opens on a name: fine.
+        ScriptBeat(beat_id=3, panel_ids=["p"], narration="Rell steps through the gate."),
+    ]
+    flagged = lint_unanchored_opening(beats, bible)
+    assert sorted(flagged) == [1]
+    assert "Doran" in flagged[1][0]      # names the rival that makes "He" ambiguous

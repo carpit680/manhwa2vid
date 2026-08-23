@@ -620,3 +620,43 @@ def test_lint_plot_coverage_ignores_empty_plot_beats():
 
     beats = [ScriptBeat(beat_id=1, panel_ids=["p1"], narration="He walks on.")]
     assert lint_plot_coverage(beats, {1: ""}) == {}
+
+
+def test_refresh_plot_for_span_describes_the_whole_span():
+    """enforce_reading_order gives a beat "everything from its own anchor up to the next
+    beat's", so a beat can hold panels its plot_beat never described — and once plot_beat
+    became the MUST COVER spine, a plot describing the TAIL made the writer narrate the
+    end first. ch1 beat 12 shipped its five panels reversed."""
+    from manhwa2vid.models import ScriptOutlineBeat
+    from manhwa2vid.script.grounding import refresh_plot_for_span
+
+    cards = [
+        SceneCard(panel_ids=["p1"], action="Rell smiles weakly while explaining himself",
+                  source_text='Rell -> Vesh: "IT IS ONLY BECAUSE I AM WEAK."'),
+        SceneCard(panel_ids=["p2"], action="Vesh looks back in silence", source_text=""),
+        SceneCard(panel_ids=["p3"], action="Doran addresses the gathered party",
+                  source_text='Doran -> the party: "I WILL TAKE THE LEAD TODAY."'),
+    ]
+    beats = [ScriptOutlineBeat(
+        beat_id=1, panel_ids=["p1", "p2", "p3"],
+        plot_beat="Doran addresses the gathered party and offers to take the lead today.")]
+    out = refresh_plot_for_span(beats, cards)
+    assert out[0].plot_beat.startswith("Rell smiles weakly while explaining himself")
+    assert "Doran addresses" in out[0].plot_beat      # the seed survives, it is prepended to
+
+
+def test_refresh_plot_for_span_leaves_a_head_aligned_beat_alone():
+    """Only ever prepends, and only for a beat whose plot demonstrably describes its
+    tail — a plot already covering the head must be untouched."""
+    from manhwa2vid.models import ScriptOutlineBeat
+    from manhwa2vid.script.grounding import refresh_plot_for_span
+
+    cards = [
+        SceneCard(panel_ids=["p1"], action="Rell boards the ferry",
+                  source_text='Rell -> Vesh: "WE LEAVE BEFORE THE TIDE TURNS."'),
+        SceneCard(panel_ids=["p2"], action="the harbour shrinks behind them", source_text=""),
+    ]
+    beats = [ScriptOutlineBeat(
+        beat_id=1, panel_ids=["p1", "p2"],
+        plot_beat="Rell boards the ferry and tells Vesh they leave before the tide turns.")]
+    assert refresh_plot_for_span(beats, cards)[0].plot_beat == beats[0].plot_beat

@@ -37,11 +37,15 @@ THE TEN RULES:
 4. Introductions happen ONCE: first mention = name + short ROLE clause ("Vesh, the
    caravan's field medic") — a role, never an outfit. Ever after: bare name or pronoun — no appearance
    appositives, ever again. Re-anchor the protagonist by name about every second beat
-   and ALWAYS in a beat that names another man (bare "he" would be ambiguous aloud).
+   and ALWAYS in a beat that names another man (bare "he" would be ambiguous aloud). A
+   beat NEVER opens on a pronoun whose owner it does not name: a listener cannot look
+   back the way a reader can, and a beat boundary is also a cut between panels.
 5. Anonymous extras appear only when they act on the story. Never narrate scenery people.
 6. Scene-setting is one short clause folded into an event sentence, at most, per beat.
 7. Two different limits, do not confuse them: MUST COVER fixes WHAT the beat tells
-   and is not optional; EVIDENCE bounds the DETAIL you may use to tell it. Never
+   and is not optional; EVIDENCE bounds the DETAIL you may use to tell it. MUST COVER is
+   not a running order — narrate a beat's panels in the sequence the evidence lists them,
+   even when that means the MUST COVER event comes last in the beat. Never
    narrate a detail absent from the evidence, and never drop a MUST COVER event
    because a panel description was more vivid. Never preview later scenes. World
    terms (gates, ranks) get a six-word gloss on first use only.

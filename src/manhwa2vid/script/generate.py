@@ -32,6 +32,7 @@ from manhwa2vid.script.grounding import (
     preassign_outline_from_facts,
     enforce_reading_order,
     inject_closer_evidence,
+    refresh_plot_for_span,
 )
 from manhwa2vid.script.lint import banned_words, lint_and_rewrite_script, rotate_protagonist_name
 from manhwa2vid.script.synopsis import (
@@ -127,7 +128,9 @@ def _cast_context_for_beats(
             f"  the plot:\n    {beat.plot_beat}\n"
             f"  MAX {max_words} words — hard limit. Cut DESCRIPTION first; never drop an\n"
             f"  event named above to make room for what a panel merely shows.\n"
-            f"  EVIDENCE (your only source of detail — narrate nothing absent here):\n{evid or '(none)'}\n"
+            f"  EVIDENCE (your only source of detail — narrate nothing absent here).\n"
+            f"  Narrate these panels in the order they are listed; MUST COVER says WHAT\n"
+            f"  belongs in the beat, never WHEN:\n{evid or '(none)'}\n"
             f"  Do not preview later locations — protagonist id={bible.protagonist_id or '?'}"
         )
     return "\n".join(lines)
@@ -413,6 +416,9 @@ def _run_outline_pass(
     seeded = preassign_outline_from_facts(synopsis, cards, bible, max_beats=max_beats)
     # Beats must be contiguous runs in reading order, or two of them narrate one moment.
     seeded = enforce_reading_order(seeded)
+    # Repartitioning can hand a beat panels its plot_beat never described; refresh it
+    # before the plot becomes the MUST COVER spine of the narration prompt.
+    seeded = refresh_plot_for_span(seeded, cards)
     # The ending is pinned from the panels themselves, not trusted to prose compression.
     seeded = inject_closer_evidence(seeded, cards)
     console.print(f"[dim]Seeded outline from plot_facts → {len(seeded)} panel-grounded beats[/]")
@@ -458,6 +464,7 @@ def _run_outline_pass(
             # Prefer LLM wording but restore panel bindings from seed if LLM drifted
             outline = _reconcile_outline_panels(seeded, outline)
             outline = enforce_reading_order(outline)
+            outline = refresh_plot_for_span(outline, cards)
             outline = inject_closer_evidence(outline, cards)
             if outline:
                 return str(data.get("hook", synopsis.logline)), outline
@@ -1200,9 +1207,11 @@ def generate_script(
         lint_abstraction_drift,
         lint_hook_grounding,
         lint_missing_introduction,
+        lint_narration_order,
         lint_plot_coverage,
         lint_repeated_setting,
         lint_time_shift_marker,
+        lint_unanchored_opening,
         rewrite_beat as _rewrite_beat,
     )
 
@@ -1245,6 +1254,8 @@ def generate_script(
         lint_repeated_setting(beats, world_terms),
         lint_abstraction_drift(beats, cards),
         lint_missing_introduction(beats, bible),
+        lint_narration_order(beats, cards),
+        lint_unanchored_opening(beats, bible),
     ):
         for bid, msgs in finding.items():
             issues_by_beat.setdefault(bid, []).extend(msgs)

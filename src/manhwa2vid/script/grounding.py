@@ -385,6 +385,69 @@ def unsupported_grounding_keywords(panel_ids: list[str], cards: list[SceneCard],
     return sorted(claimed - supported)
 
 
+def refresh_plot_for_span(
+    beats: list[ScriptOutlineBeat],
+    cards: list[SceneCard],
+    *,
+    tail_fraction: float = 2 / 3,
+) -> list[ScriptOutlineBeat]:
+    """Make each beat's plot_beat describe its WHOLE panel span, not just its seed.
+
+    `preassign_outline_from_facts` seeds a beat from ONE scene card, then
+    `enforce_reading_order` repartitions — and it does exactly what it documents: "beat N
+    owns everything from its own anchor up to the next beat's." A beat can therefore end
+    up holding panels its plot_beat never mentioned, and nothing refreshed the plot_beat
+    afterwards. On Solo Leveling ch1, 4 of 13 beats had a plot_beat whose best-matching
+    panel sat at the very END of its own span.
+
+    That was harmless while plot_beat was metadata on a crowded prompt line. It stopped
+    being harmless when plot_beat became the MUST COVER spine of the beat block: the
+    writer leads with it, so a plot describing the tail produced narration that started at
+    the end. Beat 12 shipped its five panels in exactly reversed order. The same gap
+    produced beat 14's nameless "He replies quickly to reassure her" — the panels its
+    plot ignored got compressed into a pronoun.
+
+    Only ever PREPENDS, and only for a beat whose plot demonstrably describes its tail.
+    The added clause is built the way `_continuity_seed` builds one (the leading panel's
+    card action) and joined with " / " the way the merge loop in
+    `preassign_outline_from_facts` already joins two plots, so no new prose shape enters
+    the outline. Panels are never reordered or dropped here.
+    """
+    from manhwa2vid.script.lint import _stemmed_words
+
+    by_panel = card_by_panel(cards)
+    out: list[ScriptOutlineBeat] = []
+    for beat in beats:
+        plot = (beat.plot_beat or "").split("/ CLOSER")[0].strip()
+        panels = beat.panel_ids
+        if not plot or len(panels) < 2:
+            out.append(beat)
+            continue
+        plot_tokens = _stemmed_words(plot)
+        if not plot_tokens:
+            out.append(beat)
+            continue
+        scores: list[float] = []
+        for pid in panels:
+            card = by_panel.get(pid)
+            text = f"{card.source_text or ''} {card.action or ''}" if card else ""
+            tokens = _stemmed_words(text)
+            scores.append(len(plot_tokens & tokens) / len(tokens) if tokens else 0.0)
+        best = max(range(len(scores)), key=lambda i: scores[i])
+        if scores[best] <= 0.0 or best < tail_fraction * (len(panels) - 1):
+            out.append(beat)
+            continue
+        # The plot describes the tail. Describe the head too, from the first panel that
+        # the plot does not already cover.
+        lead_card = by_panel.get(panels[0])
+        lead = ((lead_card.action if lead_card else "") or "").strip()
+        if not lead or _stemmed_words(lead) <= plot_tokens:
+            out.append(beat)
+            continue
+        out.append(beat.model_copy(update={"plot_beat": f"{lead[:200]} / {beat.plot_beat}"}))
+    return out
+
+
 def enforce_reading_order(beats: list[ScriptOutlineBeat]) -> list[ScriptOutlineBeat]:
     """Make every beat a CONTIGUOUS run of panels in reading order.
 
