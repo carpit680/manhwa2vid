@@ -106,7 +106,12 @@ script:
   commentary_level: wry   # the reference has a dry read on events without ever saying
                           # "I" — 8.2 evaluative asides per 1k words measured
   # Values below are measured from the Mamoru Manhwa reference — see reference/style_profile.md
-  target_wpm: 235       # reference speaks 237 WPM, stable across the whole 5h video
+  # 200 by preference, not measurement: the reference speaks 237 and Kokoro at 1.35
+  # delivered 256 on a full script, which read as rushed. This is the ONE number the
+  # panel budget is planned from (curate.words_per_shown_panel), so it moves together
+  # with tts.kokoro_speed — calibrated to 1.05, measured at exactly 200 WPM over five
+  # real beats. Letting them drift apart is the bug the narration-pace gate exists for.
+  target_wpm: 200       # reference speaks 237; we deliberately sit slower
   genz_level: light     # reference measures ~0 SLANG (0.07/1k) but 7.2/1k casual
                         # epithets for the hero ("bro", "the guy") — those are register,
                         # not slang, and reading 0.07 as "no personality" was the error
@@ -215,7 +220,7 @@ tts:
   # voice: the latter would have grown the panel budget ~37% and merged more beats,
   # making the slideshow feel worse. The narration-pace gate now measures the delivered
   # rate so this can never silently drift again.
-  kokoro_speed: 1.35    # synthesis-time rate, NOT a time-stretch — no atempo artifacts
+  kokoro_speed: 1.05    # synthesis-time rate, NOT a time-stretch — no atempo artifacts
   kokoro_lang: a        # 'a' = American English
   # Chatterbox-only settings below:
   device: cuda          # cuda | cpu | mps — auto-detects if omitted
