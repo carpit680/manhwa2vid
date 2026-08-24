@@ -588,6 +588,96 @@ def consolidate_beats(
     return [b.model_copy(update={"beat_id": i}) for i, b in enumerate(merged, start=1)]
 
 
+_QUOTED_LINE_RE = re.compile(r'[“"]([^”"]{4,})[”"]')
+
+
+def quoted_lines_for_panels(
+    panel_ids: list[str], cards: list[SceneCard], *, min_words: int = 4
+) -> list[str]:
+    """Distinct substantive quoted lines the given panels print, in panel order.
+
+    Shared by `lint_dropped_dialogue` (checks these landed in the narration) and
+    `split_dense_beats` (checks a beat isn't asked to land more of these than one beat's
+    word budget can hold). `min_words` excludes bare exclamations ("HELLO.", "WHAT?!") —
+    they carry no payoff and would only add noise.
+    """
+    by_panel = card_by_panel(cards)
+    seen: set[str] = set()
+    lines: list[str] = []
+    for pid in panel_ids:
+        card = by_panel.get(pid)
+        if not card:
+            continue
+        for raw in _QUOTED_LINE_RE.findall(card.source_text or ""):
+            line = raw.strip()
+            if not line or line in seen or len(line.split()) < min_words:
+                continue
+            seen.add(line)
+            lines.append(line)
+    return lines
+
+
+def split_dense_beats(
+    beats: list[ScriptOutlineBeat],
+    cards: list[SceneCard],
+    *,
+    max_quotes_per_beat: int = 2,
+) -> list[ScriptOutlineBeat]:
+    """Split a beat that carries more distinct payoff-worthy quoted lines than one beat
+    can plausibly land.
+
+    `consolidate_beats` raises the FLOOR (merges beats too thin to hold anything); this
+    lowers the CEILING on a different axis — quote density, not word count. Frozen
+    Player's floor-count exchange (Deok-gu explaining the tower to Jun-Ho) sat in a single
+    69-word, 7-panel beat carrying 4+ distinct facts ("10 total floors", "should be at the
+    7th floor", "only cleared the 2nd", "3rd floor is volcanic") and the narration landed
+    one of them, spending its budget on Jun-Ho's reaction instead — not because the beat
+    was thin, but because it was asked to deliver more discrete payoffs than any one beat
+    can tell coherently. `lint_dropped_dialogue` kept firing on it every rewrite round for
+    exactly this reason: the fix is room, not another instruction.
+
+    Greedy contiguous partition, panel by panel: a cut lands whenever the NEXT panel would
+    push the running beat's distinct-quote count over `max_quotes_per_beat`. Panels are
+    never reordered or dropped — this is the same kind of pure re-partition
+    `split_beats_at_transitions` performs, just triggered by quote density instead of a
+    printed time cut. A beat within budget is returned unchanged.
+    """
+    if not beats:
+        return beats
+    by_panel = card_by_panel(cards)
+    out: list[ScriptOutlineBeat] = []
+    for beat in beats:
+        panels = beat.panel_ids
+        if len(panels) < 2 or len(quoted_lines_for_panels(panels, cards)) <= max_quotes_per_beat:
+            out.append(beat)
+            continue
+        pieces: list[list[str]] = []
+        chunk: list[str] = []
+        chunk_quotes: set[str] = set()
+        for pid in panels:
+            card = by_panel.get(pid)
+            pid_quotes = {
+                ln.strip()
+                for ln in (_QUOTED_LINE_RE.findall(card.source_text or "") if card else [])
+                if len(ln.split()) >= 4
+            }
+            projected = chunk_quotes | pid_quotes
+            if chunk and len(projected) > max_quotes_per_beat:
+                pieces.append(chunk)
+                chunk, chunk_quotes = [pid], set(pid_quotes)
+            else:
+                chunk.append(pid)
+                chunk_quotes = projected
+        if chunk:
+            pieces.append(chunk)
+        if len(pieces) < 2:
+            out.append(beat)
+            continue
+        for piece in pieces:
+            out.append(beat.model_copy(update={"panel_ids": piece}))
+    return [b.model_copy(update={"beat_id": i}) for i, b in enumerate(out, start=1)]
+
+
 def scene_boundaries(
     beats: list[ScriptOutlineBeat],
     cards: list[SceneCard] | None = None,

@@ -20,8 +20,8 @@ from manhwa2vid.llm.provider import apply_stage_model, get_stage_llm
 from manhwa2vid.models import CharacterTier, PanelCast, SceneCard, ScriptBeat, SeriesBible
 from manhwa2vid.script.grounding import (
     GROUNDING_KEYWORDS,
-    card_by_panel,
     evidence_for_panels,
+    quoted_lines_for_panels,
     unsupported_grounding_keywords,
 )
 
@@ -1355,7 +1355,13 @@ def lint_plot_coverage(
     return out
 
 
-_QUOTED_LINE_RE = re.compile(r'[“"]([^”"]{4,})[”"]')
+def _dropped_line_priority(line: str) -> tuple[int, int, int]:
+    """Higher sorts first. A bracketed system message is always plot-critical in this
+    genre; a line carrying a number is usually a concrete fact (a count, a floor, a
+    year) rather than color. Longer lines break remaining ties toward substance."""
+    is_system = 1 if "[" in line and "]" in line else 0
+    has_digit = 1 if any(ch.isdigit() for ch in line) else 0
+    return (is_system, has_digit, len(line))
 
 
 def lint_dropped_dialogue(
@@ -1364,6 +1370,7 @@ def lint_dropped_dialogue(
     *,
     min_words: int = 4,
     min_ratio: float = 0.3,
+    max_lines_per_beat: int = 2,
 ) -> dict[int, list[str]]:
     """Flag a beat that skips a panel's own quoted line for the panel's picture.
 
@@ -1381,39 +1388,35 @@ def lint_dropped_dialogue(
     word overlap against that beat's narration, same metric `lint_plot_coverage` uses.
     `min_words` excludes bare exclamations ("HELLO.", "WHAT?!") — they carry no payoff and
     would only add noise to the rewrite prompt.
+
+    `max_lines_per_beat` caps how many "MUST land" demands one rewrite call is handed:
+    a beat with four dropped lines given four co-equal instructions has no way to know
+    which one actually matters, and measured logs show it then lands none of them.
+    `split_dense_beats` is the structural fix for a beat that is carrying too much to
+    tell at all; this cap is what keeps a beat that is merely a LITTLE over — or one that
+    slipped through before that pass ran — from being handed an unworkable rewrite brief.
     """
     if not cards:
         return {}
-    by_panel = card_by_panel(cards)
     out: dict[int, list[str]] = {}
     for beat in beats:
-        lines: list[str] = []
-        seen: set[str] = set()
-        for pid in beat.panel_ids:
-            card = by_panel.get(pid)
-            if not card:
-                continue
-            for raw in _QUOTED_LINE_RE.findall(card.source_text or ""):
-                line = raw.strip()
-                if not line or line in seen:
-                    continue
-                seen.add(line)
-                lines.append(line)
+        lines = quoted_lines_for_panels(beat.panel_ids, cards, min_words=min_words)
         if not lines:
             continue
         narration_tokens = _stemmed_words(beat.narration)
         missing: list[str] = []
         for line in lines:
             tokens = _stemmed_words(line)
-            if len(tokens) < min_words:
-                continue
-            ratio = len(tokens & narration_tokens) / len(tokens)
+            ratio = len(tokens & narration_tokens) / len(tokens) if tokens else 1.0
             if ratio < min_ratio:
                 missing.append(line)
-        if missing:
-            out[beat.beat_id] = [
-                f'narration drops the panel\'s own line — it MUST land: "{m}"' for m in missing
-            ]
+        if not missing:
+            continue
+        missing.sort(key=_dropped_line_priority, reverse=True)
+        out[beat.beat_id] = [
+            f'narration drops the panel\'s own line — it MUST land: "{m}"'
+            for m in missing[:max_lines_per_beat]
+        ]
     return out
 
 

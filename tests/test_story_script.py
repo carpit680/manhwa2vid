@@ -675,6 +675,29 @@ def test_lint_dropped_dialogue_ignores_short_exclamations():
     assert lint_dropped_dialogue(beats, cards) == {}
 
 
+def test_lint_dropped_dialogue_ranks_and_caps_multiple_dropped_lines():
+    """A beat with four dropped lines given four co-equal demands lands none of them
+    (measured). Capping forces the rewrite to spend its budget on the highest-value
+    lines: a bracketed system message first, then a line carrying a concrete number."""
+    from manhwa2vid.script.lint import lint_dropped_dialogue
+
+    cards = [
+        SceneCard(panel_ids=["p1"], action="", source_text='Rell: "IT IS A NICE DAY OUTSIDE TODAY."'),
+        SceneCard(panel_ids=["p2"], action="", source_text='Vesh: "THERE ARE TEN TOTAL FLOORS IN THE TOWER."'),
+        SceneCard(panel_ids=["p3"], action="", source_text='system: "[YOU HAVE ABSORBED THE CORE.]"'),
+    ]
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p1", "p2", "p3"], narration="Nothing here lands any of it."),
+    ]
+    flagged = lint_dropped_dialogue(beats, cards, max_lines_per_beat=2)
+    assert len(flagged[1]) == 2
+    # The bracketed system message and the numeric fact outrank the plain color line.
+    joined = " ".join(flagged[1])
+    assert "ABSORBED THE CORE" in joined
+    assert "TEN TOTAL FLOORS" in joined
+    assert "NICE DAY" not in joined
+
+
 def test_refresh_plot_for_span_describes_the_whole_span():
     """enforce_reading_order gives a beat "everything from its own anchor up to the next
     beat's", so a beat can hold panels its plot_beat never described — and once plot_beat

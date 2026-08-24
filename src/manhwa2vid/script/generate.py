@@ -36,6 +36,7 @@ from manhwa2vid.script.grounding import (
     inject_closer_evidence,
     refresh_plot_for_span,
     split_beats_at_transitions,
+    split_dense_beats,
 )
 from manhwa2vid.script.lint import (
     accept_rewrite as _accept_rewrite,
@@ -452,6 +453,10 @@ def _run_outline_pass(
     # The split above only ever adds beats; re-merge within-scene so beats have room to
     # hold a transition, a stake sentence AND the panel's own dialogue line.
     seeded = consolidate_beats(seeded, cards, words_per_beat, words_per_panel=words_per_panel)
+    # A wide beat can still be asked to carry more distinct payoff lines than it can tell
+    # coherently (a dense dialogue exchange, several system messages) — split those before
+    # the writer ever sees them, rather than hoping a rewrite picks the right one later.
+    seeded = split_dense_beats(seeded, cards)
     # Repartitioning can hand a beat panels its plot_beat never described; refresh it
     # before the plot becomes the MUST COVER spine of the narration prompt.
     seeded = refresh_plot_for_span(seeded, cards)
@@ -502,6 +507,7 @@ def _run_outline_pass(
             outline = split_beats_at_transitions(outline, cards)
             outline = enforce_reading_order(outline)
             outline = consolidate_beats(outline, cards, words_per_beat, words_per_panel=words_per_panel)
+            outline = split_dense_beats(outline, cards)
             outline = refresh_plot_for_span(outline, cards)
             outline = inject_closer_evidence(outline, cards)
             if outline:

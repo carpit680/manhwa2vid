@@ -197,3 +197,53 @@ def test_consolidate_beats_leaves_already_wide_beats_alone():
     ]
     out = consolidate_beats(beats, cards, 40.0, words_per_panel=9.9)
     assert out == beats
+
+
+def test_quoted_lines_for_panels_dedupes_and_excludes_bare_exclamations():
+    from manhwa2vid.script.grounding import quoted_lines_for_panels
+
+    cards = [
+        _card("p1", page_text='Deok-gu: "THE 3RD FLOOR IS A VOLCANIC REGION."'),
+        _card("p2", page_text='"WHAT?!" / Deok-gu: "THE 3RD FLOOR IS A VOLCANIC REGION."'),
+    ]
+    lines = quoted_lines_for_panels(["p1", "p2"], cards)
+    assert lines == ["THE 3RD FLOOR IS A VOLCANIC REGION."]  # deduped, exclamation excluded
+
+
+def test_split_dense_beats_splits_a_beat_with_too_many_payoff_lines():
+    """Frozen Player's floor-count exchange verbatim: 7 panels, 4 distinct facts, one beat
+    landed exactly one of them — not starved (69 words), just overloaded."""
+    from manhwa2vid.script.grounding import split_dense_beats
+
+    cards = [
+        _card("p0017_02", page_text='"AFTER THAT THE PLAYERS OF THE WORLD GATHERED."'),
+        _card("p0017_07", page_text='Deok-gu: "THERE ARE 10 TOTAL FLOORS IN THE TOWER."'),
+        _card("p0017_10", page_text='Jun-Ho: "THEY SHOULD BE AT THE SEVENTH FLOOR BY NOW."'),
+        _card("p0019_02", page_text='Jun-Ho: "YOU ONLY BEAT THE SECOND FLOOR?"'),
+        _card("p0019_12", page_text='Deok-gu: "THE THIRD FLOOR IS A VOLCANIC REGION."'),
+    ]
+    beat = ScriptOutlineBeat(
+        beat_id=1,
+        panel_ids=["p0017_02", "p0017_07", "p0017_10", "p0019_02", "p0019_12"],
+        plot_beat="the floor-count exchange",
+    )
+    out = split_dense_beats([beat], cards, max_quotes_per_beat=2)
+    assert len(out) > 1, "a 5-payoff beat must split rather than ship one line"
+    # Pure re-partition: panels keep their order, none created or lost.
+    assert [p for b in out for p in b.panel_ids] == beat.panel_ids
+    assert [b.beat_id for b in out] == list(range(1, len(out) + 1))
+    for b in out:
+        from manhwa2vid.script.grounding import quoted_lines_for_panels
+        assert len(quoted_lines_for_panels(b.panel_ids, cards)) <= 2
+
+
+def test_split_dense_beats_leaves_a_beat_within_budget_alone():
+    from manhwa2vid.script.grounding import split_dense_beats
+
+    cards = [
+        _card("p1", page_text='Deok-gu: "THE 3RD FLOOR IS A VOLCANIC REGION."'),
+        _card("p2", action="he nods"),
+    ]
+    beat = ScriptOutlineBeat(beat_id=1, panel_ids=["p1", "p2"], plot_beat="x")
+    out = split_dense_beats([beat], cards, max_quotes_per_beat=2)
+    assert out == [beat]
