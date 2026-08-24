@@ -104,3 +104,39 @@ def test_orphaned_beat_reported_in_qa(tmp_path: Path) -> None:
     report = json.loads((tmp_path / "qa.timeline.json").read_text())
     gates = {g["name"]: g for g in report["gates"]}
     assert gates["beat-panels-missing"]["status"] == WARN
+
+
+def _pace_gate(tmp_path: Path, *, words: int, seconds: float, target_wpm: float) -> dict:
+    """Run the timeline QA and return the narration-pace gate."""
+    import json
+
+    audio = tmp_path / "audio"
+    audio.mkdir(exist_ok=True)
+    _wav(audio / "beat_001.wav", seconds)
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p0001_01"], narration=" ".join(["w"] * words))]
+    panels = [_panel("p0001_01", 1)]
+    config = {**_config(), "script": {"target_wpm": target_wpm}}
+    timeline = build_timeline(beats, panels, audio, config)
+    paths = project_paths(tmp_path)
+    _enforce_timeline_qa(beats, panels, timeline, paths, config)
+    report = json.loads((tmp_path / "qa.timeline.json").read_text())
+    return {g["name"]: g for g in report["gates"]}["narration-pace"]
+
+
+def test_narration_pace_warns_when_the_voice_misses_its_budget(tmp_path: Path) -> None:
+    """The defect this exists for: Kokoro delivered ~171 WPM while the script was
+    budgeted at 235, so every panel dwelled a third too long and the video ran 55%
+    longer than the reference. `tts.kokoro_speed` and `script.target_wpm` live in
+    disjoint code paths and nothing compared them, so a 30% miss shipped unnoticed."""
+    # 100 words over 35s = 171 WPM against a 235 budget — the shipped FP numbers.
+    gate = _pace_gate(tmp_path, words=100, seconds=35.0, target_wpm=235)
+    assert gate["status"] == WARN
+    assert gate["data"]["actual_wpm"] == pytest.approx(171, abs=3)
+    assert "235" in gate["details"]
+
+
+def test_narration_pace_passes_when_delivered_rate_matches(tmp_path: Path) -> None:
+    # 100 words over 25.5s = 235 WPM — what kokoro_speed 1.35 is meant to produce.
+    gate = _pace_gate(tmp_path, words=100, seconds=25.5, target_wpm=235)
+    assert gate["status"] == PASS
+    assert gate["details"] == ""

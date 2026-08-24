@@ -189,7 +189,16 @@ tts:
   provider: kokoro      # kokoro | chatterbox | openai | mock
   # Kokoro (Apache-2.0, 82M, preset voices — cannot clone a reference voice):
   kokoro_voice: am_adam # see hexgrad/Kokoro-82M VOICES.md (am_* = American male)
-  kokoro_speed: 1.0     # synthesis-time rate, NOT a time-stretch — no atempo artifacts
+  # 1.35 because Kokoro at 1.0 delivers ~171 WPM, while script.target_wpm (235) is what
+  # curate.words_per_shown_panel budgets panels from — so the pipeline planned 9.79 words
+  # into 2.5s that actually took 3.4s to say, and every panel dwelled ~36% too long. The
+  # reference channel runs 232 WPM measured over the same two chapters (964 words /
+  # 248.9s); 171 x 1.35 lands there, which makes target_wpm TRUE rather than aspirational.
+  # Raised the voice to meet the constant rather than lowering the constant to meet the
+  # voice: the latter would have grown the panel budget ~37% and merged more beats,
+  # making the slideshow feel worse. The narration-pace gate now measures the delivered
+  # rate so this can never silently drift again.
+  kokoro_speed: 1.35    # synthesis-time rate, NOT a time-stretch — no atempo artifacts
   kokoro_lang: a        # 'a' = American English
   # Chatterbox-only settings below:
   device: cuda          # cuda | cpu | mps — auto-detects if omitted

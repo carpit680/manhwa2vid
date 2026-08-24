@@ -126,6 +126,40 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
         dropped=timeline.dropped_panels,
     )
 
+    # Does the voice actually speak at the rate the script was PLANNED for?
+    #
+    # Nothing measured this, and the answer was no by 30%. `script.target_wpm` (235) is
+    # what curate.words_per_shown_panel budgets panels from, but the TTS delivered ~171,
+    # so the pipeline planned 9.79 words into 2.5s of screen time that really took 3.4s —
+    # every panel dwelled a third too long and the whole video ran 55% longer than the
+    # reference for the same chapters. The two values live in completely disjoint code
+    # paths (`tts.kokoro_speed` only affects synthesis; `target_wpm` only affects script
+    # planning) and nothing reconciled them, which is exactly why the miss was invisible.
+    # This is the reconciliation: the one place where planned and delivered rate can be
+    # compared, because it is the first point at which real audio exists.
+    total_words = sum(len(b.narration.split()) for b in beats)
+    total_seconds = sum(e.duration for e in timeline.entries)
+    target_wpm = float(get_nested(config, "script", "target_wpm", default=235))
+    tolerance = float(get_nested(config, "qa", "pace_tolerance", default=0.15))
+    if total_words and total_seconds > 0 and target_wpm > 0:
+        actual_wpm = total_words / (total_seconds / 60.0)
+        drift = abs(actual_wpm - target_wpm) / target_wpm
+        report.add(
+            "narration-pace",
+            True if drift <= tolerance else "warn",
+            (
+                f"narration delivers {actual_wpm:.0f} WPM but the script was budgeted at "
+                f"{target_wpm:.0f} ({drift:.0%} off) — panel dwell and total runtime are "
+                "planned from target_wpm, so they are wrong by the same factor; adjust "
+                "tts.kokoro_speed (or target_wpm) until they agree"
+            )
+            if drift > tolerance else "",
+            actual_wpm=round(actual_wpm, 1),
+            target_wpm=target_wpm,
+            words=total_words,
+            seconds=round(total_seconds, 1),
+        )
+
     orphan_beats = [
         b.beat_id for b in beats if b.panel_ids and not any(pid in panel_map for pid in b.panel_ids)
     ]
