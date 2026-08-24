@@ -2146,3 +2146,40 @@ def test_anchor_restore_never_replaces_a_plural_they():
     out = enforce_mc_name_budget(beats, bible, {"script": {"mc_anchor_every_beats": 2}})
     assert "they all agree" in out[1].narration
     assert "Jun-Ho all agree" not in out[1].narration
+
+
+def test_casual_epithet_is_register_not_slang_or_aside():
+    """Three mechanisms used to fight over one word. config.yaml documents that the
+    reference runs ~8 casual epithets per 1k ("bro", "the guy") and that reading them as
+    slang was "the error that made our narration read like a report" — yet _ASIDE_RE
+    capped them at max_narrator_asides (triggering a rewrite to strip them) while
+    scorecard._SLANG put a ceiling on them. Meanwhile the voice bands FLOOR the very
+    thing they were suppressing."""
+    from manhwa2vid.models import SeriesBible
+    from manhwa2vid.script.lint import lint_aside_overuse
+    from manhwa2vid.script.scorecard import _CASUAL_EPITHETS, _SLANG, score_script
+
+    assert "bro" not in _SLANG, "a casual epithet is register, not slang"
+    assert "bro" in _CASUAL_EPITHETS
+
+    # Reference-rate epithet use no longer trips the aside cap...
+    beats = [
+        ScriptBeat(beat_id=1, panel_ids=["p1"], narration="Bro walks into the gate."),
+        ScriptBeat(beat_id=2, panel_ids=["p2"], narration="Bro barely closes his fist."),
+        ScriptBeat(beat_id=3, panel_ids=["p3"], narration="The guy signs the contract anyway."),
+    ]
+    assert lint_aside_overuse(beats, {"script": {"max_narrator_asides": 1}}) == {}
+
+    # ...but genuine first-person intrusion still does (the lint counts BEATS carrying
+    # an aside, so two are needed to exceed a cap of one).
+    intrusive = [
+        ScriptBeat(beat_id=1, panel_ids=["p1"], narration="I mean, he wins."),
+        ScriptBeat(beat_id=2, panel_ids=["p2"], narration="Honestly, ngl that was rough."),
+    ]
+    assert 2 in lint_aside_overuse(intrusive, {"script": {"max_narrator_asides": 1}})
+
+    # And the register is now MEASURED rather than merely permitted.
+    report = score_script(beats, SeriesBible(series_slug="s", title="S"), {})
+    gates = {g.name: g for g in report.gates}
+    assert gates["casual_epithets_per_1k"].data["value"] > 0
+    assert gates["slang_per_1k"].data["value"] == 0

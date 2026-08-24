@@ -33,6 +33,12 @@ BANDS: dict[str, tuple[float | None, float | None, float | None]] = {
     # a report. Floors, not ceilings: too FEW is the failure mode here.
     "similes_per_1k": (0.7, None, 2.0),
     "evaluative_asides_per_1k": (3.0, None, 8.2),
+    # Casual epithets for the protagonist ("bro", "the guy", "our man") in place of
+    # his name. Deliberately its own FLOOR rather than part of the slang ceiling: the
+    # reference runs 0.07 slang per 1k but 8.2 of these, and collapsing the two is the
+    # documented error that flattened the voice. Floored low because the register is
+    # right for an action title and wrong for a solemn one — genz_level tunes it.
+    "casual_epithets_per_1k": (1.0, None, 8.2),
     "time_markers_per_1k": (4.0, None, 13.3),
     "short_sentence_fraction": (0.12, None, 0.23),
     "register_verbs_total": (None, 0.0, 0.0),
@@ -99,7 +105,12 @@ def _pronoun_start_fraction(beats) -> float:
 
 _DIALOGUE_VERBS = ("says", "asks", "tells", "replies", "answers", "explains", "admits",
                    "snaps", "mutters", "warns", "begs", "shouts", "whispers")
-_SLANG = ("ngl", "lowkey", "highkey", "bro", "bruh", "sus", "vibe", "vibes")
+# "bro" is NOT here on purpose. The reference measures 0.07 slang per 1k but 8.2 casual
+# epithets per 1k for the protagonist — those are register, not slang, and conflating
+# them is the documented error (config.yaml) that made our narration read like a report.
+# Counting it as slang put a ceiling on the one device the voice floors below depend on.
+_SLANG = ("ngl", "lowkey", "highkey", "bruh", "sus", "vibe", "vibes")
+_CASUAL_EPITHETS = ("bro", "dude", "our guy", "our man", "the guy", "the kid")
 _HEDGES = ("maybe", "probably", "possibly", "seems", "appears", "might")
 _ANON = (r"\ba man\b", r"\banother man\b", r"\bsomeone\b", r"\btwo people\b",
          r"\ba woman\b", r"\ba group of people\b", r"\ba crowd\b", r"\ba person\b")
@@ -203,6 +214,7 @@ def score_script(
         "anonymous_agents_per_1k": sum(len(re.findall(p, text.lower())) for p in _ANON) / n * 1000,
         "similes_per_1k": len(_SIMILE_RE.findall(text)) / n * 1000,
         "evaluative_asides_per_1k": len(_EVAL_RE.findall(text)) / n * 1000,
+        "casual_epithets_per_1k": _rate(text, n, *_CASUAL_EPITHETS),
         "time_markers_per_1k": len(_TIME_MARK_RE.findall(text)) / n * 1000,
         "short_sentence_fraction": _short_sentence_fraction(beats),
         "register_verbs_total": float(len(_REGISTER_RE.findall(text))),

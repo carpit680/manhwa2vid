@@ -43,8 +43,16 @@ _HEDGE_PATTERNS = [
 _HEDGE_RE = re.compile("|".join(_HEDGE_PATTERNS), re.I)
 
 # Soft first-person narrator aside signals
+# What this counts is FIRST-PERSON intrusion and verbal filler — a narrator stepping
+# out of the story to address you as himself. It deliberately does NOT count "bro":
+# config.yaml documents that the reference runs ~8 casual epithets per 1k ("bro", "the
+# guy") and that reading those as slang was "the error that made our narration read like
+# a report". Counting it here capped it at max_narrator_asides (4) and triggered a
+# rewrite to remove the exact register we are trying to reproduce — while the scorecard
+# simultaneously floors the evaluative asides it is named after. Three mechanisms, one
+# word, opposite directions.
 _ASIDE_RE = re.compile(
-    r"\b(ngl|no cap|lowkey|i mean|wait|bro|honestly)\b"
+    r"\b(ngl|no cap|lowkey|i mean|wait|honestly)\b"
     r"|\band look\b"
     r"|\b(i'm|i am|i just)\b",
     re.I,

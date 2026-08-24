@@ -114,7 +114,9 @@ script:
   max_narrator_asides: 4  # the 0.24 first-person per 1k measurement means the narrator
                           # never says "I" — NOT that he has no voice. He runs 8.2
                           # evaluative asides and 2.0 similes per 1k.
-  casual_mc_epithet: true # allow one vivid casual label for the protagonist
+  # (casual_mc_epithet removed: it was read nowhere in src/, and genz_level already tunes
+  # the same thing. The register itself is now asked for in recap.txt and MEASURED by
+  # scorecard's casual_epithets_per_1k floor, which is what a knob should have been.)
   beats_per_chapter: 14 # beat budget scales with chapters (from pages/sources.json);
                         # golds and the reference channel all measure ~12-17/chapter
   min_beats: 10
