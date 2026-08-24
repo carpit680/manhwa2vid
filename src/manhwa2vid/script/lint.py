@@ -634,6 +634,7 @@ def beat_word_cap(
     *,
     n_beats: int = 0,
     n_chapters: int = 1,
+    payload_lines: int = 0,
 ) -> int:
     """The single source of truth for a beat's word budget.
 
@@ -644,6 +645,25 @@ def beat_word_cap(
     an emergent accident of beats x panel density. words_per_chapter (measured: the
     reference channel ~490/chapter, the two golds 525 and 677) makes runtime a chosen
     number, since narration is audio-locked and word count IS runtime.
+
+    `payload_lines` then raises a FLOOR under all three, because every force above
+    measures a beat's screen time and none of them measures what the beat has to SAY. A
+    panel showing empty scenery and a panel printing three plot-critical system messages
+    cost the same dwell and got the same budget. Frozen Player shipped exactly that
+    contradiction: `split_dense_beats` isolated the panel carrying "an altar in the sea
+    of lava" and "that altar requires the Frost Queen's nucleus" into its own beat, whose
+    1-panel budget is 16 words — so `trim_overlong_beats` popped both payoff sentences
+    off the tail, and `lint_dropped_dialogue` re-flagged the beat it had just fixed,
+    every round, forever. The cap was not merely tight, it was UNSATISFIABLE: below even
+    the two-sentence floor trim refuses to cut past, so the cap decided nothing and the
+    truncation point was arbitrary.
+
+    10 words per required line is not a new tunable: `words_per_beat` (40, measured from
+    both golds and the reference channel) over the measured median of 4 distinct quoted
+    lines per beat on both test titles. It lands within 1% of `words_per_shown_panel`
+    (~9.9, derived independently from target_wpm x target_panel_seconds), which is the
+    cross-check that it describes the same underlying speech rate. Still bounded by
+    `max_beat_words`, so a pathologically chatty beat cannot mint runtime.
     """
     per_panel = int(get_nested(config, "script", "words_per_panel_target", default=14))
     ceiling = int(get_nested(config, "script", "max_beat_words", default=60))
@@ -652,12 +672,16 @@ def beat_word_cap(
         per_chapter = int(get_nested(config, "script", "words_per_chapter", default=550))
         share = round(per_chapter * max(1, n_chapters) / n_beats * 1.2)
         cap = min(cap, max(20, share))
+    if payload_lines > 0:
+        per_line = int(get_nested(config, "script", "words_per_required_line", default=10))
+        cap = max(cap, min(ceiling, payload_lines * per_line))
     return cap
 
 
 def trim_overlong_beats(
     beats: list[ScriptBeat],
     config: dict[str, Any],
+    scene_cards: list[SceneCard] | None = None,
 ) -> list[ScriptBeat]:
     """Enforce the per-beat word cap by dropping trailing sentences.
 
@@ -666,11 +690,21 @@ def trim_overlong_beats(
     ignores it (4 flagged -> 3 still flagged). Trailing sentences are where the padding
     accumulates — the beat's own point is made first. Always keeps at least two
     sentences so a beat is never gutted.
+
+    `scene_cards` is what stops this from deleting the very lines another gate demands:
+    without them a beat's budget is blind to its dialogue load, and the tail this cuts
+    from is exactly where a rewrite appends a newly-landed payoff (see `beat_word_cap`).
     """
     out: list[ScriptBeat] = []
     n_chapters = int(config.get("_n_chapters", 1)) if isinstance(config, dict) else 1
     for beat in beats:
-        limit = beat_word_cap(len(beat.panel_ids), config, n_beats=len(beats), n_chapters=n_chapters)
+        payload = (
+            len(quoted_lines_for_panels(beat.panel_ids, scene_cards)) if scene_cards else 0
+        )
+        limit = beat_word_cap(
+            len(beat.panel_ids), config, n_beats=len(beats), n_chapters=n_chapters,
+            payload_lines=payload,
+        )
         hard = int(limit * 1.35)
         sentences = [s for s in _SENTENCE_SPLIT_RE.split(beat.narration.strip()) if s.strip()]
         if len(beat.narration.split()) <= hard or len(sentences) <= 2:
@@ -779,14 +813,25 @@ def lint_pronoun_monotony(beats: list[ScriptBeat]) -> dict[int, list[str]]:
 def lint_overlong_beats(
     beats: list[ScriptBeat],
     config: dict[str, Any],
+    scene_cards: list[SceneCard] | None = None,
 ) -> dict[int, list[str]]:
     """A beat's words are paid for in screen time by its panels; over budget = long
-    static dwells. Flag with the concrete ceiling so the rewrite knows the target."""
+    static dwells. Flag with the concrete ceiling so the rewrite knows the target.
+
+    Shares `trim_overlong_beats`' payload-aware budget so the two never disagree: a beat
+    told to land three system messages must not also be told it is overlong for doing so.
+    """
     # Allow some slack over the authoring target before forcing a rewrite.
     report: dict[int, list[str]] = {}
     n_chapters = int(config.get("_n_chapters", 1)) if isinstance(config, dict) else 1
     for beat in beats:
-        limit = beat_word_cap(len(beat.panel_ids), config, n_beats=len(beats), n_chapters=n_chapters)
+        payload = (
+            len(quoted_lines_for_panels(beat.panel_ids, scene_cards)) if scene_cards else 0
+        )
+        limit = beat_word_cap(
+            len(beat.panel_ids), config, n_beats=len(beats), n_chapters=n_chapters,
+            payload_lines=payload,
+        )
         words = len(beat.narration.split())
         if words > int(limit * 1.35):
             report[beat.beat_id] = [f"overlong:cut_to_{limit}_words"]
@@ -2279,7 +2324,7 @@ def lint_beats(
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     for beat_id, issues in lint_pronoun_monotony(beats).items():
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
-    for beat_id, issues in lint_overlong_beats(beats, config).items():
+    for beat_id, issues in lint_overlong_beats(beats, config, scene_cards).items():
         report[beat_id] = list(dict.fromkeys([*report.get(beat_id, []), *issues]))
     if bible and attribution is not None:
         for beat_id, issues in lint_mc_attribution(beats, bible, attribution, config).items():

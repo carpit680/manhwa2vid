@@ -1207,6 +1207,58 @@ def test_beat_word_cap_chapter_budget():
     assert beat_word_cap(12, config) == 60
 
 
+def test_beat_word_cap_floors_on_the_beats_dialogue_payload():
+    """A 1-panel beat gets a 16-word budget from screen time alone — unsatisfiable for a
+    panel printing three plot-critical lines, and below the two-sentence floor
+    trim_overlong_beats refuses to cut past, so the cap decided nothing and the
+    truncation point was arbitrary."""
+    from manhwa2vid.script.lint import beat_word_cap
+
+    config = {"script": {"words_per_panel_target": 14, "max_beat_words": 60, "words_per_chapter": 550}}
+    assert beat_word_cap(1, config, n_beats=26, n_chapters=2) == 16
+    assert beat_word_cap(1, config, n_beats=26, n_chapters=2, payload_lines=3) == 30
+    # Never below what screen time already bought, and never above the ceiling.
+    assert beat_word_cap(12, config, payload_lines=1) == 60
+    assert beat_word_cap(1, config, n_beats=26, n_chapters=2, payload_lines=99) == 60
+
+
+def test_trim_keeps_a_payoff_line_the_dialogue_gate_demands():
+    """The exact Frozen Player loop: split_dense_beats isolated the panel carrying the
+    altar/nucleus reveal into its own beat, the 1-panel cap trimmed both payoff sentences
+    off the tail, and lint_dropped_dialogue re-flagged the beat it had just fixed — every
+    round, forever. Passing the cards is what breaks the loop."""
+    from manhwa2vid.models import SceneCard
+    from manhwa2vid.script.lint import trim_overlong_beats
+
+    cards = [
+        SceneCard(
+            panel_ids=["p0019_13"],
+            action="he looks down",
+            source_text=(
+                'Deok-gu: "ONLY A HANDFUL OF PLAYERS THAT CAN RESIST THE HEAT OF THE MAGMA CAN EXPLORE." / '
+                'Deok-gu: "WE WERE ABLE TO FIND AN ALTAR IN THE MIDDLE OF THE SEA OF LAVA." / '
+                'Deok-gu: "THAT ALTAR REQUIRES THE FROST QUEEN\'S NUCLEUS TO COOL DOWN THE ENVIRONMENT."'
+            ),
+        ),
+    ]
+    landed = (
+        "Deok-gu explains that only players who can resist the magma are able to explore. "
+        "They found an altar in the sea of lava. "
+        "It needs the Frost Queen's nucleus to cool the region."
+    )
+    config = {"script": {"words_per_panel_target": 14, "max_beat_words": 60, "words_per_chapter": 550}}
+    beats = [ScriptBeat(beat_id=i, panel_ids=["pX"], narration="Filler one. Filler two.") for i in range(1, 26)]
+    beats.insert(20, ScriptBeat(beat_id=21, panel_ids=["p0019_13"], narration=landed))
+
+    kept = [b for b in trim_overlong_beats(beats, config, cards) if b.beat_id == 21][0].narration
+    assert "nucleus" in kept, "the highest-priority payoff must survive the word cap"
+    assert "altar" in kept
+
+    # Payload-blind (the old behavior) deletes the nucleus line — the regression itself.
+    blind = [b for b in trim_overlong_beats(beats, config, None) if b.beat_id == 21][0].narration
+    assert "nucleus" not in blind
+
+
 def test_grammar_pass_with_fake_tool():
     """Single-replacement grammar findings auto-apply; multi-candidate ones route to the
     rewrite as issues. No Java needed — the tool is injected."""

@@ -113,13 +113,18 @@ def _cast_context_for_beats(
         # Ceiling, because panels*rate has no upper bound: a 12-panel beat would get a
         # 168-word budget, which is a paragraph of screen-time debt. The measured
         # references (both golds, the reference channel) all sit near 40-45 words/beat.
+        from manhwa2vid.script.grounding import quoted_lines_for_panels
         from manhwa2vid.script.lint import beat_word_cap
 
+        # Same payload-aware budget the polish enforces. Telling the writer a 16-word
+        # ceiling for a beat that must land three system messages sets it up to fail a
+        # gate it was never given room to pass.
         max_words = beat_word_cap(
             len(beat.panel_ids),
             _cap_config if _cap_config is not None else {},
             n_beats=n_beats_total,
             n_chapters=n_chapters,
+            payload_lines=len(quoted_lines_for_panels(beat.panel_ids, cards)) if cards else 0,
         )
         # plot_beat is the SPINE, not metadata. It used to ride on the same line as
         # char_ids under an evidence block headed "narrate ONLY this", and the writer
@@ -1960,7 +1965,7 @@ def generate_script(
         bs = strip_appearance_descriptors(bs, bible)
         bs = dedupe_intra_beat_sentences(bs)
         bs = dedupe_cross_beat_sentences(bs)
-        bs = trim_overlong_beats(bs, config)
+        bs = trim_overlong_beats(bs, config, cards)
         bs = derive_key_panels(bs, cards)
         bs = strip_trailing_closer_sentence(bs)
         bs = enforce_mc_name_budget(bs, bible, config)
