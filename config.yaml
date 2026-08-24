@@ -220,7 +220,13 @@ tts:
   # voice: the latter would have grown the panel budget ~37% and merged more beats,
   # making the slideshow feel worse. The narration-pace gate now measures the delivered
   # rate so this can never silently drift again.
-  kokoro_speed: 1.05    # synthesis-time rate, NOT a time-stretch — no atempo artifacts
+  # 1.19, not the 1.05 a bench of concatenated text suggested: the real pipeline
+  # synthesises each BEAT to its own wav with padding between, so a single-blob
+  # calibration overstates the rate. Measured on the full 13-beat SL script:
+  # 1.05 -> 184 WPM, 1.14 -> 194, 1.19 -> 202. Calibrate the way the pipeline RUNS,
+  # not the way it is convenient to bench — the narration-pace gate is what caught
+  # the 16-WPM gap between the two.
+  kokoro_speed: 1.19    # synthesis-time rate, NOT a time-stretch — no atempo artifacts
   kokoro_lang: a        # 'a' = American English
   # Chatterbox-only settings below:
   device: cuda          # cuda | cpu | mps — auto-detects if omitted
