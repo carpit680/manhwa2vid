@@ -297,6 +297,9 @@ def series_paths(repo_root: Path, series_slug: str) -> dict[str, Path]:
         "scout_dir": scout,
         "scout_manifest": scout / "manifest.json",
         "story_map": base / "story_map.json",
+        #: Defect memory. The bible is already long-term memory for WHO is in the story;
+        #: this is the missing half — what has gone wrong telling it before.
+        "lessons_json": base / "lessons.json",
     }
 
 

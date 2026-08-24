@@ -166,6 +166,14 @@ script:
                             # Costs Kx narration tokens plus ~K viewer + 2(K-1) judge text
                             # calls; that is the price of not being flat. 1 disables.
   viewer_review: true
+  story_review: true        # storyboard reviewer: checks each candidate against the
+                            # chapter's real structure (time map, acts, and the scene
+                            # boundaries the ART prints). Replaces the pairwise script
+                            # judge, which split nearly every comparison because it saw
+                            # two narrations and no story.
+  story_review_rounds: 2    # corrective passes on the winner; survivors are gated AND
+                            # written to series/lessons.json so later runs start warned.
+  pairwise_script_judge: false
   narration_temperature: 0.9
   min_plot_coverage: 0.25   # fraction of a beat's outline plot_beat vocabulary that must
                             # survive into its narration; below this the beat is rewritten.

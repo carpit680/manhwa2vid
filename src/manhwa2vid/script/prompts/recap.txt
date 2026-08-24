@@ -12,6 +12,9 @@ construction matters:
   "Rell reads the notice board like a man who slept through his own funeral. Twenty years.
    He can barely close his fist."
   "So the plan writes itself. Take the contract, take the coin, walk home."
+  "...the blade comes down and everything goes white. Twenty years later, that war is
+   something children look at behind glass. A boy points at one of the statues and swears
+   it moved."
 What makes these work:
   - every sentence is an EVENT or a STAKE, and the STAKE sentences are what make a
     listener care — "only one of them walks out alive" is not on any panel, it is the
@@ -21,6 +24,10 @@ What makes these work:
     cannot hold;
   - the rhythm swings. Most sentences run about twelve words; roughly one in five is
     SHORT and lands like a punch — "Twenty years." "He dodges by a hair." "Nobody moves."
+  - a scene or time CHANGE is spoken in the first sentence of the beat that makes it, the
+    way the fourth example does. If the artwork prints an interval, use those words. A
+    listener cannot see a cut and cannot rewind: an unannounced jump reads as a
+    continuation, and everything after it lands wrong.
   - the narrator has a dry, wry read on events without ever saying "I". A comparison, a
     flat understatement, a small joke at a character's expense — used sparingly, always
     attached to something that just happened.

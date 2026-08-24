@@ -888,7 +888,12 @@ def _run_narration_pass(
     deterministic polish and panel-grounded audit as before. This ranks TELLING; verify.py
     still owns TRUTH.
     """
-    from manhwa2vid.script.judge import pick_best_script
+    from manhwa2vid.script.grounding import scene_boundaries
+    from manhwa2vid.script.lint import accept_rewrite as _accept_rewrite
+    from manhwa2vid.script.lint import rewrite_beat
+    from manhwa2vid.script.lessons import load_lessons, record_lessons
+    from manhwa2vid.script.story_review import issues_by_beat as story_issues
+    from manhwa2vid.script.story_review import review_story
     from manhwa2vid.script.viewer import issues_by_beat, review_script
 
     k = max(1, int(get_nested(config, "script", "narration_candidates", default=1)))
@@ -912,7 +917,32 @@ def _run_narration_pass(
         beats, missing, fallbacks, path = attempts[0]
         return beats, missing, fallbacks, path
 
+    # The storyboard's own cut points, computed deterministically (caption > flashforward
+    # anchor > page gap). This is what the judge never had: something to check against.
+    ff_panel = ""
+    try:
+        if paths is not None and paths["scene_story_map_json"].exists():
+            ff_panel = str(json.loads(paths["scene_story_map_json"].read_text())
+                           .get("last_flashforward_panel", "") or "")
+    except Exception:
+        ff_panel = ""
+    boundaries = scene_boundaries(outline_beats, cards or [], flashforward_panel=ff_panel)
+    from manhwa2vid.config import find_repo_root
+    from manhwa2vid.models import series_paths
+
+    series = series_paths(find_repo_root(), meta.series_slug)
+    lessons = load_lessons(series)
+    if boundaries:
+        console.print(
+            f"[dim]Storyboard: {len(boundaries)} scene/time boundary beat(s) "
+            f"{sorted(boundaries)}[/]"
+        )
+
     reports = [review_script(beats, hook, config) for beats, _, _, _ in attempts]
+    story = [
+        review_story(beats, synopsis, boundaries, config, lessons=lessons)
+        for beats, _, _, _ in attempts
+    ]
 
     def _liveliness(beats: list[ScriptBeat]) -> float:
         """Deterministic stand-in for "is this alive", from the reference-derived bands.
@@ -939,8 +969,22 @@ def _run_narration_pass(
         + _liveliness(beats)
         for r, (beats, _, _, _) in zip(reports, attempts)
     ]
-    texts = ["\n\n".join(b.narration for b in beats) for beats, _, _, _ in attempts]
-    winner, trace = pick_best_script(texts, config, tiebreak=scores)
+    # Rank on STRUCTURE first — fewest problems the reviewer could find against the
+    # storyboard — and only break ties with how much fun it was. A candidate that loses a
+    # listener at a time jump is not rescued by being punchy. The pairwise script judge
+    # used to decide this and split nearly every comparison it was given, because it saw
+    # two narrations and no story; it is off by default now.
+    problem_counts = [len(r.problems) if r else 0 for r in story]
+    order = sorted(range(len(attempts)), key=lambda i: (problem_counts[i], -scores[i], i))
+    winner = order[0]
+    trace = (
+        f"structural problems {problem_counts}; viewer+voice {[round(s, 1) for s in scores]}"
+    )
+    if get_nested(config, "script", "pairwise_script_judge", default=False):
+        from manhwa2vid.script.judge import pick_best_script
+
+        texts = ["\n\n".join(b.narration for b in beats) for beats, _, _, _ in attempts]
+        winner, trace = pick_best_script(texts, config, tiebreak=scores)
 
     if paths is not None:
         try:
@@ -964,7 +1008,40 @@ def _run_narration_pass(
         f"(scores {[round(s) for s in scores]}; {trace})"
     )
     beats, missing, fallbacks, path = attempts[winner]
-    report = reports[winner]
+
+    # Correct the winner against the storyboard BEFORE the viewer is asked whether it was
+    # fun. Structure first with the source, fun second without it: a listener who does not
+    # know the story has moved cannot enjoy what happens next. Bounded rounds — a reviewer
+    # that cannot fix something in two passes will not fix it in five, and every survivor
+    # is reported rather than hidden.
+    rounds = int(get_nested(config, "script", "story_review_rounds", default=2))
+    review = story[winner]
+    for round_no in range(rounds):
+        if review is None or review.sequence_ok or not review.problems:
+            break
+        pending = story_issues(review, beats)
+        if not pending:
+            break
+        console.print(
+            f"[cyan]Storyboard review:[/] round {round_no + 1}, fixing "
+            f"{len(pending)} beat(s) {sorted(pending)}"
+        )
+        beats = [
+            beat.model_copy(update={"narration": _accept_rewrite(
+                beat.narration,
+                rewrite_beat(beat, bible, attribution, config,
+                             issues=pending[beat.beat_id], scene_cards=cards),
+            )}) if beat.beat_id in pending else beat
+            for beat in beats
+        ]
+        review = review_story(beats, synopsis, boundaries, config, lessons=lessons)
+
+    if review is not None and review.problems:
+        survivors = [p.problem for p in review.problems if p.problem.strip()]
+        _STORY_RESIDUAL.extend(survivors)
+        record_lessons(series, survivors)
+
+    report = review_script(beats, hook, config) or reports[winner]
     if report is not None:
         # The winner's own complaints ride out as rewrite issues, phrased the way the
         # viewer put them — "a viewer could not tell who 'he' is here" carries a failure
@@ -980,6 +1057,9 @@ def _run_narration_pass(
 #: and threading a new return value through would touch every caller.
 _VIEWER_ISSUES: dict[int, list[str]] = {}
 _VIEWER_SCORE: list[int] = []
+#: Structural problems that outlived their corrective rounds — surfaced by a QA gate and
+#: written to the series lessons ledger so a later run starts forewarned.
+_STORY_RESIDUAL: list[str] = []
 
 
 def _narrate_once(
@@ -1887,6 +1967,50 @@ def generate_script(
     # several of those classes outright (ensure_first_mention_role, the restored MC
     # anchor), so the gate warned about beats the reader never sees a problem in. Say what
     # survived everything, which is the only number that means anything.
+    # Transition coverage against the storyboard's own cut list: a boundary beat whose
+    # first sentence carries no time or scene marker is reported. Deterministic counterpart
+    # to the reviewer — the reviewer owns the semantics, this guarantees the count is
+    # visible even if the reviewer call failed.
+    from manhwa2vid.script.grounding import scene_boundaries as _boundaries
+    from manhwa2vid.script.scorecard import _TIME_MARK_RE
+
+    _ffp = ""
+    try:
+        if paths["scene_story_map_json"].exists():
+            _ffp = str(json.loads(paths["scene_story_map_json"].read_text())
+                       .get("last_flashforward_panel", "") or "")
+    except Exception:
+        _ffp = ""
+    cuts = _boundaries(outline_beats, cards, flashforward_panel=_ffp)
+    unmarked = []
+    for beat in beats:
+        if beat.beat_id not in cuts:
+            continue
+        opener = re.split(r"(?<=[.!?])\s+", beat.narration.strip())[:1]
+        head = opener[0] if opener else ""
+        if not _TIME_MARK_RE.search(head) and not re.search(
+            r"\b(?:later|earlier|meanwhile|back (?:at|in)|elsewhere|now|then)\b", head, re.I
+        ):
+            unmarked.append(beat.beat_id)
+    final_report.add(
+        "transition-coverage",
+        True if not unmarked else "warn",
+        (f"{len(unmarked)} of {len(cuts)} scene/time boundary beat(s) open without saying "
+         f"the story moved: {unmarked} — a listener reads these as a continuation")
+        if unmarked else "",
+        boundaries=sorted(cuts), unmarked=unmarked,
+    )
+    if _STORY_RESIDUAL:
+        survived = list(_STORY_RESIDUAL)
+        _STORY_RESIDUAL.clear()
+        final_report.add(
+            "story-review",
+            "warn",
+            f"{len(survived)} structural problem(s) outlived their rewrite rounds: "
+            + "; ".join(s[:70] for s in survived[:3]),
+            problems=len(survived),
+        )
+
     residual = _story_findings(beats)
     if _VIEWER_SCORE:
         score = _VIEWER_SCORE[-1]

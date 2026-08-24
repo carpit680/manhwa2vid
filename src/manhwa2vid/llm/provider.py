@@ -519,6 +519,26 @@ class MockLLMProvider(LLMProvider):
     def complete(self, system: str, user: str, *, json_mode: bool = False) -> str:
         if json_mode:
             system_lower = system.lower()
+            if "checking a narration against the storyboard" in system:
+                # Flags any beat whose text follows a marked boundary without naming an
+                # interval, so the corrective loop can be exercised offline.
+                import re as _re
+
+                flagged = []
+                bounds = _re.findall(r"beat (\d+): ", user)
+                for bid in bounds[:3]:
+                    seg = user.split(f"[beat {bid}] ")
+                    body = seg[1].split("[beat")[0] if len(seg) > 1 else ""
+                    if not _re.search(r"\b(?:years?|hours?|days?) (?:later|earlier|ago)\b", body, _re.I):
+                        flagged.append({
+                            "beat_id": int(bid),
+                            "problem": "the story crosses a marked boundary without saying so",
+                            "fix_hint": "Open with: 'Twenty-five years later, ...'",
+                        })
+                return json.dumps({
+                    "transitions": flagged, "order_problems": [], "misportrayals": [],
+                    "sequence_ok": not flagged, "score": 9 if not flagged else 5,
+                })
             if "You are watching a recap video" in system:
                 # Deterministic stand-in for the viewer: complains when the narration
                 # never marks its time jumps, so fixtures can drive the loop offline.
