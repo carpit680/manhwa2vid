@@ -637,7 +637,7 @@ def split_dense_beats(
     beats: list[ScriptOutlineBeat],
     cards: list[SceneCard],
     *,
-    max_quotes_per_beat: int = 6,
+    max_quotes_per_beat: int = 5,
 ) -> list[ScriptOutlineBeat]:
     """Split a beat that carries more distinct payoff-worthy quoted lines than one beat
     can plausibly land.
@@ -653,22 +653,25 @@ def split_dense_beats(
     `lint_dropped_dialogue` kept firing on it every rewrite round for exactly this reason:
     the fix is room, not another instruction.
 
-    `max_quotes_per_beat` is deliberately high, not "however many a beat can obviously
-    hold": measured on both test titles, a beat carrying 4 distinct quoted lines is the
-    MEDIAN, not an outlier — ordinary back-and-forth dialogue racks up separate lines
-    fast, and most of that a competent beat compresses fine. 6 sits above that whole
-    normal range (SL: 2-9, FP: 1-10) and catches only the true tail, the beats a rewrite
-    has already proven it cannot salvage, not the beats that are merely talkative. A
-    first version set this at 2 and exploded a 24-beat FP script to 51 and an 11-beat SL
-    script to 24, degrading both (caught before landing). A second version set it at 7,
-    which left the floor-count beat itself unsplit — it landed exactly 7 quoted lines,
-    the threshold's own boundary — so the beat holding 3 of the 4 still-missing target
-    payoffs (volcanic 3rd floor, sea of lava, the altar's nucleus requirement) survived
-    intact and dropped every one of them again. See [[frozen-player-thin-beat-fix]] for
-    the general lesson repeated across both attempts: measure the real distribution
-    before setting a density threshold, the same rule `lint_plot_coverage` and
-    `lint_dropped_dialogue` already follow — and check the threshold isn't sitting
-    exactly on the one case it exists to catch.
+    `max_quotes_per_beat` took THREE calibrations to get right, and the same mistake
+    twice. Measured on both titles a beat carrying 4 distinct quoted lines is the MEDIAN,
+    not an outlier — ordinary back-and-forth racks up separate lines fast and a competent
+    beat compresses most of it fine.
+
+      - 2 was the first guess, made without measuring: it exploded a 24-beat FP script to
+        51 and an 11-beat SL script to 24, degrading both.
+      - 7 then left the floor-count beat unsplit at exactly 7 lines, ON the threshold, so
+        the beat holding three missing payoffs survived and dropped them all again.
+      - 6 was the same boundary error from the other side. Re-measured after the quote
+        scanner was fixed, the real distribution tops out at exactly 6 on BOTH titles
+        (FP max 6, SL max 6, median 4 each), so a `> 6` test never fired: the pass was a
+        complete no-op, and beat 17 kept cramming a celebration AND the dimensional
+        elevator that follows it into one 60-word beat, dropping the elevator every run.
+
+    5 splits exactly the three tail beats on each title and leaves the median well clear.
+    The rule this keeps re-teaching: measure the real distribution before setting a
+    density threshold, and then check the threshold is not sitting ON the case it exists
+    to catch.
 
     Greedy contiguous partition, panel by panel: a cut lands whenever the NEXT panel would
     push the running beat's distinct-quote count over `max_quotes_per_beat`. Panels are
