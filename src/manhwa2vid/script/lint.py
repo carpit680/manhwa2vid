@@ -2329,6 +2329,66 @@ def accept_rewrite(original: str, rewritten: str) -> str:
     return rewritten
 
 
+def restore_lost_required_lines(
+    beats: list[ScriptBeat],
+    verified: dict[int, str],
+    required_by_beat: dict[int, list[str]],
+    *,
+    min_ratio: float = 0.3,
+) -> tuple[list[ScriptBeat], dict[int, list[str]]]:
+    """Put back any beat that LOST a required line somewhere downstream.
+
+    The one choke point for a bug class that has now appeared five separate times in this
+    pipeline, each time in a different pass, each time invisible because every individual
+    step looked locally reasonable:
+
+      1. `trim_overlong_beats` popping a just-landed payoff off the tail (panel-count cap)
+      2. `rewrite_voice` stripping system messages in the name of rhythm
+      3. the alignment audit rewriting a beat and dropping its system line
+      4. `strip_trailing_closer_sentence` deleting a forward thesis
+      5. the quote scanner losing lines before anything even asked for them
+
+    Guarding each pass individually loses: three were fixed that way and a fourth
+    appeared immediately. `accept_rewrite` cannot cover it either, because it only
+    compares WELL-FORMEDNESS between two candidates and knows nothing about which lines
+    the beat is obliged to carry.
+
+    So this runs LAST, over the shipped text, against a snapshot taken at the point where
+    required lines were last verified. Per beat: if the shipped version lands fewer
+    required lines than the snapshot did, the snapshot wins. Any future pass is covered
+    automatically, including ones not written yet.
+
+    Returns the reconciled beats and a report of what was restored, so a silent revert is
+    impossible — a beat needing this means some pass upstream is still lossy and should
+    be fixed at its source.
+    """
+    def landed(text: str, lines: list[str]) -> set[str]:
+        tokens = _stemmed_words(text)
+        out: set[str] = set()
+        for line in lines:
+            lt = _stemmed_words(line)
+            if lt and len(lt & tokens) / len(lt) >= min_ratio:
+                out.add(line)
+        return out
+
+    restored: dict[int, list[str]] = {}
+    out_beats: list[ScriptBeat] = []
+    for beat in beats:
+        prior = verified.get(beat.beat_id)
+        req = required_by_beat.get(beat.beat_id) or []
+        if not prior or not req:
+            out_beats.append(beat)
+            continue
+        had, now = landed(prior, req), landed(beat.narration, req)
+        lost = had - now
+        if lost:
+            restored[beat.beat_id] = sorted(lost)
+            out_beats.append(beat.model_copy(update={"narration": prior}))
+        else:
+            out_beats.append(beat)
+    return out_beats, restored
+
+
 def keeps_landed_lines(
     original: str,
     rewritten: str,

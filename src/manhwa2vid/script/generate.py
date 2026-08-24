@@ -1707,6 +1707,7 @@ def generate_script(
         lint_time_shift_marker,
         lint_unanchored_opening,
         required_lines_for_beat,
+        restore_lost_required_lines,
         rewrite_beat as _rewrite_beat,
     )
 
@@ -1821,6 +1822,11 @@ def generate_script(
             else:
                 recovered.append(beat)
         beats = recovered
+
+    # The last point at which required lines are known to be landed. Everything after
+    # this — the voice pass, the alignment audit, the deterministic polish, the grammar
+    # round — can and demonstrably does drop them, so keep a copy to reconcile against.
+    _verified_narration = {b.beat_id: b.narration for b in beats}
 
     # Voice LAST, once the facts have stopped moving. Every pass above changes WHAT a
     # beat says; this one changes only how it is delivered, so running it earlier would
@@ -2189,6 +2195,16 @@ def generate_script(
         )
         for b in beats
     }
+    # Reconcile before judging: restore any beat that LOST a required line downstream of
+    # the point where they were verified. See restore_lost_required_lines — this is the
+    # single choke point for a bug class that has surfaced in five different passes.
+    beats, _restored = restore_lost_required_lines(beats, _verified_narration, required_by_beat)
+    if _restored:
+        console.print(
+            f"[yellow]Restored:[/] {len(_restored)} beat(s) had a required line removed by a "
+            f"later pass and were reverted: {sorted(_restored)}"
+        )
+        dropped_dialogue = lint_dropped_dialogue(beats, cards, max_lines_per_beat=6)
     dropped_system = dropped_system_lines(beats, cards or [], dropped_dialogue, required_by_beat)
     final_report.add(
         "dialogue-delivery",

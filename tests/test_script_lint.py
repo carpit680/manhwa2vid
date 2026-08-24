@@ -2394,3 +2394,49 @@ def test_repair_broken_sentences_leaves_sound_narration_alone():
     ]:
         beat = ScriptBeat(beat_id=1, panel_ids=["p"], narration=text)
         assert repair_broken_sentences([beat])[0].narration == text, text
+
+
+def test_restore_lost_required_lines_is_the_choke_point():
+    """One guard for a bug class that surfaced in FIVE separate passes today, each time
+    invisible because every individual step looked locally reasonable: trim_overlong_beats
+    popping a landed payoff, rewrite_voice stripping system messages for rhythm, the
+    alignment audit dropping one in a rewrite, strip_trailing_closer_sentence deleting a
+    forward thesis, and the quote scanner losing lines outright. Guarding pass-by-pass
+    lost — three were fixed that way and a fourth appeared immediately."""
+    from manhwa2vid.script.lint import restore_lost_required_lines
+
+    req = {4: ["[YOUR BODY WILL GO INTO HIBERNATION UNTIL YOU HAVE FULLY ABSORBED THE NUCLEUS.]"]}
+    verified = {
+        4: ("The Frost Queen fades into light. A system prompt warns that his body will go "
+            "into hibernation until he has fully absorbed the nucleus."),
+    }
+    # A later pass rewrote it punchier and quietly dropped the system message.
+    beats = [ScriptBeat(beat_id=4, panel_ids=["p"], narration=(
+        "The Frost Queen fades into light. Our guy is not feeling the sentiment."))]
+
+    out, restored = restore_lost_required_lines(beats, verified, req)
+    assert restored == {4: req[4]}, "the loss must be reported, never silent"
+    assert out[0].narration == verified[4]
+
+
+def test_restore_leaves_a_beat_that_kept_its_lines():
+    """Polish that improves a beat without costing content is kept — the guard only
+    fires on LOSS, so it never undoes legitimate downstream work."""
+    from manhwa2vid.script.lint import restore_lost_required_lines
+
+    req = {4: ["[YOU HAVE ABSORBED THE NUCLEUS.]"]}
+    verified = {4: "A message says he has absorbed the nucleus."}
+    beats = [ScriptBeat(beat_id=4, panel_ids=["p"], narration=(
+        "A message says he has absorbed the nucleus. Bro is not okay."))]
+
+    out, restored = restore_lost_required_lines(beats, verified, req)
+    assert restored == {}
+    assert "Bro is not okay." in out[0].narration
+
+
+def test_restore_is_inert_without_a_snapshot_or_requirements():
+    from manhwa2vid.script.lint import restore_lost_required_lines
+
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p"], narration="He walks on.")]
+    assert restore_lost_required_lines(beats, {}, {}) == (beats, {})
+    assert restore_lost_required_lines(beats, {1: "Something else."}, {}) == (beats, {})
