@@ -85,3 +85,26 @@ def test_blind_candidate_loses_the_tournament(monkeypatch):
 def test_single_candidate_degrades_without_calling_a_judge():
     win, why = pick_best_script(["only one"], {})
     assert win == 0 and "single" in why
+
+
+def test_selection_prefers_the_livelier_candidate_when_the_viewer_cannot_separate_them():
+    """The viewer scored three visibly different candidates 6/10 each and the judge split
+    both comparisons, so selection fell through to index order and picked a flat draft.
+    A model's 1-10 score has no resolution here; the reference-derived voice measures do."""
+    import sys
+    sys.path.insert(0, "src")
+    from manhwa2vid.script.scorecard import _EVAL_RE, _short_sentence_fraction
+
+    flat = [ScriptBeat(beat_id=i, panel_ids=["p"], narration=(
+        "The group proceeds toward the location and the leader explains the situation "
+        "to the assembled members of the expedition.")) for i in range(1, 4)]
+    lively = [ScriptBeat(beat_id=1, panel_ids=["p"], narration=(
+        "Rell hits the floor hard. He barely gets up. The riders are in no hurry at all.")),
+        ScriptBeat(beat_id=2, panel_ids=["p"], narration=(
+            "Nobody moves. Vesh almost says something, then doesn't.")),
+        ScriptBeat(beat_id=3, panel_ids=["p"], narration="Twenty years. Just like that.")]
+
+    assert _short_sentence_fraction(lively) > _short_sentence_fraction(flat)
+    lively_text = " ".join(b.narration for b in lively)
+    flat_text = " ".join(b.narration for b in flat)
+    assert len(_EVAL_RE.findall(lively_text)) > len(_EVAL_RE.findall(flat_text))

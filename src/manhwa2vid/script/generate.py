@@ -913,7 +913,32 @@ def _run_narration_pass(
         return beats, missing, fallbacks, path
 
     reports = [review_script(beats, hook, config) for beats, _, _, _ in attempts]
-    scores = [float(r.score) if r else 0.0 for r in reports]
+
+    def _liveliness(beats: list[ScriptBeat]) -> float:
+        """Deterministic stand-in for "is this alive", from the reference-derived bands.
+
+        The viewer scored three visibly different candidates 6/10 each and the judge split
+        both comparisons, so selection fell through to index order and picked a flat draft
+        — the loop was choosing, but not for anything. A model's 1-10 score has no
+        resolution at this granularity; the voice measures do, and they are already
+        calibrated against the reference (short-sentence fraction 0.23, evaluative asides
+        8.2/1k). Scaled to sit alongside the viewer's score rather than swamp it, and its
+        complaints still dominate: a candidate a viewer got LOST in should not win for
+        being punchy.
+        """
+        from manhwa2vid.script.scorecard import _EVAL_RE, _short_sentence_fraction
+
+        text = " ".join(b.narration for b in beats)
+        words = max(1, len(text.split()))
+        evals = len(_EVAL_RE.findall(text)) / words * 1000
+        return min(_short_sentence_fraction(beats) / 0.23, 1.0) * 2.0 + min(evals / 8.2, 1.0) * 2.0
+
+    scores = [
+        (float(r.score) if r else 0.0)
+        - 1.5 * len(r.lost if r else [])
+        + _liveliness(beats)
+        for r, (beats, _, _, _) in zip(reports, attempts)
+    ]
     texts = ["\n\n".join(b.narration for b in beats) for beats, _, _, _ in attempts]
     winner, trace = pick_best_script(texts, config, tiebreak=scores)
 
