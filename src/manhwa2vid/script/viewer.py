@@ -46,8 +46,23 @@ class ViewerReport(BaseModel):
     lost: list[ViewerComplaint] = Field(default_factory=list)
     flat: list[ViewerComplaint] = Field(default_factory=list)
     best_moment: str = ""
-    score: int = 0
+    # Four independent 1-5 judgments instead of one scalar 1-10 score. Three visibly
+    # different candidates once scored a flat 6/10 each from a single scalar ask — an LLM
+    # has no resolution at that granularity, and the loop's ranking fell through to index
+    # order. Separate axes spread out where one number collapses, and each is legible on
+    # its own in the candidate logs.
+    followable: int = 3   # could a listener track who/when/where throughout
+    told_not_listed: int = 3  # events landed as a story, not a bulleted recitation
+    payoffs_landed: int = 3   # the chapter's key reveals/stakes actually registered
+    rhythm: int = 3           # sentence variety and pacing, not a monotone drone
     keep_watching: bool = True
+
+    @property
+    def score(self) -> float:
+        """Sum of the four sub-scores, scaled to the legacy 1-10 band (max 20 -> /2) so
+        the existing threshold (viewer-score >= 6) and ranking formula keep their meaning
+        without every caller needing to know the scale changed."""
+        return (self.followable + self.told_not_listed + self.payoffs_landed + self.rhythm) / 2.0
 
     @property
     def complaint_count(self) -> int:
@@ -75,8 +90,14 @@ you care. If a passage would fit unchanged in a Wikipedia summary, it is flat.
 For each, quote the EXACT words from the narration that made you feel it, and say why in
 one plain sentence, as a viewer would put it.
 
-Also name the single best moment, score the whole thing 1-10 on how much you enjoyed it,
-and say whether you would keep watching.
+Also name the single best moment, and rate FOUR separate things 1-5 (1=bad, 5=great) — do
+not just repeat the same number four times, they usually differ:
+- followable: could you track who/when/where the whole way through
+- told_not_listed: did it feel like a STORY, not a list of things that happened
+- payoffs_landed: did the big reveals/stakes actually land and register with you
+- rhythm: did the sentences vary in length and pace, or drone on the same way
+
+Say whether you would keep watching.
 
 Be honest and specific. A narration with no problems gets empty lists — do not invent
 complaints to seem useful.
@@ -84,7 +105,8 @@ complaints to seem useful.
 Return ONE JSON object:
 {"lost": [{"quote": "...", "why": "..."}],
  "flat": [{"quote": "...", "why": "..."}],
- "best_moment": "...", "score": 7, "keep_watching": true}"""
+ "best_moment": "...", "followable": 4, "told_not_listed": 3, "payoffs_landed": 4,
+ "rhythm": 3, "keep_watching": true}"""
 
 
 def as_listener_hears(beats: list[ScriptBeat], hook: str = "") -> str:

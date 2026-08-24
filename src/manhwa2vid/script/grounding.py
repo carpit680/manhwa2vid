@@ -487,6 +487,107 @@ def split_beats_at_transitions(
     return [b.model_copy(update={"beat_id": i}) for i, b in enumerate(out, start=1)]
 
 
+def consolidate_beats(
+    beats: list[ScriptOutlineBeat],
+    cards: list[SceneCard],
+    target_words: float,
+    *,
+    words_per_panel: float = 9.9,
+) -> list[ScriptOutlineBeat]:
+    """Merge adjacent same-scene beats until each holds enough panels to be tellable.
+
+    `split_beats_at_transitions` correctly refuses to let a beat straddle a printed time
+    cut, but it only ever ADDS beats — nothing re-merged the pieces afterwards, so a
+    chapter with many cuts (Frozen Player: 32 beats, median 24 words) ends up with beats
+    too thin to hold a stake sentence, a transition, AND the panel's own dialogue line.
+    25 of 32 FP beats were <=2 sentences; the writer could fit exactly one idea and kept
+    choosing the panel's picture over its line — six payoffs went missing because of this
+    shape, not because the writer ignored them (see script/passes.py).
+
+    A beat's word count isn't known until narration is written, so panel count stands in
+    for it via the same measured constant panel curation already uses
+    (words_per_shown_panel, script/curate.py) — no new tuning surface.
+
+    Never merges across a transition-caption cut (the reason the split exists) or across
+    a page gap, reusing the exact rule `preassign_outline_from_facts`'s own soft-cap merge
+    trusts (`b_lo - a_hi > 1`). Panels are never reordered or dropped: this is purely the
+    split's inverse, and it must run strictly after it so a merge can never re-straddle a
+    cut the split just created.
+    """
+    if len(beats) < 2:
+        return beats
+    cut_first_panels = set(transition_captions(cards).keys())
+
+    def est_words(panel_ids: list[str]) -> float:
+        return len(panel_ids) * words_per_panel
+
+    def page_range(panel_ids: list[str]) -> tuple[int, int]:
+        pages = [_panel_sort_key_local(pid)[0] for pid in panel_ids]
+        return min(pages), max(pages)
+
+    def merge_ok(beat_a: ScriptOutlineBeat, beat_b: ScriptOutlineBeat) -> bool:
+        if beat_b.panel_ids[0] in cut_first_panels:
+            return False  # this boundary IS a printed time cut
+        _, a_hi = page_range(beat_a.panel_ids)
+        b_lo, _ = page_range(beat_b.panel_ids)
+        return b_lo - a_hi <= 1
+
+    merged = list(beats)
+    blocked: set[str] = set()  # first panel id of beats with no safe merge partner
+    while len(merged) > 1:
+        thin_i = None
+        thin_words = target_words
+        for i, b in enumerate(merged):
+            if b.panel_ids[0] in blocked:
+                continue
+            w = est_words(b.panel_ids)
+            if w < thin_words:
+                thin_i, thin_words = i, w
+        if thin_i is None:
+            break
+        # Only ever merge two THIN beats together. Solo Leveling ch1 (14 beats, already
+        # at the reference's own median) regressed to 8 beats at a 54-word median the
+        # first time this ran a "merge whichever neighbor is thinner" rule: a run of
+        # small beats next to one already-adequate beat kept gluing themselves onto the
+        # adequate one, which just grows an already-fine beat past its budget instead of
+        # raising the floor where it is actually low. Requiring BOTH sides thin bounds
+        # every single merge to under 2x target_words and leaves an already-adequate
+        # neighbor alone.
+        options = []
+        if (
+            thin_i > 0
+            and merge_ok(merged[thin_i - 1], merged[thin_i])
+            and est_words(merged[thin_i - 1].panel_ids) < target_words
+        ):
+            options.append(thin_i - 1)
+        if (
+            thin_i < len(merged) - 1
+            and merge_ok(merged[thin_i], merged[thin_i + 1])
+            and est_words(merged[thin_i + 1].panel_ids) < target_words
+        ):
+            options.append(thin_i + 1)
+        if not options:
+            blocked.add(merged[thin_i].panel_ids[0])
+            continue
+        # Merge with whichever neighbor is itself thinner, so growth stays even.
+        j = min(options, key=lambda k: est_words(merged[k].panel_ids))
+        a, b = (thin_i, j) if thin_i < j else (j, thin_i)
+        beat_a, beat_b = merged[a], merged[b]
+        new_panels = sorted(dict.fromkeys([*beat_a.panel_ids, *beat_b.panel_ids]), key=_panel_sort_key_local)
+        combined = beat_a.model_copy(
+            update={
+                "panel_ids": new_panels,
+                "character_ids": list(dict.fromkeys([*beat_a.character_ids, *beat_b.character_ids])),
+                "plot_beat": " / ".join(p for p in [beat_a.plot_beat, beat_b.plot_beat] if p),
+                "required_context": list(dict.fromkeys([*beat_a.required_context, *beat_b.required_context])),
+                "is_closer": beat_a.is_closer or beat_b.is_closer,
+            }
+        )
+        merged = [*merged[:a], combined, *merged[b + 1 :]]
+
+    return [b.model_copy(update={"beat_id": i}) for i, b in enumerate(merged, start=1)]
+
+
 def scene_boundaries(
     beats: list[ScriptOutlineBeat],
     cards: list[SceneCard] | None = None,

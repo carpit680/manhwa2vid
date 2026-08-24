@@ -542,12 +542,17 @@ class MockLLMProvider(LLMProvider):
             if "You are watching a recap video" in system:
                 # Deterministic stand-in for the viewer: complains when the narration
                 # never marks its time jumps, so fixtures can drive the loop offline.
+                # followable is the axis that actually moves on the seeded defect; the
+                # other three stay fixed so a candidate's total score still separates
+                # cleanly without every axis needing its own offline heuristic.
                 first = user.strip().split(".")[0][:60]
                 marked = "years later" in user.lower() or "earlier," in user.lower()
                 lost = [] if marked else [{"quote": first, "why": "no idea when or where this is"}]
                 return json.dumps({
                     "lost": lost, "flat": [], "best_moment": first,
-                    "score": 9 if marked else 4, "keep_watching": marked,
+                    "followable": 5 if marked else 2,
+                    "told_not_listed": 4, "payoffs_landed": 4, "rhythm": 4,
+                    "keep_watching": marked,
                 })
             if "Pick the one a viewer would rather listen to" in system:
                 a = user.split("Candidate B:")[0]

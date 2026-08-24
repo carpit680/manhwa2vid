@@ -25,8 +25,10 @@ from manhwa2vid.models import (
     save_json,
 )
 from manhwa2vid.panels.filter import load_story_scene_cards
+from manhwa2vid.script.curate import words_per_shown_panel
 from manhwa2vid.script.grounding import (
     compact_panel_evidence,
+    consolidate_beats,
     evidence_for_panels,
     format_seeded_outline_for_prompt,
     preassign_outline_from_facts,
@@ -438,6 +440,8 @@ def _run_outline_pass(
     template = _load_prompt_template("outline.txt")
     max_beats = _target_beat_count(meta, paths, config)
     system = template.format(max_beats=max_beats)
+    words_per_beat = float(get_nested(config, "script", "words_per_beat", default=40))
+    words_per_panel = words_per_shown_panel(config)
 
     seeded = preassign_outline_from_facts(synopsis, cards, bible, max_beats=max_beats)
     # Beats must be contiguous runs in reading order, or two of them narrate one moment.
@@ -445,6 +449,9 @@ def _run_outline_pass(
     # A beat must not span a time cut the artwork prints — see split_beats_at_transitions.
     seeded = split_beats_at_transitions(seeded, cards)
     seeded = enforce_reading_order(seeded)
+    # The split above only ever adds beats; re-merge within-scene so beats have room to
+    # hold a transition, a stake sentence AND the panel's own dialogue line.
+    seeded = consolidate_beats(seeded, cards, words_per_beat, words_per_panel=words_per_panel)
     # Repartitioning can hand a beat panels its plot_beat never described; refresh it
     # before the plot becomes the MUST COVER spine of the narration prompt.
     seeded = refresh_plot_for_span(seeded, cards)
@@ -494,6 +501,7 @@ def _run_outline_pass(
             outline = _reconcile_outline_panels(seeded, outline)
             outline = split_beats_at_transitions(outline, cards)
             outline = enforce_reading_order(outline)
+            outline = consolidate_beats(outline, cards, words_per_beat, words_per_panel=words_per_panel)
             outline = refresh_plot_for_span(outline, cards)
             outline = inject_closer_evidence(outline, cards)
             if outline:
@@ -899,7 +907,13 @@ def _run_narration_pass(
     from manhwa2vid.script.lessons import load_lessons, record_lessons
     from manhwa2vid.script.story_review import issues_by_beat as story_issues
     from manhwa2vid.script.story_review import review_story
-    from manhwa2vid.script.viewer import issues_by_beat, review_script
+    from manhwa2vid.script.passes import (
+        is_dialogue_heavy_exposition,
+        rewrite_exposition,
+        rewrite_transition,
+        transition_needs_rework,
+    )
+    from manhwa2vid.script.viewer import beats_for_complaint, issues_by_beat, review_script
 
     k = max(1, int(get_nested(config, "script", "narration_candidates", default=1)))
     attempts: list[tuple[list[ScriptBeat], list[int], list[int], str]] = []
@@ -1013,6 +1027,25 @@ def _run_narration_pass(
         f"(scores {[round(s) for s in scores]}; {trace})"
     )
     beats, missing, fallbacks, path = attempts[winner]
+    by_id = {b.beat_id: i for i, b in enumerate(beats)}
+
+    # Targeted transition pass, BEFORE the storyboard review: a boundary beat that only
+    # marks a jump with no room left for a stake sentence reads as abrupt regardless of
+    # which candidate wins — logs show this in 100% of sampled candidates across two
+    # runs, so it is a shape defect, not something more sampling or a generic rewrite
+    # against an issue list can fix (see script/passes.py for the reference's 3-part move).
+    reworked = 0
+    for beat_id in sorted(boundaries):
+        idx = by_id.get(beat_id)
+        if idx is None or not transition_needs_rework(beats[idx]):
+            continue
+        prev_beat = beats[idx - 1] if idx > 0 else None
+        new_text = rewrite_transition(beats[idx], prev_beat, bible, attribution, config, scene_cards=cards)
+        if new_text.strip() != beats[idx].narration.strip():
+            beats[idx] = beats[idx].model_copy(update={"narration": new_text})
+            reworked += 1
+    if reworked:
+        console.print(f"[cyan]Transition pass:[/] rewrote {reworked} boundary beat(s) with the 3-part move")
 
     # Correct the winner against the storyboard BEFORE the viewer is asked whether it was
     # fun. Structure first with the source, fun second without it: a listener who does not
@@ -1048,10 +1081,34 @@ def _run_narration_pass(
 
     report = review_script(beats, hook, config) or reports[winner]
     if report is not None:
-        # The winner's own complaints ride out as rewrite issues, phrased the way the
-        # viewer put them — "a viewer could not tell who 'he' is here" carries a failure
-        # that a rule-shaped instruction loses.
+        # Targeted exposition pass: a "flat" complaint over dialogue-heavy world-lore
+        # panels is the world-history-textbook defect the lessons ledger has recorded
+        # repeatedly — a generic issue string never fixed it because the fix is a SHAPE
+        # (tell it through a person's reaction), not a rule. Other flat beats still ride
+        # out as a generic issue below; this only intercepts the diagnosable shape.
+        exposition_ids: set[int] = set()
+        for item in report.flat:
+            for beat_id in beats_for_complaint(item.quote, beats):
+                idx = by_id.get(beat_id)
+                if idx is not None and is_dialogue_heavy_exposition(beats[idx], cards or []):
+                    exposition_ids.add(beat_id)
+        for beat_id in sorted(exposition_ids):
+            idx = by_id[beat_id]
+            new_text = rewrite_exposition(beats[idx], bible, attribution, config, scene_cards=cards)
+            if new_text.strip() != beats[idx].narration.strip():
+                beats[idx] = beats[idx].model_copy(update={"narration": new_text})
+        if exposition_ids:
+            console.print(
+                f"[cyan]Exposition pass:[/] rewrote {len(exposition_ids)} flat beat(s) "
+                "through a person's reaction"
+            )
+        # The winner's remaining complaints ride out as rewrite issues, phrased the way
+        # the viewer put them — "a viewer could not tell who 'he' is here" carries a
+        # failure that a rule-shaped instruction loses. Beats the exposition pass just
+        # fixed are excluded so the story-integrity round does not re-litigate them.
         for beat_id, issues in issues_by_beat(report, beats).items():
+            if beat_id in exposition_ids:
+                continue
             _VIEWER_ISSUES.setdefault(beat_id, []).extend(issues)
         _VIEWER_SCORE.append(report.score)
     return beats, missing, fallbacks, f"{path} (best of {len(attempts)})"
@@ -1061,7 +1118,7 @@ def _run_narration_pass(
 #: Module-level because the narration pass and that round are separated by the QA gates,
 #: and threading a new return value through would touch every caller.
 _VIEWER_ISSUES: dict[int, list[str]] = {}
-_VIEWER_SCORE: list[int] = []
+_VIEWER_SCORE: list[float] = []
 #: Structural problems that outlived their corrective rounds — surfaced by a QA gate and
 #: written to the series lessons ledger so a later run starts forewarned.
 _STORY_RESIDUAL: list[str] = []
@@ -1604,6 +1661,7 @@ def generate_script(
     from manhwa2vid.script.lint import (
         lint_abstraction_drift,
         lint_ambiguous_pronoun,
+        lint_dropped_dialogue,
         lint_hook_grounding,
         lint_missing_introduction,
         lint_narration_order,
@@ -1652,6 +1710,7 @@ def generate_script(
             lint_plot_coverage(bs, plot_by_id_all, min_ratio=min_cov),
             {} if has_locked_cue else lint_time_shift_marker(bs, plot_by_id_all),
             lint_repeated_setting(bs, world_terms),
+            lint_dropped_dialogue(bs, cards),
             lint_abstraction_drift(bs, cards),
             lint_missing_introduction(bs, bible),
             lint_narration_order(bs, cards),
@@ -2005,6 +2064,15 @@ def generate_script(
         if unmarked else "",
         boundaries=sorted(cuts), unmarked=unmarked,
     )
+    dropped_dialogue = lint_dropped_dialogue(beats, cards)
+    final_report.add(
+        "dialogue-delivery",
+        True if not dropped_dialogue else "warn",
+        (f"{len(dropped_dialogue)} beat(s) still narrate a panel's picture while skipping "
+         f"its own quoted line after the rewrite rounds: {sorted(dropped_dialogue)}")
+        if dropped_dialogue else "",
+        dropped=sorted(dropped_dialogue),
+    )
     if _STORY_RESIDUAL:
         survived = list(_STORY_RESIDUAL)
         _STORY_RESIDUAL.clear()
@@ -2023,7 +2091,7 @@ def generate_script(
         final_report.add(
             "viewer-score",
             True if score >= 6 else "warn",
-            (f"the viewer scored the winning candidate {score}/10 — below 6 means a "
+            (f"the viewer scored the winning candidate {score:.1f}/10 — below 6 means a "
              "listener would not enjoy this even though every factual gate passed")
             if score < 6 else "",
             score=score, flagged_beats=viewer_flagged,

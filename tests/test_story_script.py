@@ -622,6 +622,59 @@ def test_lint_plot_coverage_ignores_empty_plot_beats():
     assert lint_plot_coverage(beats, {1: ""}) == {}
 
 
+def test_lint_dropped_dialogue_catches_a_missed_system_message():
+    """Frozen Player's central reveal sat verbatim in the card and the narration
+    described the hero's expression instead — narrated, not curated out, just skipped."""
+    from manhwa2vid.script.lint import lint_dropped_dialogue
+
+    cards = [
+        SceneCard(
+            panel_ids=["p0011_02"],
+            action="his eyes widen",
+            source_text='system: "[YOU HAVE COMPLETELY ABSORBED THE FROST QUEEN\'S NUCLEUS.]"',
+        ),
+    ]
+    beats = [
+        ScriptBeat(
+            beat_id=1,
+            panel_ids=["p0011_02"],
+            narration="His expression shifts as something changes within him.",
+        ),
+    ]
+    flagged = lint_dropped_dialogue(beats, cards)
+    assert 1 in flagged
+    assert "NUCLEUS" in flagged[1][0]
+
+
+def test_lint_dropped_dialogue_passes_when_the_line_lands():
+    from manhwa2vid.script.lint import lint_dropped_dialogue
+
+    cards = [
+        SceneCard(
+            panel_ids=["p0011_02"],
+            action="his eyes widen",
+            source_text='system: "[YOU HAVE COMPLETELY ABSORBED THE FROST QUEEN\'S NUCLEUS.]"',
+        ),
+    ]
+    beats = [
+        ScriptBeat(
+            beat_id=1,
+            panel_ids=["p0011_02"],
+            narration="A message flashes before him: he has fully absorbed the Frost Queen's nucleus.",
+        ),
+    ]
+    assert lint_dropped_dialogue(beats, cards) == {}
+
+
+def test_lint_dropped_dialogue_ignores_short_exclamations():
+    """A bare "WHAT?!" carries no payoff — flagging it would only add noise."""
+    from manhwa2vid.script.lint import lint_dropped_dialogue
+
+    cards = [SceneCard(panel_ids=["p1"], action="he recoils", source_text='"WHAT?!"')]
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p1"], narration="He staggers back.")]
+    assert lint_dropped_dialogue(beats, cards) == {}
+
+
 def test_refresh_plot_for_span_describes_the_whole_span():
     """enforce_reading_order gives a beat "everything from its own anchor up to the next
     beat's", so a beat can hold panels its plot_beat never described — and once plot_beat

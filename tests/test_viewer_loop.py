@@ -52,6 +52,23 @@ def test_viewer_complains_about_an_unmarked_jump(monkeypatch):
     assert blind.score < marked.score
 
 
+def test_per_criterion_scores_differentiate_where_a_scalar_could_not():
+    """The bug this fix targets: a single 1-10 ask scored three visibly different
+    candidates 6/10 each. Four independent 1-5 axes must be able to disagree with each
+    other and still sum to a legible total."""
+    strong = ViewerReport(followable=5, told_not_listed=5, payoffs_landed=4, rhythm=4)
+    weak = ViewerReport(followable=2, told_not_listed=2, payoffs_landed=3, rhythm=2)
+    assert strong.score == 9.0
+    assert weak.score == 4.5
+    assert strong.score > weak.score
+    # A candidate can be followable but flat, or lively but confusing — the axes must be
+    # free to disagree, which a single scalar cannot represent at all.
+    followable_but_flat = ViewerReport(followable=5, told_not_listed=1, payoffs_landed=3, rhythm=3)
+    lively_but_lost = ViewerReport(followable=1, told_not_listed=5, payoffs_landed=3, rhythm=3)
+    assert followable_but_flat.score == lively_but_lost.score  # same total, different shape
+    assert followable_but_flat.followable != lively_but_lost.followable
+
+
 def test_complaints_route_to_the_beat_they_came_from():
     """A complaint that cannot be located does nothing, so quotes map back by exact match
     first and stemmed overlap after — models paraphrase their own quotes constantly."""

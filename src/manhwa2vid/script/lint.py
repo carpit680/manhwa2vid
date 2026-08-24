@@ -20,6 +20,7 @@ from manhwa2vid.llm.provider import apply_stage_model, get_stage_llm
 from manhwa2vid.models import CharacterTier, PanelCast, SceneCard, ScriptBeat, SeriesBible
 from manhwa2vid.script.grounding import (
     GROUNDING_KEYWORDS,
+    card_by_panel,
     evidence_for_panels,
     unsupported_grounding_keywords,
 )
@@ -1350,6 +1351,68 @@ def lint_plot_coverage(
             out[beat.beat_id] = [
                 f"narration covers only {ratio:.0%} of the beat's required story; it MUST "
                 f"tell: {plot}"
+            ]
+    return out
+
+
+_QUOTED_LINE_RE = re.compile(r'[“"]([^”"]{4,})[”"]')
+
+
+def lint_dropped_dialogue(
+    beats: list[ScriptBeat],
+    cards: list[SceneCard],
+    *,
+    min_words: int = 4,
+    min_ratio: float = 0.3,
+) -> dict[int, list[str]]:
+    """Flag a beat that skips a panel's own quoted line for the panel's picture.
+
+    `lint_plot_coverage` only checks the synopsis's five `plot_facts` — too coarse to
+    catch a beat that narrates a panel's imagery while ignoring the quoted line printed IN
+    that panel. Frozen Player's central reveal sat verbatim in a beat's own evidence
+    ('system: "[YOU HAVE COMPLETELY ABSORBED THE FROST QUEEN'S NUCLEUS.]"') and the
+    shipped narration described the hero's expression instead — six of the reference's
+    nine payoffs were lost exactly this way, every one of them narrated (not curated out)
+    with the line sitting right there in the card. A bracketed system message is always
+    plot-critical in this genre, but the check is not restricted to brackets: any
+    substantive quoted line the artwork prints is a payoff candidate.
+
+    Deterministic and cheap: every quoted span in the beat's panels is checked by stemmed
+    word overlap against that beat's narration, same metric `lint_plot_coverage` uses.
+    `min_words` excludes bare exclamations ("HELLO.", "WHAT?!") — they carry no payoff and
+    would only add noise to the rewrite prompt.
+    """
+    if not cards:
+        return {}
+    by_panel = card_by_panel(cards)
+    out: dict[int, list[str]] = {}
+    for beat in beats:
+        lines: list[str] = []
+        seen: set[str] = set()
+        for pid in beat.panel_ids:
+            card = by_panel.get(pid)
+            if not card:
+                continue
+            for raw in _QUOTED_LINE_RE.findall(card.source_text or ""):
+                line = raw.strip()
+                if not line or line in seen:
+                    continue
+                seen.add(line)
+                lines.append(line)
+        if not lines:
+            continue
+        narration_tokens = _stemmed_words(beat.narration)
+        missing: list[str] = []
+        for line in lines:
+            tokens = _stemmed_words(line)
+            if len(tokens) < min_words:
+                continue
+            ratio = len(tokens & narration_tokens) / len(tokens)
+            if ratio < min_ratio:
+                missing.append(line)
+        if missing:
+            out[beat.beat_id] = [
+                f'narration drops the panel\'s own line — it MUST land: "{m}"' for m in missing
             ]
     return out
 
