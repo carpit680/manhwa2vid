@@ -2209,12 +2209,17 @@ def generate_script(
         f"beat(s) starting mid-sentence after repair: {malformed}" if malformed else "",
         malformed=malformed,
     )
-    enforce(final_report, paths["root"], force=qa_forced(config))
-
-    from manhwa2vid.script.scorecard import score_script
-
-    enforce(score_script(beats, bible, config), paths["root"], force=qa_forced(config))
-
+    # Persist BEFORE enforcing. A failing gate still blocks the stage — enforce raises
+    # and nothing downstream runs — but the artifact it is complaining about now exists
+    # to be read. The first blocking gate (dialogue-delivery) immediately proved why
+    # this matters: it failed a 10-minute run and discarded the very narration whose
+    # defect it was reporting, leaving the previous run's script.json on disk and no way
+    # to see what had actually been written. A gate's job is to stop the pipeline, not
+    # to destroy the evidence.
+    #
+    # Safe because the draft is not the shippable artifact: TTS refuses to run until
+    # script.final.md exists or checkpoint.script_approved is set, and both require a
+    # human running `review script --approve`.
     draft = ScriptDraft(
         title=meta.title,
         chapters=meta.chapters,
@@ -2225,6 +2230,12 @@ def generate_script(
     save_json(paths["script_json"], draft)
     paths["script_draft"].write_text(_beats_to_markdown(draft), encoding="utf-8")
     console.print(f"[green]Script draft written[/] → {paths['script_draft']} ({len(beats)} beats)")
+
+    enforce(final_report, paths["root"], force=qa_forced(config))
+
+    from manhwa2vid.script.scorecard import score_script
+
+    enforce(score_script(beats, bible, config), paths["root"], force=qa_forced(config))
 
     try:
         from manhwa2vid.review.storyboard import write_storyboard
