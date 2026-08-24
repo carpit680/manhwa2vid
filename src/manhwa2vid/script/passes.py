@@ -168,16 +168,36 @@ def rewrite_voice(
     move voice here (the first: four zero-shot rules about time markers). A targeted pass
     with a worked example is the device that has actually worked, so voice gets one too.
     """
+    from manhwa2vid.script.lint import (
+        beat_word_cap,
+        keeps_landed_lines,
+        required_lines_for_beat,
+    )
+    from manhwa2vid.script.grounding import quoted_lines_for_panels
+
     llm = llm or apply_stage_model(get_stage_llm("script", config), "script", config)
     ban = ", ".join(banned_words(config))
     cast = _cast_for_panels(attribution, beat.panel_ids)
     evid = evidence_for_panels(beat.panel_ids, scene_cards or [])
+    cards = scene_cards or []
+    required = required_lines_for_beat(
+        beat.panel_ids, cards, config,
+        max_words=beat_word_cap(
+            len(beat.panel_ids), config,
+            payload_lines=len(quoted_lines_for_panels(beat.panel_ids, cards)),
+        ),
+    ) if cards else []
     user = (
         f"{naming_priority_rules(bible, config)}\n\n"
         f"Bible:\n{format_bible_for_prompt(bible)}\n\n"
         f"On-screen cast:\n{cast}\n\n"
         f"Panel EVIDENCE (every fact must already be here):\n{evid}\n\n"
-        f"Beat id: {beat.beat_id}\n\n"
+        + (
+            "These lines are already landed in the original and MUST survive the rewrite:\n"
+            + "".join(f"  - {ln}\n" for ln in required) + "\n"
+            if required else ""
+        )
+        + f"Beat id: {beat.beat_id}\n\n"
         f"Original narration:\n{beat.narration}"
     )
     try:
@@ -187,7 +207,15 @@ def rewrite_voice(
         return beat.narration
     if not result:
         return beat.narration
-    return accept_rewrite(beat.narration, rotate_protagonist_name(local_sanitize_narration(result), bible))
+    candidate = rotate_protagonist_name(local_sanitize_narration(result), bible)
+    # A DELIVERY rewrite must not cost CONTENT. This pass handed back three Frozen Player
+    # beats that had been carrying their system messages correctly and had them stripped
+    # in the name of rhythm — they passed the dialogue-delivery retry and then failed the
+    # final gate. Telling the model to keep them (above) is necessary but not sufficient;
+    # this is the part that is decidable in code.
+    if not keeps_landed_lines(beat.narration, candidate, required):
+        return beat.narration
+    return accept_rewrite(beat.narration, candidate)
 
 
 def transition_needs_rework(beat: ScriptBeat) -> bool:

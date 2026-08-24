@@ -172,3 +172,51 @@ def test_rewrite_voice_falls_back_to_the_original_on_empty_reply():
     beat = ScriptBeat(beat_id=1, panel_ids=["p"], narration="Original text here, unchanged.")
     out = rewrite_voice(beat, _bible(), [], {}, scene_cards=[], llm=_EchoLLM(""))
     assert out.strip() == "Original text here, unchanged."
+
+
+def test_voice_pass_refuses_a_rewrite_that_drops_a_landed_system_line():
+    """A DELIVERY rewrite must not cost CONTENT. This pass handed back three Frozen
+    Player beats that were carrying their system messages correctly and stripped them in
+    the name of rhythm: beats 16, 21 and 26 passed the dialogue-delivery retry and then
+    failed the final gate, having been "re-delivered" in between. Same defect class as
+    trim_overlong_beats deleting a landed payoff — a later pass undoing an earlier one."""
+    cards = [
+        SceneCard(
+            panel_ids=["p1"],
+            action="a notification appears",
+            source_text='system: "[A DIMENSIONAL ELEVATOR HAS BEEN INSTALLED IN THE PACIFIC OCEAN.]"',
+        ),
+    ]
+    beat = ScriptBeat(
+        beat_id=16, panel_ids=["p1"],
+        narration=(
+            "The celebration lasts about a minute. Then a system message tells the world a "
+            "dimensional elevator has been installed in the Pacific Ocean."
+        ),
+    )
+    # A punchier rewrite that quietly loses the elevator must be refused...
+    stripped = _EchoLLM("The party lasts about a minute. Then the sky changes. Nobody is celebrating now.")
+    assert rewrite_voice(beat, _bible(), [], {}, scene_cards=cards, llm=stripped) == beat.narration
+
+    # ...while one that keeps it is taken.
+    kept = _EchoLLM(
+        "The celebration lasts about a minute. Then a dimensional elevator drops into the "
+        "Pacific Ocean and the message goes out worldwide. Party over."
+    )
+    out = rewrite_voice(beat, _bible(), [], {}, scene_cards=cards, llm=kept)
+    assert "Party over." in out
+
+
+def test_voice_pass_tells_the_model_which_lines_must_survive():
+    cards = [
+        SceneCard(panel_ids=["p1"], action="x",
+                  source_text='system: "[YOU HAVE COMPLETELY ABSORBED THE FROST QUEEN\'S NUCLEUS.]"'),
+    ]
+    beat = ScriptBeat(
+        beat_id=11, panel_ids=["p1"],
+        narration="A message tells him he has completely absorbed the Frost Queen's nucleus at last.",
+    )
+    llm = _EchoLLM(beat.narration)
+    rewrite_voice(beat, _bible(), [], {}, scene_cards=cards, llm=llm)
+    assert "MUST survive" in llm.calls[0][1]
+    assert "NUCLEUS" in llm.calls[0][1]

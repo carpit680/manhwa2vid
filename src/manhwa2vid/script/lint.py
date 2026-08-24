@@ -2252,6 +2252,41 @@ def accept_rewrite(original: str, rewritten: str) -> str:
     return rewritten
 
 
+def keeps_landed_lines(
+    original: str,
+    rewritten: str,
+    required: list[str],
+    *,
+    min_ratio: float = 0.3,
+) -> bool:
+    """Did the rewrite keep every required line the ORIGINAL had already landed?
+
+    A rewrite aimed at DELIVERY must not cost CONTENT. The voice pass rewrote three
+    Frozen Player beats that were carrying their system messages correctly and handed
+    back versions without them — beats 16, 21 and 26 passed the dialogue-delivery retry
+    and then failed the final gate, having been "re-delivered" in between. Same defect
+    class as trim_overlong_beats deleting a landed payoff: a later pass undoing an
+    earlier pass's work, invisible because each step looked locally reasonable.
+
+    Only lines the original ACTUALLY landed are protected — this never demands that a
+    rewrite fix something the original was already failing, which is the corrective
+    loop's job, not this guard's. Uses the same stemmed-overlap test as
+    `lint_dropped_dialogue`, so the guard and the gate agree by construction.
+    """
+    if not required:
+        return True
+    orig_tokens = _stemmed_words(original)
+    new_tokens = _stemmed_words(rewritten)
+    for line in required:
+        tokens = _stemmed_words(line)
+        if not tokens:
+            continue
+        had = len(tokens & orig_tokens) / len(tokens) >= min_ratio
+        if had and len(tokens & new_tokens) / len(tokens) < min_ratio:
+            return False
+    return True
+
+
 def ensure_first_mention_role(
     beats: list[ScriptBeat],
     bible: SeriesBible | None,
