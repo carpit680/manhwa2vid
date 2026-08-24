@@ -596,10 +596,22 @@ def quoted_lines_for_panels(
 ) -> list[str]:
     """Distinct substantive quoted lines the given panels print, in panel order.
 
-    Shared by `lint_dropped_dialogue` (checks these landed in the narration) and
-    `split_dense_beats` (checks a beat isn't asked to land more of these than one beat's
-    word budget can hold). `min_words` excludes bare exclamations ("HELLO.", "WHAT?!") —
-    they carry no payoff and would only add noise.
+    Shared by `lint_dropped_dialogue` (checks these landed in the narration),
+    `split_dense_beats` (bounds how many one beat is asked to carry), and
+    `required_lines_for_beat` (promotes them into MUST COVER). `min_words` excludes bare
+    exclamations ("HELLO.", "WHAT?!") — they carry no payoff and would only add noise.
+
+    Split on the ` / ` utterance separator FIRST, then take the quote inside each
+    segment. Scanning the whole blob for quote pairs looks equivalent and is not: the
+    regex alternates open/close across the entire string, so ONE single-character
+    utterance desynchronises everything after it. On the real card for p0023_13 —
+        system: "[CONFIRMED POSSESSION...]" / Seo: "?" / system: "[INSUFFICIENT MAGIC
+        STATS.]" / system: "[YOU HAVE FAILED AT REMOVING THE SEAL.]" / ...
+    the bare "?" is too short to match, so the scan paired the quote that CLOSES it with
+    the quote that OPENS the next line and returned four copies of " / system -> Seo
+    Jun-Ho: " while silently dropping three real system messages, including the chapter's
+    ending. Those artifacts then occupied required-line slots and could never be landed,
+    and the genuine lines were never asked for at all.
     """
     by_panel = card_by_panel(cards)
     seen: set[str] = set()
@@ -608,7 +620,11 @@ def quoted_lines_for_panels(
         card = by_panel.get(pid)
         if not card:
             continue
-        for raw in _QUOTED_LINE_RE.findall(card.source_text or ""):
+        for segment in (card.source_text or "").split(" / "):
+            match = _QUOTED_LINE_RE.search(segment)
+            # An unquoted segment is still an utterance the vision pass transcribed
+            # without quote marks; take what follows the speaker colon.
+            raw = match.group(1) if match else segment.split(":", 1)[-1]
             line = raw.strip()
             if not line or line in seen or len(line.split()) < min_words:
                 continue

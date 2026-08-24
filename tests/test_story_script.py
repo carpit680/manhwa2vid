@@ -771,10 +771,13 @@ def test_required_lines_cap_to_what_the_word_budget_can_hold():
 
     cards = _fp_beat11_cards()
     panels = ["p0009_08", "p0010_04", "p0011_02", "p0011_03"]
-    assert len(required_lines_for_beat(panels, cards, {}, max_words=20)) == 2
-    assert len(required_lines_for_beat(panels, cards, {}, max_words=10)) == 1
-    # The highest-priority line survives the tightest budget.
+    # 10 words of the cap are reserved for framing, so a 20-word beat carries one line.
+    assert len(required_lines_for_beat(panels, cards, {}, max_words=20)) == 1
+    assert len(required_lines_for_beat(panels, cards, {}, max_words=40)) == 3
+    # The highest-priority line survives the tightest budget, and a narrow beat is never
+    # excused from its single most important line.
     assert "[" in required_lines_for_beat(panels, cards, {}, max_words=10)[0]
+    assert len(required_lines_for_beat(panels, cards, {}, max_words=10)) == 1
     # Never more than the hard cap even with a huge budget.
     assert len(required_lines_for_beat(panels, cards, {}, max_words=500)) <= 4
 
@@ -835,3 +838,54 @@ def test_required_lines_are_not_demanded_twice_across_beats():
     # voice it — so count only the REQUIRED LINES sections.
     required_sections = re.findall(r"REQUIRED LINES.*?(?=  MAX )", block, re.S)
     assert sum(sec.count("[YOU HAVE ABSORBED THE CORE.]") for sec in required_sections) == 1
+
+
+def test_quoted_lines_survive_a_single_character_utterance():
+    """The alternating-quote bug, verbatim from p0023_13. A bare "?" is too short to
+    match, so a whole-blob scan paired the quote CLOSING it with the quote OPENING the
+    next line: it returned four copies of " / system -> Seo Jun-Ho: " and silently lost
+    three real system messages, including the chapter's ending. Those artifacts then
+    occupied required-line slots that could never be satisfied, while the genuine lines
+    were never asked for at all."""
+    from manhwa2vid.script.grounding import quoted_lines_for_panels
+
+    cards = [
+        SceneCard(
+            panel_ids=["p0023_13"],
+            action="he touches the statue",
+            source_text=(
+                'system -> Seo Jun-Ho: "[CONFIRMED POSSESSION OF THE SKILL FROST(EX).]" / '
+                'Seo Jun-Ho: "?" / '
+                'system -> Seo Jun-Ho: "[INSUFFICIENT MAGIC STATS.]" / '
+                'system -> Seo Jun-Ho: "[YOU HAVE FAILED AT REMOVING THE SEAL.]"'
+            ),
+        ),
+    ]
+    lines = quoted_lines_for_panels(["p0023_13"], cards)
+    assert any("CONFIRMED POSSESSION" in ln for ln in lines)
+    assert any("FAILED AT REMOVING THE SEAL" in ln for ln in lines)
+    assert not any("Seo Jun-Ho:" in ln for ln in lines), "speaker prefixes are not lines"
+    assert not any(ln.strip().startswith("/") for ln in lines)
+
+
+def test_required_lines_reserve_room_for_framing():
+    """A beat asked for exactly as many lines as its cap has words has nothing left to
+    connect them with. FP beat 21 was one panel, cap 30, three lines at 10 words each —
+    no subject, no speaker, no consequence — and landed two of the three."""
+    from manhwa2vid.script.lint import required_lines_for_beat
+
+    cards = [
+        SceneCard(
+            panel_ids=["p1"],
+            action="he explains",
+            source_text=(
+                'Deok-gu: "ONLY PLAYERS WHO RESIST THE HEAT CAN EXPLORE THERE." / '
+                'Deok-gu: "WE FOUND AN ALTAR IN THE MIDDLE OF THE SEA OF LAVA." / '
+                'Deok-gu: "THAT ALTAR REQUIRES [THE FROST QUEEN\'S NUCLEUS] TO COOL IT."'
+            ),
+        ),
+    ]
+    # 30-word cap: 10 reserved for framing leaves room for two lines, not three.
+    assert len(required_lines_for_beat(["p1"], cards, {}, max_words=30)) == 2
+    # A wider beat can still carry all three.
+    assert len(required_lines_for_beat(["p1"], cards, {}, max_words=60)) == 3

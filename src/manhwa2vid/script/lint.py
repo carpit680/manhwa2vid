@@ -1502,7 +1502,18 @@ def required_lines_for_beat(
         return []
     per_line = int(get_nested(config, "script", "words_per_required_line", default=10))
     hard_cap = int(get_nested(config, "script", "max_required_lines_per_beat", default=4))
-    budget_cap = max_words // per_line if per_line > 0 else hard_cap
+    # Reserve framing words before dividing. Without this the budget arithmetic hands a
+    # beat exactly as many lines as its cap can hold with nothing left to connect them:
+    # FP beat 21 is one panel, cap 30, and was asked for 3 lines at 10 words each — a
+    # word budget with no room for a subject, a speaker or a consequence. It shipped 28
+    # words and landed two of the three, which is the arithmetic working as specified and
+    # the specification being wrong. Same failure the 4-line hard cap already guards at
+    # the top end; this guards the bottom.
+    reserve = int(get_nested(config, "script", "required_line_framing_reserve", default=10))
+    # Floor of 1: the reserve exists to stop a beat being packed wall-to-wall with
+    # quotes, not to excuse it from its most important one. A narrow beat carrying a
+    # single system message must still land it — that is the whole point of the check.
+    budget_cap = max(1, (max_words - reserve) // per_line) if per_line > 0 else hard_cap
     n_req = max(0, min(len(lines), hard_cap, budget_cap))
     if not n_req:
         return []
