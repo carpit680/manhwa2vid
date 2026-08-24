@@ -411,6 +411,100 @@ def unsupported_grounding_keywords(panel_ids: list[str], cards: list[SceneCard],
     return sorted(claimed - supported)
 
 
+# Transition captions the ART itself prints. Manhwa marks its own time skips on the page
+# — Frozen Player's panels literally read "25 YEARS AGO" and "25 YEARS LATER" — and the
+# vision pass has always captured them into scene cards, where nothing ever read them.
+# English/manhwa-generic: no title's vocabulary appears here.
+_TRANSITION_CAPTION_RE = re.compile(
+    r"\b\d+\s*(?:years?|months?|weeks?|days?|hours?|minutes?)\s*"
+    r"(?:later|ago|earlier|before|after)\b"
+    r"|\b(?:meanwhile|present[- ]day|time\s*skip|flash\s*back|flashback|flash\s*forward"
+    r"|flashforward|the next (?:day|morning|night)|that (?:night|morning|evening)"
+    r"|(?:years?|months?|days?|hours?) (?:later|earlier|ago|before))\b",
+    re.I,
+)
+
+
+def transition_captions(cards: list[SceneCard]) -> dict[str, str]:
+    """panel_id -> the transition text the artwork prints on that panel.
+
+    The strongest transition signal available and the one nothing consumed: page-number
+    gaps find nothing on a densely-paginated chapter (Frozen Player's beat-to-beat gaps
+    are all <= 1), and `last_flashforward_panel` is empty on that title. Meanwhile the
+    panels say "25 YEARS LATER" in as many words.
+
+    Reads `source_text` first: a caption box is transcribed there, and matching it in
+    `action` too catches the vision pass paraphrasing it ("A time skip to the present day
+    is shown"). Returns the matched words themselves so a fix hint can quote the manhwa.
+    """
+    out: dict[str, str] = {}
+    for card in cards:
+        blob = f"{card.source_text or ''} {card.action or ''}"
+        match = _TRANSITION_CAPTION_RE.search(blob)
+        if not match:
+            continue
+        for pid in card.panel_ids:
+            out[pid] = " ".join(match.group(0).split())
+    return out
+
+
+def scene_boundaries(
+    beats: list[ScriptOutlineBeat],
+    cards: list[SceneCard] | None = None,
+    *,
+    flashforward_panel: str = "",
+    min_page_gap: int = 2,
+) -> dict[int, str]:
+    """Beats that OPEN a new scene or time frame, with the reason — the storyboard's cuts.
+
+    Both reported transition failures ("the past->museum jump plays as a continuation",
+    "the fight->heroes cut is unmarked") are beats that begin a new block while the
+    narration says nothing. This makes the cut list a first-class artifact: the story
+    reviewer's checklist and the transition-coverage gate's denominator.
+
+    Three signals in priority order, strongest first:
+      1. a TRANSITION CAPTION in one of the beat's panels — the art told us outright, and
+         its words go into the reason so a hint can quote them;
+      2. the FLASHFORWARD anchor — the first beat after `last_flashforward_panel`;
+      3. a PAGE GAP >= min_page_gap, the weak fallback. It finds nothing on a dense
+         chapter, which is exactly why it cannot be the only signal.
+    """
+    out: dict[int, str] = {}
+    if not beats:
+        return out
+    captions = transition_captions(cards or [])
+    ff_page = _panel_sort_key_local(flashforward_panel)[0] if flashforward_panel else None
+    prev_last_page: int | None = None
+    ff_marked = False
+    for beat in beats:
+        pages = [_panel_sort_key_local(pid)[0] for pid in beat.panel_ids]
+        if not pages:
+            continue
+        first_page, last_page = min(pages), max(pages)
+        # Prefer the caption that names an INTERVAL over a bare "flashback": one beat can
+        # carry both, and "25 YEARS LATER" is quotable in a fix hint while "flashback" is
+        # only a label. Reading order breaks remaining ties.
+        found = [captions[pid] for pid in beat.panel_ids if pid in captions]
+        caption = next((c for c in found if any(ch.isdigit() for c2 in [c] for ch in c2)), "")
+        caption = caption or (found[0] if found else "")
+        if caption:
+            out[beat.beat_id] = f'the art prints "{caption}" here'
+        elif prev_last_page is not None:
+            if (
+                ff_page is not None
+                and not ff_marked
+                and prev_last_page <= ff_page < first_page
+            ):
+                out[beat.beat_id] = "time jump: first beat after the flashforward"
+                ff_marked = True
+            elif first_page - prev_last_page >= min_page_gap:
+                out[beat.beat_id] = (
+                    f"new scene: panels jump from page {prev_last_page} to {first_page}"
+                )
+        prev_last_page = max(prev_last_page or 0, last_page)
+    return out
+
+
 def refresh_plot_for_span(
     beats: list[ScriptOutlineBeat],
     cards: list[SceneCard],

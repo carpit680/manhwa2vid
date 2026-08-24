@@ -1302,6 +1302,15 @@ def generate_script(
             {pid for c in cards if c.is_story for pid in c.panel_ids}, key=_panel_sort_key
         )
         pinned.update(all_story_sorted[-3:])  # the chapter's chosen ending
+        # A panel whose ART announces a time skip can never be dropped. Frozen Player's
+        # p0008_10 reads "25 YEARS LATER" and curation cut it — so the one frame that
+        # tells a viewer time moved was not even on screen, which is most of why that
+        # jump plays as a continuation. Salience scored it low because it has no people
+        # and no conversation: a caption panel looks like scenery to every heuristic and
+        # is the opposite of skippable.
+        from manhwa2vid.script.grounding import transition_captions
+
+        pinned.update(transition_captions(cards))
         narrated, dropped_panels = select_narrated_panels(
             cards, synopsis, config,
             n_chapters=_chapter_count(meta, paths), pinned=pinned,
