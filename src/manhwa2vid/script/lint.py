@@ -1815,7 +1815,7 @@ _ARTICLE_PRONOUN_RE = re.compile(
     r"\b(a|an|the)\s+(?:[a-z][\w'’-]*\s+){0,2}(he|she|they|him|her|them)\b", re.I
 )
 # "A hunter and a hunter both shout" — two anonymous agents collapsed onto one descriptor.
-_ECHOED_AGENT_RE = re.compile(r"\b(an?)\s+([a-z][\w'’-]*)\s+and\s+(an?)\s+\2\b", re.I)
+_ECHOED_AGENT_RE = re.compile(r"\b(an?)\s+([a-z][\w'’-]*)\s*(?:,|\s+and)\s*(an?)\s+\2\b", re.I)
 
 
 def lint_malformed_phrases(beats: list[ScriptBeat]) -> dict[int, list[str]]:

@@ -2440,3 +2440,23 @@ def test_restore_is_inert_without_a_snapshot_or_requirements():
     beats = [ScriptBeat(beat_id=1, panel_ids=["p"], narration="He walks on.")]
     assert restore_lost_required_lines(beats, {}, {}) == (beats, {})
     assert restore_lost_required_lines(beats, {1: "Something else."}, {}) == (beats, {})
+
+
+def test_echoed_agent_catches_the_comma_separated_form():
+    """"A man, a man, and a woman in a red blazer look upward" shipped into a Frozen
+    Player beat: the pattern required the word "and" between the two, so the
+    comma-separated form — the one an LLM actually produces when listing a crowd — went
+    straight through. Two anonymous agents flattened onto one descriptor says nothing."""
+    from manhwa2vid.script.lint import narration_defects
+
+    assert any("same descriptor" in d for d in narration_defects(
+        "A man, a man, and a woman in a red blazer look upward in absolute shock."))
+    assert any("same descriptor" in d for d in narration_defects(
+        "A hunter and a hunter both shout their agreement."))
+    # Distinct agents in a list are fine — this is about the ECHO, not about lists.
+    for ok in [
+        "A hunter and a healer step through the gate.",
+        "A man, a woman, and a child watch the sky.",
+        "A man and a woman argue near the stall.",
+    ]:
+        assert not narration_defects(ok), ok
