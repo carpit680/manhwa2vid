@@ -621,7 +621,7 @@ def split_dense_beats(
     beats: list[ScriptOutlineBeat],
     cards: list[SceneCard],
     *,
-    max_quotes_per_beat: int = 2,
+    max_quotes_per_beat: int = 7,
 ) -> list[ScriptOutlineBeat]:
     """Split a beat that carries more distinct payoff-worthy quoted lines than one beat
     can plausibly land.
@@ -629,12 +629,24 @@ def split_dense_beats(
     `consolidate_beats` raises the FLOOR (merges beats too thin to hold anything); this
     lowers the CEILING on a different axis — quote density, not word count. Frozen
     Player's floor-count exchange (Deok-gu explaining the tower to Jun-Ho) sat in a single
-    69-word, 7-panel beat carrying 4+ distinct facts ("10 total floors", "should be at the
-    7th floor", "only cleared the 2nd", "3rd floor is volcanic") and the narration landed
-    one of them, spending its budget on Jun-Ho's reaction instead — not because the beat
-    was thin, but because it was asked to deliver more discrete payoffs than any one beat
-    can tell coherently. `lint_dropped_dialogue` kept firing on it every rewrite round for
-    exactly this reason: the fix is room, not another instruction.
+    69-word, 7-panel beat carrying 10 distinct quoted lines ("10 total floors", "should be
+    at the 7th floor", "only cleared the 2nd", "3rd floor is volcanic"...) and the
+    narration landed one of them, spending its budget on Jun-Ho's reaction instead — not
+    because the beat was thin, but because it was asked to deliver more discrete facts
+    than any one beat can tell coherently. `lint_dropped_dialogue` kept firing on it every
+    rewrite round for exactly this reason: the fix is room, not another instruction.
+
+    `max_quotes_per_beat` is deliberately high, not "however many a beat can obviously
+    hold": measured on both test titles, a beat carrying 4 distinct quoted lines is the
+    MEDIAN, not an outlier — ordinary back-and-forth dialogue racks up separate lines
+    fast, and most of that a competent beat compresses fine. 7 sits above that whole
+    normal range (SL: 2-9, FP: 1-10) and catches only the true tail (FP had exactly 2
+    beats above it; SL had 1) — the beats a rewrite has already proven it cannot
+    salvage, not the beats that are merely talkative. A first version set this at 2 and
+    exploded a 24-beat FP script to 51 and an 11-beat SL script to 24, degrading both
+    (caught before landing — see [[frozen-player-thin-beat-fix]] for the general lesson:
+    measure the real distribution before setting a density threshold, the same rule
+    `lint_plot_coverage` and `lint_dropped_dialogue` already follow).
 
     Greedy contiguous partition, panel by panel: a cut lands whenever the NEXT panel would
     push the running beat's distinct-quote count over `max_quotes_per_beat`. Panels are
