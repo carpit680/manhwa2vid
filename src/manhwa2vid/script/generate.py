@@ -1693,6 +1693,7 @@ def generate_script(
     from manhwa2vid.script.lint import (
         beat_word_cap,
         dialogue_delivery_status,
+        is_system_line,
         dropped_system_lines,
         lint_abstraction_drift,
         lint_ambiguous_pronoun,
@@ -2198,12 +2199,26 @@ def generate_script(
     # Reconcile before judging: restore any beat that LOST a required line downstream of
     # the point where they were verified. See restore_lost_required_lines — this is the
     # single choke point for a bug class that has surfaced in five different passes.
-    beats, _restored = restore_lost_required_lines(beats, _verified_narration, required_by_beat)
+    # SYSTEM lines only. Guarding every required line reverted 21 of 28 beats and more
+    # than DOUBLED the script (1066 -> 2352 words), because the snapshot predates the
+    # deterministic polish: reverting a beat undoes its trimming and dedupe along with
+    # the loss, and wipes the voice pass's work. A voice rewrite legitimately rephrases
+    # ordinary dialogue — losing lexical overlap on a colour line is what it is FOR. A
+    # bracketed system message is the tier that actually blocks the stage, it is a
+    # handful per chapter, and it is the class that has gone missing five times.
+    _system_required = {
+        bid: [ln for ln in lines if is_system_line(ln)]
+        for bid, lines in required_by_beat.items()
+    }
+    beats, _restored = restore_lost_required_lines(beats, _verified_narration, _system_required)
     if _restored:
         console.print(
-            f"[yellow]Restored:[/] {len(_restored)} beat(s) had a required line removed by a "
-            f"later pass and were reverted: {sorted(_restored)}"
+            f"[yellow]Restored:[/] {len(_restored)} beat(s) lost a system message to a later "
+            f"pass and were reverted: {sorted(_restored)}"
         )
+        # Re-polish what came back: the snapshot is pre-polish text, so without this a
+        # restored beat ships untrimmed and undeduped.
+        beats = _final_polish(beats)
         dropped_dialogue = lint_dropped_dialogue(beats, cards, max_lines_per_beat=6)
     dropped_system = dropped_system_lines(beats, cards or [], dropped_dialogue, required_by_beat)
     final_report.add(
