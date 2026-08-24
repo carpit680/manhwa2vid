@@ -1766,6 +1766,33 @@ def generate_script(
         beats = recovered
         issues_by_beat = _story_findings(beats)
 
+    # Dialogue-delivery gets one more narrow shot after the two general rounds. A direct
+    # rewrite_beat call against a beat still flagged here landed its required line
+    # cleanly on the first try — the model is capable of it — but ONE sample per beat
+    # per round is not reliable enough by itself, and the beat's other findings can
+    # clear in round 1 while this one keeps missing on an unlucky draw. A blanket 3rd
+    # round over every story-integrity finding was already measured to mostly churn text
+    # that is already acceptable (see the comment above); this differs in kind, not
+    # degree: it retries ONLY the beats lint_dropped_dialogue itself still flags, with
+    # only that check's own issues, so a beat that is otherwise clean is never disturbed.
+    dropped_now = lint_dropped_dialogue(beats, cards)
+    if dropped_now:
+        console.print(
+            f"[yellow]Dialogue delivery:[/] retrying {len(dropped_now)} beat(s) still "
+            f"missing a required line: {sorted(dropped_now)}"
+        )
+        recovered = []
+        for beat in beats:
+            if beat.beat_id in dropped_now:
+                new_text = _accept_rewrite(beat.narration, _rewrite_beat(
+                    beat, bible, attribution, config,
+                    issues=dropped_now[beat.beat_id], scene_cards=cards,
+                ))
+                recovered.append(beat.model_copy(update={"narration": new_text}))
+            else:
+                recovered.append(beat)
+        beats = recovered
+
     hook_bad = lint_hook_grounding(hook, " ".join(
         f"{c.source_text or ''} {c.action or ''} {' '.join(c.key_terms or [])}" for c in cards
     ))
