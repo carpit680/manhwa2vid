@@ -351,17 +351,58 @@ _CAPTION_RE = re.compile(
     re.I,
 )
 
+# Body-language inventory: a named character performing a gesture or wearing a mood that
+# changes nothing. Measured against the reference over the same two chapters: it runs
+# ZERO of these, we shipped 15, at near-identical total word counts — so this is purely
+# where the words went. Every one of these is a word not spent on the line the panel
+# prints, which is how the chapter's own reveal ("[YOU HAVE COMPLETELY ABSORBED THE
+# FROST QUEEN'S NUCLEUS.]") lost its beat to a boy pointing at a statue.
+#
+# FLAGGED, not stripped. The appearance appositives above are removable by construction
+# — "Kim, a veteran in a blue jacket, waves" -> "Kim waves" is grammatically safe. These
+# are whole predicates: deleting "tilts his head slightly upward" leaves no verb, and
+# deciding what should have been there instead needs the panel. So this reports and the
+# rewrite fixes it, which is the same division of labour lint_captioning already uses.
+_BODY_PART = r"head|forehead|jaw|chin|temple|temples|chest|shoulders?|brow|eyes?|hands?|fists?"
+_GESTURE_VERB = r"tilts?|clutches?|presses?|rubs?|scratches?|clenches?|cradles?|massages?"
+_MOOD_ADVERB = (
+    r"solemnly|somberly|sombrely|awkwardly|nervously|sheepishly|wearily|grimly|"
+    r"excitedly|intently|slightly|deeply|profoundly"
+)
+_BODY_INVENTORY_RE = re.compile(
+    # "tilts his head slightly upward", "clutches his forehead in deep frustration"
+    rf"\b(?:{_GESTURE_VERB})\s+(?:his|her|their|its)\s+(?:{_BODY_PART})\b"
+    # "looks down solemnly", "smiles awkwardly", "nods excitedly"
+    rf"|\b(?:looks?|stares?|glances?|smiles?|nods?|shrugs?|frowns?|sighs?|blinks?)\s+"
+    rf"(?:\w+\s+){{0,2}}(?:{_MOOD_ADVERB})\b"
+    # "stares in shock", "gasps in disbelief", "recoils in horror"
+    rf"|\b(?:stares?|gasps?|recoils?|flinches?|freezes?)\s+in\s+"
+    rf"(?:\w+\s+){{0,2}}(?:shock|disbelief|horror|confusion|surprise|awe|amazement)\b"
+    # "sweats", "a bead of sweat"
+    rf"|\bbead of sweat\b|\bsweats?\s+(?:and|,|nervously|profusely)",
+    re.I,
+)
+
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _PRONOUN_START_RE = re.compile(r"^(?:He|She|They|His|Her|Their)\b")
 
 
 def lint_captioning(beats: list[ScriptBeat]) -> dict[int, list[str]]:
-    """Flag beats written as image descriptions instead of story."""
+    """Flag beats written as image descriptions instead of story.
+
+    Two shapes: narrated ARTWORK ("in the foreground", "the close-up") and narrated BODY
+    LANGUAGE ("tilts his head slightly upward", "gasps in disbelief"). The second was
+    invisible here until measured — the reference runs zero body-inventory phrases over
+    the same two chapters and the shipped script ran 15, at the same word count.
+    """
     report: dict[int, list[str]] = {}
     for beat in beats:
         hits = sorted({m.group(0).lower() for m in _CAPTION_RE.finditer(beat.narration)})
-        if hits:
-            report[beat.beat_id] = [f"caption:{h}" for h in hits[:3]]
+        body = sorted({m.group(0).lower() for m in _BODY_INVENTORY_RE.finditer(beat.narration)})
+        issues = [f"caption:{h}" for h in hits[:3]]
+        issues += [f"body_inventory:{h}" for h in body[:3]]
+        if issues:
+            report[beat.beat_id] = issues
     return report
 
 
@@ -2484,6 +2525,14 @@ def _humanize_issues(issues: list[str]) -> str:
                 "form (never verbatim); everything else in the beat is secondary"
             )
             continue
+        if issue.startswith("body_inventory:"):
+            phrase = issue.split(":", 1)[1]
+            out.append(
+                f'"{phrase}" is body-language inventory — a gesture or mood that changes '
+                "nothing. Spend those words on what is SAID or what it costs instead; "
+                "keep the gesture only if the story turns on it"
+            )
+            continue
         if issue.startswith("dropped_speaker:"):
             name = issue.split(":", 1)[1]
             out.append(
@@ -2855,7 +2904,12 @@ _ANON_NOUN = (
 )
 _GARMENT = (
     r"collar|jacket|cap|hat|coat|shirt|hoodie|glasses|hair|beard|goatee|backpack|"
-    r"uniform|vest|scarf|boots|gloves|mask"
+    r"uniform|vest|scarf|boots|gloves|mask|"
+    # Added after the shipped script proved the list was the binding constraint, not the
+    # pattern: "A young boy in a beige sweater" and "a man in a black suit with black
+    # hair" both matched every part of _ANON_APPEARANCE_RE except the garment word.
+    r"sweater|suit|tie|robe|robes|armor|armour|dress|skirt|apron|helmet|goggles|"
+    r"eyepatch|earrings|necklace|gown|cloak|coveralls|slacks|trousers|jeans"
 )
 _ANON_APPEARANCE_RE = re.compile(
     # "a/an/another/one" + optional adjectives + optional noun, then a garment phrase.
@@ -2866,9 +2920,11 @@ _ANON_APPEARANCE_RE = re.compile(
     rf"(?:a|an|the)?\s*"
     rf"(?:[\w'’-]+\s+){{0,3}}"
     rf"(?:{_GARMENT})\b"
-    # ...plus any further descriptors chained onto it ("and a goatee", "and grey hair"),
-    # or the strip leaves a dangling conjunction behind.
-    rf"(?:\s*,?\s*and\s+(?:a|an|the)?\s*(?:[\w'’-]+\s+){{0,3}}(?:{_GARMENT})\b)*",
+    # ...plus any further descriptors chained onto it ("and a goatee", "with black
+    # hair"), or the strip leaves half the inventory behind: "a man in a black suit with
+    # black hair" collapsed only to "a man with black hair" while "and" was the sole
+    # accepted connector.
+    rf"(?:\s*,?\s*(?:and|with)\s+(?:a|an|the)?\s*(?:[\w'’-]+\s+){{0,3}}(?:{_GARMENT})\b)*",
     re.I,
 )
 
@@ -2885,9 +2941,10 @@ def strip_appearance_descriptors(beats: list[ScriptBeat], bible: SeriesBible | N
     a veteran hunter", matching the gold's "Lee Joo-hee, the party's rookie healer". Rule
     3 bans appearance captioning outright, so the garment adds nothing in either position.
 
-    Only indefinite noun phrases match, so a definite reference the story depends on
-    ("the man in the blue cap" as a running identifier) is left alone, as is any phrase
-    whose head noun is not a person.
+    Definite phrases match too ("Song Chi-yul, the veteran party leader with short gray
+    hair" -> "..., the veteran party leader"); an earlier version restricted this to
+    indefinite phrases and those kept their hair. Any phrase whose head noun is not a
+    person is left alone, which is what keeps places and objects out of it.
     """
     out: list[ScriptBeat] = []
     for beat in beats:

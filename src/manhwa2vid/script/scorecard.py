@@ -14,6 +14,7 @@ from typing import Any
 from manhwa2vid.config import get_nested
 from manhwa2vid.models import ScriptBeat, SeriesBible
 from manhwa2vid.qa import QAReport
+from manhwa2vid.script.lint import _BODY_INVENTORY_RE
 
 # metric -> (min_ok, max_ok, reference_value); None = unbounded on that side
 BANDS: dict[str, tuple[float | None, float | None, float | None]] = {
@@ -43,6 +44,10 @@ BANDS: dict[str, tuple[float | None, float | None, float | None]] = {
     "short_sentence_fraction": (0.12, None, 0.23),
     "register_verbs_total": (None, 0.0, 0.0),
     "art_words_total": (None, 0.0, 0.0),
+    # Body-language inventory ("tilts his head", "gasps in disbelief"). The reference
+    # runs zero of these over the same two chapters; we shipped 15 at the same word
+    # count, so every one is a word taken from the line the panel actually prints.
+    "body_inventory_total": (None, 0.0, 0.0),
     # Spoken words per panel, mean over beats. Too high = long static dwells (a 25-word
     # single-panel beat sits on screen ~10s); too low = strobing.
     "words_per_panel": (6.0, 18.0, None),
@@ -219,6 +224,7 @@ def score_script(
         "short_sentence_fraction": _short_sentence_fraction(beats),
         "register_verbs_total": float(len(_REGISTER_RE.findall(text))),
         "art_words_total": float(len(_ART_RE.findall(text))),
+        "body_inventory_total": float(len(_BODY_INVENTORY_RE.findall(text))),
         "words_per_panel": sum(
             len(b.narration.split()) / max(len(b.panel_ids), 1) for b in beats
         ) / max(len(beats), 1),

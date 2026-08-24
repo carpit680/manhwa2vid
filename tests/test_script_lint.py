@@ -2183,3 +2183,49 @@ def test_casual_epithet_is_register_not_slang_or_aside():
     gates = {g.name: g for g in report.gates}
     assert gates["casual_epithets_per_1k"].data["value"] > 0
     assert gates["slang_per_1k"].data["value"] == 0
+
+
+def test_visual_inventory_is_caught_on_the_shapes_that_actually_shipped():
+    """All five are verbatim from the shipped Frozen Player script, and every one of
+    them slipped past both anti-captioning mechanisms. Measured over the same two
+    chapters the reference runs ZERO body/appearance inventory phrases and we ran 15, at
+    near-identical total word counts — so these are purely words taken from the line the
+    panel prints. Appearance appositives are STRIPPED (removable by construction);
+    gestures are FLAGGED, because deleting "tilts his head slightly upward" leaves no
+    verb and only the panel knows what belonged there."""
+    from manhwa2vid.script.lint import lint_captioning, strip_appearance_descriptors
+
+    stripped = [
+        ("A young boy in a beige sweater points at the stage.",
+         "A young boy points at the stage."),
+        ("The presenter, a man in a black suit with black hair, stands there.",
+         "The presenter, a man, stands there."),
+    ]
+    for before, after in stripped:
+        beat = ScriptBeat(beat_id=1, panel_ids=["p"], narration=before)
+        assert strip_appearance_descriptors([beat])[0].narration == after
+
+    flagged = [
+        "Jun-Ho tilts his head slightly upward toward the sky.",
+        "Deok-gu clutches his forehead in deep frustration.",
+        "Jun-Ho sweats and smiles awkwardly.",
+    ]
+    for text in flagged:
+        beat = ScriptBeat(beat_id=1, panel_ids=["p"], narration=text)
+        issues = lint_captioning([beat]).get(1, [])
+        assert any(i.startswith("body_inventory:") for i in issues), text
+
+
+def test_body_inventory_leaves_consequential_action_alone():
+    """The line between inventory and story is consequence, not body parts: a gesture
+    that changes something is the story."""
+    from manhwa2vid.script.lint import lint_captioning
+
+    for text in [
+        "Deok-gu tells him humanity cleared exactly one floor.",
+        "Jun-Ho draws his sword and steps onto the stairs.",
+        "He raises his hand to stop her.",
+        "She forms a blade of pure ice and fires it point blank.",
+    ]:
+        beat = ScriptBeat(beat_id=1, panel_ids=["p"], narration=text)
+        assert lint_captioning([beat]) == {}, text
