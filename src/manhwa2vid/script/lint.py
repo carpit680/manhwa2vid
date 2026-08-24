@@ -2511,6 +2511,14 @@ def _humanize_issues(issues: list[str]) -> str:
                 "reply framing and state the fact directly"
             )
             continue
+        if issue == "closer_no_forward_hook":
+            out.append(
+                "this beat ENDS the chapter and gives a listener no reason to watch the "
+                "next one — it recaps and stops. Land the last sentence on what the "
+                "protagonist is now going to DO about it, drawn from this beat's own "
+                "evidence (a plan, an intent, a next step), never a hedge or a question"
+            )
+            continue
         if issue == "trailing_closer":
             out.append(
                 "this beat ENDS the script and currently trails off on a hedge — end on a "
@@ -3076,8 +3084,62 @@ _TRAILING_CLOSER_RE = re.compile(
 _QUESTION_OPENER_RE = re.compile(r"^\s*(?:whether|will\s+\w+\s+ever|can\s+\w+\s+really)\b", re.I)
 
 
+# A concrete forward commitment: a plan, an intent, a next step. This is what the
+# reference's closer lands and ours does not — Mamoru ends on "the plan writes itself.
+# Climb the tower, get the magic, melt the ice, bring them home. He tells Shim he's
+# becoming a player again", ours ended on "He gasps in disbelief."
+#
+# Deliberately about INTENT, not tense: the narration is present-tense throughout, so
+# "will" is rare and cannot be the signal.
+_FORWARD_HOOK_RE = re.compile(
+    r"\b(?:the plan|plans? to|intends? to|sets? out|sets? his sights|plans on|"
+    r"about to|going to|plans|plotting|decides? to|swears? to|vows? to|promises? to|"
+    r"plans for|from here|next time|next stop|first step|starts? hunting|"
+    r"begins? the climb|becom(?:e|es|ing)\s+\w+\s+again|has a plan|knows what to do|"
+    r"now he|so he|that is when he|is coming for|comes for)\b",
+    re.I,
+)
+
+
+def has_forward_hook(text: str) -> bool:
+    """Does this text point at what happens NEXT, rather than only recapping?"""
+    return bool(_FORWARD_HOOK_RE.search(text or ""))
+
+
 def _is_trailing_closer_sentence(sentence: str) -> bool:
+    """A hedge that ends the chapter on nothing.
+
+    A sentence carrying a concrete forward commitment is exempt even when it is
+    question-shaped: "Whether he can climb ten floors is beside the point — he already
+    has a plan" states an intent, and deleting it would trade a hedge for no ending at
+    all, which is strictly worse. The hedge test is about the ABSENCE of a next step,
+    so a sentence that supplies one cannot be the thing this removes.
+    """
+    if has_forward_hook(sentence):
+        return False
     return bool(_TRAILING_CLOSER_RE.search(sentence) or _QUESTION_OPENER_RE.match(sentence))
+
+
+def lint_closer_forward_hook(beats: list[ScriptBeat]) -> dict[int, list[str]]:
+    """Flag a closer that recaps without pointing forward.
+
+    The gap this fills: every OTHER closer constraint in this pipeline is
+    backward-looking — `lint_closer_reveal` and the `reveal-coverage` gate both demand
+    the final panels' content, and `inject_closer_evidence` pins that content into the
+    closer's plot_beat. Nothing ever asked whether the ending gives a listener a reason
+    to watch the next one, so a closer could satisfy every gate while ending on "He
+    gasps in disbelief." The forward hook existed only as prompt text and as an untested
+    `open_threads` string.
+
+    Warn-and-rewrite, not blocking: "points forward" is a judgement a regex approximates,
+    and a chapter genuinely ending on a closed note is a legitimate shape.
+    """
+    if not beats:
+        return {}
+    closer = beats[-1]
+    if has_forward_hook(closer.narration):
+        return {}
+    return {closer.beat_id: ["closer_no_forward_hook"]}
 
 
 def lint_trailing_closer(beats: list[ScriptBeat]) -> dict[int, list[str]]:

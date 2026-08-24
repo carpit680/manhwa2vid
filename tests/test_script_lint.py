@@ -2229,3 +2229,48 @@ def test_body_inventory_leaves_consequential_action_alone():
     ]:
         beat = ScriptBeat(beat_id=1, panel_ids=["p"], narration=text)
         assert lint_captioning([beat]) == {}, text
+
+
+def test_closer_must_point_forward():
+    """Every other closer constraint is backward-looking — lint_closer_reveal and the
+    reveal-coverage gate both demand the FINAL PANELS' content, and inject_closer_evidence
+    pins it into plot_beat. Nothing asked whether the ending gives a listener a reason to
+    come back, so Frozen Player's closer ended on "He gasps in disbelief" while the
+    reference ends on "he's becoming a player again"."""
+    from manhwa2vid.script.lint import lint_closer_forward_hook
+
+    recap_only = [
+        ScriptBeat(beat_id=1, panel_ids=["p"], narration="He touches the ice."),
+        ScriptBeat(beat_id=2, panel_ids=["q"], narration="A message says the seal can be removed. He gasps in disbelief."),
+    ]
+    assert 2 in lint_closer_forward_hook(recap_only)
+
+    points_forward = [
+        ScriptBeat(beat_id=1, panel_ids=["p"], narration="He touches the ice."),
+        ScriptBeat(beat_id=2, panel_ids=["q"], narration="The seal can be removed. So the plan writes itself: climb, get strong, bring them home."),
+    ]
+    assert lint_closer_forward_hook(points_forward) == {}
+
+
+def test_hedge_strip_spares_a_sentence_that_supplies_a_next_step():
+    """The strip removes a hedge because a hedge ends the chapter on nothing. A
+    question-shaped sentence that states an INTENT is not that — deleting it would trade
+    a hedge for no ending at all, which is strictly worse."""
+    from manhwa2vid.script.lint import (
+        _is_trailing_closer_sentence,
+        strip_trailing_closer_sentence,
+    )
+
+    assert _is_trailing_closer_sentence("Whether he survives remains to be seen.")
+    assert not _is_trailing_closer_sentence(
+        "Whether he can climb ten floors is beside the point — he already has a plan."
+    )
+
+    kept = strip_trailing_closer_sentence([
+        ScriptBeat(beat_id=1, panel_ids=["p"], narration="He reads the message."),
+        ScriptBeat(
+            beat_id=2, panel_ids=["q"],
+            narration="The seal can come off. Whether that takes ten floors or twenty, he sets out at dawn.",
+        ),
+    ])
+    assert "sets out" in kept[-1].narration
