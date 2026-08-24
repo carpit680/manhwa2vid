@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from pathlib import Path
 
 from manhwa2vid.models import (
@@ -736,3 +738,100 @@ def test_refresh_plot_for_span_leaves_a_head_aligned_beat_alone():
         beat_id=1, panel_ids=["p1", "p2"],
         plot_beat="Rell boards the ferry and tells Vesh they leave before the tide turns.")]
     assert refresh_plot_for_span(beats, cards)[0].plot_beat == beats[0].plot_beat
+
+
+def _fp_beat11_cards() -> list[SceneCard]:
+    """Frozen Player beat 11 verbatim: the chapter's awakening, printed on the panels."""
+    return [
+        SceneCard(panel_ids=["p0009_08"], action="a boy points", source_text='the boy: "THE ICE STATUE JUST MOVED."'),
+        SceneCard(panel_ids=["p0010_04"], action="she dismisses him", source_text='the presenter: "I\'M SORRY, THAT\'S INCORRECT."'),
+        SceneCard(panel_ids=["p0011_02"], action="a notification", source_text='"[YOU HAVE COMPLETELY ABSORBED THE FROST QUEEN\'S NUCLEUS.]"'),
+        SceneCard(panel_ids=["p0011_03"], action="another notification", source_text='"[YOU HAVE RECEIVED THE NEW SKILL FROST(EX).]"'),
+    ]
+
+
+def test_required_lines_prioritise_system_messages_but_keep_panel_order():
+    """Selected by priority, presented in reading order — so this never fights the
+    'narrate panels in the order the evidence lists them' rule."""
+    from manhwa2vid.script.lint import required_lines_for_beat
+
+    cards = _fp_beat11_cards()
+    panels = ["p0009_08", "p0010_04", "p0011_02", "p0011_03"]
+    out = required_lines_for_beat(panels, cards, {}, max_words=60)
+    assert any("NUCLEUS" in ln for ln in out)
+    assert any("FROST(EX)" in ln for ln in out)
+    # Panel order, not priority order: the boy's line precedes the system messages.
+    assert out == sorted(out, key=lambda ln: [i for i, c in enumerate(cards) if ln in (c.source_text or "")][0])
+
+
+def test_required_lines_cap_to_what_the_word_budget_can_hold():
+    """A beat cannot be asked to land more lines than its cap has words for — that is
+    how you get four flat 'he says X, it says Y' sentences and no story."""
+    from manhwa2vid.script.lint import required_lines_for_beat
+
+    cards = _fp_beat11_cards()
+    panels = ["p0009_08", "p0010_04", "p0011_02", "p0011_03"]
+    assert len(required_lines_for_beat(panels, cards, {}, max_words=20)) == 2
+    assert len(required_lines_for_beat(panels, cards, {}, max_words=10)) == 1
+    # The highest-priority line survives the tightest budget.
+    assert "[" in required_lines_for_beat(panels, cards, {}, max_words=10)[0]
+    # Never more than the hard cap even with a huge budget.
+    assert len(required_lines_for_beat(panels, cards, {}, max_words=500)) <= 4
+
+
+def test_beat_block_puts_required_lines_under_must_cover():
+    """The fix for the worst observed defect: beat 11 narrated the bystander and omitted
+    the hero bursting out of the ice, because the prompt classed a printed system message
+    as optional DETAIL while only plot_beat was mandatory."""
+    from manhwa2vid.models import ScriptOutlineBeat, SeriesBible
+    from manhwa2vid.script.generate import _cast_context_for_beats
+
+    cards = _fp_beat11_cards()
+    beat = ScriptOutlineBeat(
+        beat_id=11,
+        panel_ids=["p0009_08", "p0010_04", "p0011_02", "p0011_03"],
+        plot_beat="A boy points at the stage.",
+    )
+    block = _cast_context_for_beats(
+        [beat], [], SeriesBible(series_slug="s", title="S"), cards,
+        _cap_config={}, n_beats_total=26, n_chapters=2,
+    )
+    assert "REQUIRED LINES" in block
+    assert "NUCLEUS" in block
+    # Promoted ABOVE the evidence block, i.e. onto the MUST COVER side.
+    assert block.index("REQUIRED LINES") < block.index("EVIDENCE")
+    assert block.index("MUST COVER") < block.index("REQUIRED LINES")
+
+
+def test_beat_block_omits_required_lines_when_panels_print_nothing():
+    from manhwa2vid.models import ScriptOutlineBeat, SeriesBible
+    from manhwa2vid.script.generate import _cast_context_for_beats
+
+    cards = [SceneCard(panel_ids=["p1"], action="he walks on", source_text="")]
+    beat = ScriptOutlineBeat(beat_id=1, panel_ids=["p1"], plot_beat="He walks on.")
+    block = _cast_context_for_beats(
+        [beat], [], SeriesBible(series_slug="s", title="S"), cards,
+        _cap_config={}, n_beats_total=10, n_chapters=1,
+    )
+    assert "REQUIRED LINES" not in block
+
+
+def test_required_lines_are_not_demanded_twice_across_beats():
+    """The same line required in two beats would collide with rule 7's ONCE-ONLY."""
+    from manhwa2vid.models import ScriptOutlineBeat, SeriesBible
+    from manhwa2vid.script.generate import _cast_context_for_beats
+
+    card = SceneCard(panel_ids=["pA", "pB"], action="x", source_text='system: "[YOU HAVE ABSORBED THE CORE.]"')
+    beats = [
+        ScriptOutlineBeat(beat_id=1, panel_ids=["pA"], plot_beat="first"),
+        ScriptOutlineBeat(beat_id=2, panel_ids=["pB"], plot_beat="second"),
+    ]
+    block = _cast_context_for_beats(
+        beats, [], SeriesBible(series_slug="s", title="S"), [card],
+        _cap_config={}, n_beats_total=10, n_chapters=1,
+    )
+    # Required exactly once. It still appears in BOTH beats' EVIDENCE blocks, which is
+    # deliberate — the SAYS ALOUD / THINKS header there is what tells the writer how to
+    # voice it — so count only the REQUIRED LINES sections.
+    required_sections = re.findall(r"REQUIRED LINES.*?(?=  MAX )", block, re.S)
+    assert sum(sec.count("[YOU HAVE ABSORBED THE CORE.]") for sec in required_sections) == 1

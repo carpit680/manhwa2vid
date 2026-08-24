@@ -1409,6 +1409,101 @@ def _dropped_line_priority(line: str) -> tuple[int, int, int]:
     return (is_system, has_digit, len(line))
 
 
+def is_system_line(line: str) -> bool:
+    """A bracketed system message — the genre's non-negotiable plot beats."""
+    return _dropped_line_priority(line)[0] == 1
+
+
+def required_lines_for_beat(
+    panel_ids: list[str],
+    cards: list[SceneCard],
+    config: dict[str, Any],
+    *,
+    max_words: int,
+) -> list[str]:
+    """The printed lines this beat MUST land, chosen deterministically.
+
+    The single source of truth for *which lines are mandatory*, the way
+    `beat_word_cap` is for *how many words are allowed* — so the prompt that asks for
+    them and the gate that checks them can never disagree about the set.
+
+    This exists because the loss was never that the writer couldn't see these lines:
+    they were already in the EVIDENCE block. It was RANK. The beat block calls evidence
+    "your only source of detail" and rule 7 says evidence bounds the DETAIL — so the
+    prompt itself classified a printed system message as optional, while only
+    `plot_beat` was mandatory. Frozen Player beat 11 owned the panels where Jun-Ho
+    bursts out of the ice with "[YOU HAVE COMPLETELY ABSORBED THE FROST QUEEN'S
+    NUCLEUS.]" and "[YOU HAVE RECEIVED THE NEW SKILL FROST(EX).]" printed on them, and
+    narrated the boy pointing at the statue instead. The writer obeyed the prompt.
+
+    Selected by `_dropped_line_priority` (system > numeric > longer) but returned in
+    PANEL ORDER: priority decides what makes the cut, reading order decides how it is
+    presented, so this never fights the "narrate panels in the order listed" rule.
+
+    Capped at `max_required_lines_per_beat` (4) AND at what the word budget can hold
+    (`max_words // words_per_required_line`). Not "all lines": `split_dense_beats`
+    bounds a beat at 6, and 6 x 10 words is the entire 60-word ceiling with nothing
+    left for a spine or a stake — which is how you get four flat "he says X, it says Y"
+    sentences. 4 x 10 leaves ~20 words free, matching the 40-45 words/beat measured on
+    both golds and the reference. Lines beyond the cap stay in EVIDENCE and remain
+    covered by the warn-level corrective rounds, so nothing is lost relative to before.
+    """
+    lines = quoted_lines_for_panels(panel_ids, cards)
+    if not lines:
+        return []
+    per_line = int(get_nested(config, "script", "words_per_required_line", default=10))
+    hard_cap = int(get_nested(config, "script", "max_required_lines_per_beat", default=4))
+    budget_cap = max_words // per_line if per_line > 0 else hard_cap
+    n_req = max(0, min(len(lines), hard_cap, budget_cap))
+    if not n_req:
+        return []
+    chosen = set(sorted(lines, key=_dropped_line_priority, reverse=True)[:n_req])
+    return [ln for ln in lines if ln in chosen]  # back into panel order
+
+
+def dropped_system_lines(
+    beats: list[ScriptBeat],
+    cards: list[SceneCard],
+    dropped: dict[int, list[str]],
+    required_by_beat: dict[int, list[str]],
+) -> dict[int, list[str]]:
+    """Of the lines a beat dropped, which were REQUIRED bracketed system messages.
+
+    The blocking tier of `dialogue-delivery`, kept separate from the warn tier because
+    the two differ in kind. The general check is a 0.3 stemmed-overlap proxy over every
+    quoted line and moves for honest reasons — a faithful paraphrase scores low — so
+    failing on it would fail every run and amount to tuning the metric to the threshold.
+    A bracketed system message is a plot beat by construction, there are a handful per
+    chapter, and it is precisely what went missing.
+    """
+    out: dict[int, list[str]] = {}
+    for beat in beats:
+        msgs = dropped.get(beat.beat_id)
+        if not msgs:
+            continue
+        missing = [
+            line for line in required_by_beat.get(beat.beat_id, [])
+            if is_system_line(line) and any(line in m for m in msgs)
+        ]
+        if missing:
+            out[beat.beat_id] = missing
+    return out
+
+
+def dialogue_delivery_status(
+    mode: str,
+    dropped: dict[int, list[str]],
+    dropped_system: dict[int, list[str]],
+) -> bool | str:
+    """Tier the gate: `warn` reports only, `system` fails on a dropped required system
+    message, `strict` fails on any dropped printed line."""
+    if mode == "strict":
+        return True if not dropped else False
+    if mode == "system":
+        return False if dropped_system else (True if not dropped else "warn")
+    return True if not dropped else "warn"
+
+
 def lint_dropped_dialogue(
     beats: list[ScriptBeat],
     cards: list[SceneCard],

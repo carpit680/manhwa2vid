@@ -180,6 +180,21 @@ script:
                             # Audits OMISSION — the mirror of verify_alignment below.
   verify_alignment: true    # adversarial VLM pass: flag narration claims unsupported by panels
   verify_max_beats: 24      # sample cap for the alignment audit on long chapters
+  # Lines the artwork PRINTS on a beat's panels are promoted out of EVIDENCE (which the
+  # prompt calls optional detail) into MUST COVER. Frozen Player beat 11 owned the
+  # panels where the hero bursts out of the ice with "[YOU HAVE COMPLETELY ABSORBED THE
+  # FROST QUEEN'S NUCLEUS.]" printed on them and narrated a boy pointing at a statue.
+  max_required_lines_per_beat: 4  # 4 x 10 words = 40, leaving ~20 of the 60-word ceiling
+                                  # for spine and stakes. Asking for all 6 a beat may
+                                  # carry fills the budget and produces list-recitation.
+  words_per_required_line: 10     # words_per_beat(40) / measured median quoted lines(4);
+                                  # within 1% of words_per_shown_panel — same speech rate
+  # warn = report only | system = FAIL on a dropped bracketed system message | strict =
+  # FAIL on any dropped printed line. `system` because that tier is different in KIND:
+  # a handful per chapter, always plot-critical, and the exact class that went missing.
+  # The general check stays a warn — its 0.3 stemmed-overlap proxy moves for honest
+  # reasons (a faithful paraphrase scores low), so blocking on it would tune the metric.
+  dialogue_delivery_gate: system
 
 qa:
   max_fallback_fraction: 0.34 # grounded-fallback may rescue beats, not author the script

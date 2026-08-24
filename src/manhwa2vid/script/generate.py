@@ -94,6 +94,7 @@ def _cast_context_for_beats(
 ) -> str:
     attr_map = {row.panel_id: row for row in attribution}
     lines: list[str] = []
+    _required_seen: set[str] = set()
     for beat in outline_beats:
         people: list[str] = []
         for panel_id in beat.panel_ids:
@@ -114,18 +115,28 @@ def _cast_context_for_beats(
         # 168-word budget, which is a paragraph of screen-time debt. The measured
         # references (both golds, the reference channel) all sit near 40-45 words/beat.
         from manhwa2vid.script.grounding import quoted_lines_for_panels
-        from manhwa2vid.script.lint import beat_word_cap
+        from manhwa2vid.script.lint import beat_word_cap, required_lines_for_beat
 
         # Same payload-aware budget the polish enforces. Telling the writer a 16-word
         # ceiling for a beat that must land three system messages sets it up to fail a
         # gate it was never given room to pass.
+        _cfg = _cap_config if _cap_config is not None else {}
         max_words = beat_word_cap(
             len(beat.panel_ids),
-            _cap_config if _cap_config is not None else {},
+            _cfg,
             n_beats=n_beats_total,
             n_chapters=n_chapters,
             payload_lines=len(quoted_lines_for_panels(beat.panel_ids, cards)) if cards else 0,
         )
+        # The printed lines this beat must land, promoted out of EVIDENCE (where the
+        # prompt calls them optional detail) and into MUST COVER. Deduped across beats
+        # in this chunk — the same line required twice would collide with rule 7's
+        # ONCE-ONLY, and the first beat holding it is the one in reading order.
+        required = [
+            ln for ln in required_lines_for_beat(beat.panel_ids, cards or [], _cfg, max_words=max_words)
+            if ln not in _required_seen
+        ]
+        _required_seen.update(required)
         # plot_beat is the SPINE, not metadata. It used to ride on the same line as
         # char_ids under an evidence block headed "narrate ONLY this", and the writer
         # read that ranking exactly as written: for Solo Leveling ch1 beat 8 the outline
@@ -145,6 +156,15 @@ def _cast_context_for_beats(
                 "  State them as story, not as a footnote:\n"
                 + "".join(f"    - {c}\n" for c in beat.required_context)
                 if beat.required_context else ""
+            )
+            + (
+                "  REQUIRED LINES — the artwork PRINTS these words on this beat's own\n"
+                "  panels. Each one lands in your narration as reported speech (its\n"
+                "  evidence header below says whether it is spoken, thought or unowned).\n"
+                "  These are part of MUST COVER — the spine's concrete payoffs, not\n"
+                "  detail. Weave them into the action; do not list them:\n"
+                + "".join(f"    - {ln}\n" for ln in required)
+                if required else ""
             )
             +
             f"  MAX {max_words} words — hard limit. Cut DESCRIPTION first; never drop an\n"
@@ -1669,7 +1689,11 @@ def generate_script(
     # Omission pass. Every other gate here audits what the narration ASSERTS; this one
     # audits what it silently dropped, against the outline that was built with
     # whole-chapter context. See lint_plot_coverage for why this is warn-and-rewrite.
+    from manhwa2vid.script.grounding import quoted_lines_for_panels
     from manhwa2vid.script.lint import (
+        beat_word_cap,
+        dialogue_delivery_status,
+        dropped_system_lines,
         lint_abstraction_drift,
         lint_ambiguous_pronoun,
         lint_dropped_dialogue,
@@ -1680,6 +1704,7 @@ def generate_script(
         lint_repeated_setting,
         lint_time_shift_marker,
         lint_unanchored_opening,
+        required_lines_for_beat,
         rewrite_beat as _rewrite_beat,
     )
 
@@ -2102,14 +2127,48 @@ def generate_script(
         if unmarked else "",
         boundaries=sorted(cuts), unmarked=unmarked,
     )
-    dropped_dialogue = lint_dropped_dialogue(beats, cards)
+    # Tiered, because the two halves of this check have very different confidence.
+    #
+    # The metric is a 0.3 stemmed-overlap proxy over every substantive quoted line, and
+    # it moves for honest reasons — a faithful paraphrase scores low. Failing on all of
+    # it would fail every run (20 of 26 FP beats flag today) and would be tuning the
+    # metric to the threshold, which lint_plot_coverage's docstring warns against.
+    #
+    # A BRACKETED SYSTEM LINE is different in kind, not degree: in this genre it is
+    # always a plot beat, there are only a handful per chapter, and it is exactly the
+    # class that went missing — FP beat 11 dropped "[YOU HAVE COMPLETELY ABSORBED THE
+    # FROST QUEEN'S NUCLEUS.]", the chapter's own reveal. Now that those lines are
+    # REQUIRED LINES in the first-pass prompt and survive two rewrite rounds plus a
+    # dedicated retry, zero is a reachable bar, so that tier can block.
+    #
+    # max_lines_per_beat=6 here, not the rewrite path's 2: the rewrite caps its ASK so
+    # the brief stays workable, but the gate must SEE every dropped line or a required
+    # system line ranked third would go silently uncounted.
+    gate_mode = str(get_nested(config, "script", "dialogue_delivery_gate", default="system"))
+    dropped_dialogue = lint_dropped_dialogue(beats, cards, max_lines_per_beat=6)
+    _n_ch = _chapter_count(meta, paths)
+    required_by_beat = {
+        b.beat_id: required_lines_for_beat(
+            b.panel_ids, cards or [], config,
+            max_words=beat_word_cap(
+                len(b.panel_ids), config, n_beats=len(beats), n_chapters=_n_ch,
+                payload_lines=len(quoted_lines_for_panels(b.panel_ids, cards or [])),
+            ),
+        )
+        for b in beats
+    }
+    dropped_system = dropped_system_lines(beats, cards or [], dropped_dialogue, required_by_beat)
     final_report.add(
         "dialogue-delivery",
-        True if not dropped_dialogue else "warn",
+        dialogue_delivery_status(gate_mode, dropped_dialogue, dropped_system),
+        (f"{len(dropped_system)} beat(s) dropped a REQUIRED system message the panel "
+         f"prints — the genre's plot beats: {sorted(dropped_system)}")
+        if dropped_system else
         (f"{len(dropped_dialogue)} beat(s) still narrate a panel's picture while skipping "
          f"its own quoted line after the rewrite rounds: {sorted(dropped_dialogue)}")
         if dropped_dialogue else "",
         dropped=sorted(dropped_dialogue),
+        dropped_system=sorted(dropped_system),
     )
     if _STORY_RESIDUAL:
         survived = list(_STORY_RESIDUAL)

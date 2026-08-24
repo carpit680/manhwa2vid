@@ -83,6 +83,11 @@ THE TEN RULES:
    narrate a detail absent from the evidence, and never drop a MUST COVER event
    because a panel description was more vivid. Never preview later scenes. World
    terms (gates, ranks) get a six-word gloss on first use only.
+   - A beat's REQUIRED LINES are printed on its own panels and sit on the MUST COVER
+     side of this rule, not the DETAIL side: each one lands, as reported speech under
+     its evidence header, before any purely visual detail earns a word. A system
+     message the art prints is a plot beat — narrating the room while skipping it is
+     the single worst thing you can do to a chapter.
    - ONCE ONLY: a fact, exchange, or reaction is narrated in exactly one beat. When a
      beat's evidence covers ground an earlier beat already told, carry the moment FORWARD
      instead of restating it — the previous beat's summary shows you what is already said.

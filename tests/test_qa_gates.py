@@ -1563,3 +1563,43 @@ def test_llm_link_pass_survives_malformed_merges(monkeypatch):
     monkeypatch.setattr(link_mod, "apply_stage_model", lambda llm, *a, **k: llm, raising=False)
     merges, updates = link_mod._llm_link_pass(cards, bible, {})
     assert merges == {} and updates == []
+
+
+def test_dialogue_delivery_fails_only_on_a_dropped_required_system_line():
+    """The tier that blocks. Frozen Player beat 11 owned the panels printing "[YOU HAVE
+    COMPLETELY ABSORBED THE FROST QUEEN'S NUCLEUS.]" — the chapter's own reveal — and
+    narrated a boy pointing at a statue. A handful of these exist per chapter and every
+    one is a plot beat, so zero is a reachable bar; the general check is a lexical proxy
+    that moves for honest reasons and stays a warn."""
+    from manhwa2vid.models import SceneCard, ScriptBeat
+    from manhwa2vid.script.lint import dialogue_delivery_status, dropped_system_lines
+
+    system_line = "[YOU HAVE COMPLETELY ABSORBED THE FROST QUEEN'S NUCLEUS.]"
+    color_line = "THE ICE STATUE JUST MOVED."
+    beats = [ScriptBeat(beat_id=11, panel_ids=["p0011_02"], narration="A boy points at the stage.")]
+    cards = [SceneCard(panel_ids=["p0011_02"], action="x", source_text=f'"{system_line}"')]
+
+    dropped = {11: [f'narration drops the panel\'s own line — it MUST land: "{system_line}"']}
+    system_missing = dropped_system_lines(beats, cards, dropped, {11: [system_line]})
+    assert system_missing == {11: [system_line]}
+    assert dialogue_delivery_status("system", dropped, system_missing) is False
+
+    # A dropped COLOR line is warn, not fail — same dropped dict, nothing required.
+    color_dropped = {11: [f'narration drops the panel\'s own line — it MUST land: "{color_line}"']}
+    none_missing = dropped_system_lines(beats, cards, color_dropped, {11: [color_line]})
+    assert none_missing == {}
+    assert dialogue_delivery_status("system", color_dropped, none_missing) == "warn"
+
+
+def test_dialogue_delivery_tiers_respect_the_configured_mode():
+    from manhwa2vid.script.lint import dialogue_delivery_status
+
+    dropped = {1: ["something"]}
+    system = {1: ["[X HAPPENED.]"]}
+    # warn mode never blocks, even on a system line
+    assert dialogue_delivery_status("warn", dropped, system) == "warn"
+    # strict blocks on any dropped line
+    assert dialogue_delivery_status("strict", dropped, {}) is False
+    # clean runs pass in every mode
+    for mode in ("warn", "system", "strict"):
+        assert dialogue_delivery_status(mode, {}, {}) is True
