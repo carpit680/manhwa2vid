@@ -1820,6 +1820,31 @@ def generate_script(
                 recovered.append(beat)
         beats = recovered
 
+    # Voice LAST, once the facts have stopped moving. Every pass above changes WHAT a
+    # beat says; this one changes only how it is delivered, so running it earlier would
+    # just have its work overwritten by the next factual rewrite.
+    #
+    # Necessary because the prompt cannot do this. Flipping every liveliness rule in
+    # recap.txt from a ceiling to a floor, with the reference's measured numbers stated
+    # outright, moved nothing on either title — similes 0 -> 0, casual epithets 0 -> 0,
+    # short-sentence fraction 3% -> 2% and 7% -> 8%. Second measured instance of prompt
+    # rules failing to move voice (the first: four zero-shot rules about time markers).
+    # A targeted pass with a worked BAD -> GOOD example is what has actually worked here.
+    if get_nested(config, "script", "voice_pass", default=True):
+        from manhwa2vid.script.passes import rewrite_voice, voice_is_flat
+
+        flat = [b.beat_id for b in beats if voice_is_flat(b)]
+        if flat:
+            console.print(
+                f"[cyan]Voice pass:[/] re-delivering {len(flat)} flat beat(s): {sorted(flat)}"
+            )
+            beats = [
+                beat.model_copy(update={"narration": rewrite_voice(
+                    beat, bible, attribution, config, scene_cards=cards,
+                )}) if beat.beat_id in set(flat) else beat
+                for beat in beats
+            ]
+
     hook_bad = lint_hook_grounding(hook, " ".join(
         f"{c.source_text or ''} {c.action or ''} {' '.join(c.key_terms or [])}" for c in cards
     ))
