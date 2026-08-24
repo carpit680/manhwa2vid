@@ -220,6 +220,13 @@ def _normalize_loudness(input_path: Path, output: Path, target: float) -> None:
             "copy",
             "-c:a",
             "aac",
+            # Without this the moov atom lands after mdat (ffmpeg's default for a
+            # streamed write), which several players — including the one used to hand
+            # previews back for review — refuse to start until the whole file has
+            # downloaded. Costs nothing extra to write it here since output is already
+            # a fresh file.
+            "-movflags",
+            "+faststart",
             str(output),
         ]
     )
