@@ -1696,6 +1696,7 @@ def generate_script(
         dropped_system_lines,
         lint_abstraction_drift,
         lint_ambiguous_pronoun,
+        lint_broken_sentences,
         lint_closer_forward_hook,
         lint_dropped_dialogue,
         lint_hook_grounding,
@@ -1748,6 +1749,7 @@ def generate_script(
             {} if has_locked_cue else lint_time_shift_marker(bs, plot_by_id_all),
             lint_repeated_setting(bs, world_terms),
             lint_dropped_dialogue(bs, cards),
+            lint_broken_sentences(bs),
             lint_closer_forward_hook(bs),
             lint_abstraction_drift(bs, cards),
             lint_missing_introduction(bs, bible),
@@ -2227,12 +2229,22 @@ def generate_script(
          f"deterministic polish: {sorted(residual)}") if residual else "",
         flagged=sorted(first_round), remaining=sorted(residual),
     )
+    # Openings AND the rest of the beat. lint_malformed_opening only ever inspected the
+    # first sentence, so "Nearby, Kim Sangshik, Bak." — a verbless stub at the END of a
+    # beat — passed every check and was spoken aloud in a rendered video.
     malformed = sorted(lint_malformed_opening(beats))
+    broken = lint_broken_sentences(beats)
     final_report.add(
         "beats-wellformed",
-        not malformed,
-        f"beat(s) starting mid-sentence after repair: {malformed}" if malformed else "",
+        not (malformed or broken),
+        "; ".join(
+            ([f"beat(s) starting mid-sentence after repair: {malformed}"] if malformed else [])
+            + ([f"broken sentences survived the rewrite rounds: "
+                + "; ".join(f"beat {b}: {v[0]}" for b, v in sorted(broken.items())[:3])]
+               if broken else [])
+        ),
         malformed=malformed,
+        broken=sorted(broken),
     )
     # Persist BEFORE enforcing. A failing gate still blocks the stage — enforce raises
     # and nothing downstream runs — but the artifact it is complaining about now exists

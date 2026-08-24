@@ -2209,6 +2209,46 @@ def sentence_fragments(text: str, *, min_words: int = 3) -> list[str]:
     return out
 
 
+# A speech verb that names its listener and then stops, never saying WHAT was said:
+# "Jin-Woo offers a weak smile, telling Lee Joo-hee." The sentence has a main verb, so
+# sentence_fragments correctly passes it — the hole is semantic, not syntactic. Requires
+# a capitalised name (or pronoun) directly before the terminator, so ordinary intransitive
+# uses survive: "Bak complains to Kim Sangshik." keeps its preposition, and "He explains."
+# is a bare verb with no stranded listener.
+_TRUNCATED_SPEECH_RE = re.compile(
+    r"\b(?:telling|tells|told|asking|asks|saying|says|replying|replies|"
+    r"answering|answers|admitting|admits|warning|warns|reminding|reminds)\s+"
+    r"(?:him|her|them|it|[A-Z][\w'’-]*(?:[- ][A-Z][\w'’-]*)*)\s*[.!?]",
+)
+
+
+def lint_broken_sentences(beats: list[ScriptBeat]) -> dict[int, list[str]]:
+    """Every sentence in a beat, not just its first — the gap that shipped two dead
+    stubs into a rendered video.
+
+    `sentence_fragments` already detected "Nearby, Kim Sangshik, Bak." perfectly well.
+    The problem was that nothing ever ASKED it about finished narration: it is reachable
+    only through `narration_defects`, which is used in exactly one place —
+    `accept_rewrite` — and there only as a RELATIVE count, rewrite versus original. A
+    fragment the writer produced in a beat that no rewrite happened to touch was
+    therefore never examined, and the one absolute gate on well-formedness,
+    `lint_malformed_opening`, inspects a beat's FIRST sentence only.
+
+    So this is not a new detector. It is the existing detector, finally applied to the
+    whole beat, plus the one shape it structurally cannot see: a speech verb that names
+    its listener and never says what was said.
+    """
+    report: dict[int, list[str]] = {}
+    for beat in beats:
+        issues = [f"fragment: {s[:60]}" for s in sentence_fragments(beat.narration)]
+        for sent in _SENTENCE_SPLIT_RE.split(beat.narration.strip()):
+            if _TRUNCATED_SPEECH_RE.search(sent.strip()):
+                issues.append(f"truncated_speech: {sent.strip()[:60]}")
+        if issues:
+            report[beat.beat_id] = issues
+    return report
+
+
 def narration_defects(text: str) -> list[str]:
     """Cheap deterministic defects in one narration string, for comparing two candidates.
 
@@ -2577,6 +2617,21 @@ def _humanize_issues(issues: list[str]) -> str:
                 "this beat is the chapter's ENDING and its final panels read: "
                 f"\"{evidence}\" — the beat must END by landing that content in reported "
                 "form (never verbatim); everything else in the beat is secondary"
+            )
+            continue
+        if issue.startswith("fragment:"):
+            frag = issue.split(":", 1)[1].strip()
+            out.append(
+                f'"{frag}" is not a sentence — it has no verb. Either give it one or fold '
+                "it into the sentence beside it; a listener hears a dead stub"
+            )
+            continue
+        if issue.startswith("truncated_speech:"):
+            sent = issue.split(":", 1)[1].strip()
+            out.append(
+                f'"{sent}" names who was spoken to but never what was said. Say the '
+                "CONTENT of the line, from this beat's own evidence, or drop the speech "
+                "framing entirely"
             )
             continue
         if issue.startswith("body_inventory:"):

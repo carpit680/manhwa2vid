@@ -2274,3 +2274,52 @@ def test_hedge_strip_spares_a_sentence_that_supplies_a_next_step():
         ),
     ])
     assert "sets out" in kept[-1].narration
+
+
+def test_broken_sentences_are_checked_across_the_whole_beat():
+    """Both of these shipped into a rendered Solo Leveling video. sentence_fragments
+    already detected the first one perfectly — nothing ever ASKED it about finished
+    narration. It is reachable only through narration_defects, used in exactly one place
+    (accept_rewrite) and there only as a RELATIVE count, rewrite vs original; a fragment
+    the writer produced in a beat no rewrite touched was never examined. The one absolute
+    well-formedness gate, lint_malformed_opening, inspects a beat's FIRST sentence only."""
+    from manhwa2vid.script.lint import lint_broken_sentences
+
+    beat = ScriptBeat(
+        beat_id=11, panel_ids=["p"],
+        narration=(
+            "Jin-Woo offers a weak smile, telling Lee Joo-hee. Our guy is basically a "
+            "professional punching bag at this point. She stares back at him in silent "
+            "pity. Nearby, Kim Sangshik, Bak."
+        ),
+    )
+    issues = lint_broken_sentences([beat])[11]
+    assert any(i.startswith("fragment:") and "Nearby" in i for i in issues)
+    assert any(i.startswith("truncated_speech:") and "Lee Joo-hee" in i for i in issues)
+
+
+def test_broken_sentences_leaves_well_formed_narration_alone():
+    """Precision matters more than recall here: a false positive sends a good beat
+    through a rewrite that can only make it worse."""
+    from manhwa2vid.script.lint import lint_broken_sentences
+
+    for text in [
+        "Bak complains to Kim Sangshik. Kim just sips his coffee.",
+        "He tells Bak that the dungeon is bound to be weak today.",
+        "Kim Sangshik waves a coffee cup and asks him if he has eaten yet.",
+        "She asks how they could skip a healer.",
+        "Our guy cannot even get a basic caffeine fix. Truly a brutal start to the day.",
+        "Jin-Woo is basically the designated back-row spectator.",
+        "He explains.",
+        "Silence.",
+    ]:
+        assert lint_broken_sentences([ScriptBeat(beat_id=1, panel_ids=["p"], narration=text)]) == {}, text
+
+
+def test_broken_sentence_issues_become_actionable_rewrite_instructions():
+    from manhwa2vid.script.lint import _humanize_issues
+
+    out = _humanize_issues(["fragment: Nearby, Kim Sangshik, Bak."])
+    assert "no verb" in out
+    out2 = _humanize_issues(["truncated_speech: Jin-Woo offers a weak smile, telling Lee Joo-hee."])
+    assert "never what was said" in out2
