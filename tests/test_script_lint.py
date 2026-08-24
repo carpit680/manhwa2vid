@@ -2323,3 +2323,36 @@ def test_broken_sentence_issues_become_actionable_rewrite_instructions():
     assert "no verb" in out
     out2 = _humanize_issues(["truncated_speech: Jin-Woo offers a weak smile, telling Lee Joo-hee."])
     assert "never what was said" in out2
+
+
+def test_narration_defects_guards_rewrites_against_truncated_speech():
+    """The reason the first fix was not enough. lint_broken_sentences checked this shape
+    at the END of the run, but narration_defects — which every accept_rewrite in the
+    pipeline consults — could not see it, so any rewrite was free to ADD one. A beat the
+    story-integrity round had already cleaned came back from a later rewrite as "Jin-Woo
+    smiles weakly and tells Lee Joo-hee." and no guard objected."""
+    from manhwa2vid.script.lint import accept_rewrite, narration_defects
+
+    clean = "Jin-Woo smiles weakly and tells Lee Joo-hee that he is used to it by now."
+    broken = "Jin-Woo smiles weakly and tells Lee Joo-hee."
+    assert not narration_defects(clean)
+    assert any(d.startswith("truncated_speech:") for d in narration_defects(broken))
+    # And the guard now refuses that rewrite rather than shipping it.
+    assert accept_rewrite(clean, broken) == clean
+
+
+def test_trailing_name_list_fragment_survives_an_ordinary_noun():
+    """"Near the entrance, Kim Sangshik, Bak." is the same dead stub as "Nearby, Kim
+    Sangshik, Bak.", but one ordinary lowercase noun satisfies the possible-verb
+    heuristic and the whole sentence was waved through. That heuristic is deliberately
+    precision-favouring and stays; this catches the shape it cannot."""
+    from manhwa2vid.script.lint import sentence_fragments
+
+    assert sentence_fragments("Near the entrance, Kim Sangshik, Bak.") == [
+        "Near the entrance, Kim Sangshik, Bak."
+    ]
+    # Reported once, not twice — the two detectors overlap on the plainest case, and a
+    # doubled defect would make accept_rewrite reject a rewrite that merely left it be.
+    assert sentence_fragments("Nearby, Kim Sangshik, Bak.") == ["Nearby, Kim Sangshik, Bak."]
+    # A real sentence whose subject happens to be a list of names is untouched.
+    assert sentence_fragments("Kim Sangshik, Bak, and Song Chi-yul enter the gate together.") == []

@@ -2206,6 +2206,33 @@ def sentence_fragments(text: str, *, min_words: int = 3) -> list[str]:
         ):
             continue
         out.append(sentence.strip())
+    # The two detectors overlap on the plainest case ("Nearby, Kim Sangshik, Bak."),
+    # and a defect counted twice would make accept_rewrite reject a rewrite that
+    # merely left it alone.
+    return list(dict.fromkeys([*out, *_trailing_name_list_fragments(text)]))
+
+
+# "Near the entrance, Kim Sangshik, Bak." — the same dead stub as "Nearby, Kim Sangshik,
+# Bak.", but one ordinary lowercase noun ("entrance") is enough to satisfy the
+# possible-verb heuristic above and the whole sentence is waved through. That heuristic
+# is deliberately precision-favouring and stays as it is; this catches the specific shape
+# it cannot: a sentence ENDING in two or more comma-separated capitalised names, with no
+# verb-looking word anywhere in it.
+_TRAILING_NAMES_RE = re.compile(
+    r"(?:^|,)\s*[A-Z][\w'’-]*(?:[- ][A-Z][\w'’-]*)*\s*,\s*"
+    r"[A-Z][\w'’-]*(?:[- ][A-Z][\w'’-]*)*\s*[.!?]\s*$"
+)
+
+
+def _trailing_name_list_fragments(text: str) -> list[str]:
+    out: list[str] = []
+    for sentence in _SENTENCE_SPLIT_RE.split((text or "").strip()):
+        sent = sentence.strip()
+        if not sent or not _TRAILING_NAMES_RE.search(sent):
+            continue
+        if any(_looks_like_verb(w) for w in sent.split()):
+            continue
+        out.append(sent)
     return out
 
 
@@ -2267,6 +2294,16 @@ def narration_defects(text: str) -> list[str]:
     """
     defects: list[str] = []
     defects += [f"fragment: {s[:60]}" for s in sentence_fragments(text)]
+    # A speech verb that names its listener and never says what was said. Added after a
+    # rewrite reintroduced "Jin-Woo smiles weakly and tells Lee Joo-hee." into a beat the
+    # story-integrity round had already cleaned: the shape was checked by
+    # lint_broken_sentences at the END of the run but was invisible HERE, so every
+    # accept_rewrite in the pipeline let a rewrite add one for free.
+    defects += [
+        f"truncated_speech: {sent.strip()[:60]}"
+        for sent in _SENTENCE_SPLIT_RE.split((text or "").strip())
+        if _TRUNCATED_SPEECH_RE.search(sent.strip())
+    ]
     stripped = (text or "").strip()
     if stripped and stripped.split() and stripped.split()[0][:1].islower():
         defects.append("opens mid-sentence")
