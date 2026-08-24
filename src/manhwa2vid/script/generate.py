@@ -1985,6 +1985,7 @@ def generate_script(
         strip_repeated_appositives,
         dedupe_appositive_clauses,
         trim_overlong_beats,
+        repair_broken_sentences,
         repair_truncated_sentences,
         repair_subject_comma,
         strip_internal_labels,
@@ -2033,6 +2034,8 @@ def generate_script(
         bs = repair_malformed_openings(bs)
         bs = repair_subject_comma(bs)
         bs = repair_truncated_sentences(bs)
+        # The two dead-stub shapes the rewrite declined three runs running.
+        bs = repair_broken_sentences(bs)
         bs = strip_internal_labels(bs, bible)
         # Rule 4's FLOOR, before the ceiling: insert the one clause each named character
         # is owed, then let the two removers strip every later one. Both removers must

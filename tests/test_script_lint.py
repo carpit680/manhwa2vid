@@ -2356,3 +2356,41 @@ def test_trailing_name_list_fragment_survives_an_ordinary_noun():
     assert sentence_fragments("Nearby, Kim Sangshik, Bak.") == ["Nearby, Kim Sangshik, Bak."]
     # A real sentence whose subject happens to be a list of names is untouched.
     assert sentence_fragments("Kim Sangshik, Bak, and Song Chi-yul enter the gate together.") == []
+
+
+def test_repair_broken_sentences_fixes_what_the_rewrite_declined():
+    """Both shapes survived a story-integrity rewrite AND the dedicated dialogue retry
+    with the offending sentence quoted back at the model — and beat 11's evidence even
+    CONTAINED what Jin-Woo says. Three runs running. That is this codebase's threshold:
+    a rule the model declines twice stops being a request."""
+    from manhwa2vid.script.lint import lint_broken_sentences, repair_broken_sentences
+
+    beat = ScriptBeat(
+        beat_id=11, panel_ids=["p"],
+        narration=(
+            "Jin-Woo smiles weakly and tells Lee Joo-hee. She looks at him with a sad "
+            "gaze. Then, he suggests they head inside. Nearby, Kim Sangshik, Bak. They "
+            "look toward a glowing blue Gate."
+        ),
+    )
+    fixed = repair_broken_sentences([beat])[0].narration
+    # The stranded names get the verb that was already sitting in the next sentence.
+    assert "Kim Sangshik and Bak look toward a glowing blue Gate." in fixed
+    # The dangling speech clause goes; nothing is invented in its place.
+    assert "Jin-Woo smiles weakly." in fixed
+    assert "tells Lee Joo-hee." not in fixed
+    assert lint_broken_sentences([ScriptBeat(beat_id=11, panel_ids=["p"], narration=fixed)]) == {}
+
+
+def test_repair_broken_sentences_leaves_sound_narration_alone():
+    from manhwa2vid.script.lint import repair_broken_sentences
+
+    for text in [
+        "He tells Bak that the dungeon is bound to be weak today.",
+        "Kim Sangshik waves a coffee cup and asks him if he has eaten yet.",
+        "Bak nods and tells the raid party that they can trust the veteran leader.",
+        "Kim Sangshik, Bak, and Song Chi-yul enter the gate together.",
+        "Jin-Woo and Lee Joo-hee turn toward the entrance. They step through the light.",
+    ]:
+        beat = ScriptBeat(beat_id=1, panel_ids=["p"], narration=text)
+        assert repair_broken_sentences([beat])[0].narration == text, text

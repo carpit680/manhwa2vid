@@ -3320,6 +3320,54 @@ _SUBJECT_COMMA_VERB_RE = re.compile(
 )
 
 
+# "Nearby, Kim Sangshik, Bak." followed by "They look toward the Gate." — the names are a
+# stranded appositive whose verb ended up in the NEXT sentence. Joining them restores both
+# without inventing anything.
+_STRANDED_NAMES_JOIN_RE = re.compile(
+    r"(?P<lead>[^.!?]*?)(?P<n1>[A-Z][\w'’-]*(?:[- ][A-Z][\w'’-]*)*)\s*,\s*"
+    r"(?P<n2>[A-Z][\w'’-]*(?:[- ][A-Z][\w'’-]*)*)\s*\.\s+They\s+(?P<rest>[^.!?]*[.!?])"
+)
+
+# A speech verb naming its listener with nothing said. The clause carries no information
+# as written, so removing it is lossless — unlike inventing what was said, which is not
+# ours to do. Handles both the coordinated ("and tells X.") and participial (", telling
+# X.") shapes.
+_DANGLING_SPEECH_TAIL_RE = re.compile(
+    r"(?:\s*,\s*(?:telling|asking|saying|replying|answering|admitting|warning|reminding)"
+    r"|\s+and\s+(?:tells|asks|says|replies|answers|admits|warns|reminds|told))\s+"
+    r"(?:him|her|them|it|[A-Z][\w'’-]*(?:[- ][A-Z][\w'’-]*)*)\s*(?=[.!?])"
+)
+
+
+def repair_broken_sentences(beats: list[ScriptBeat]) -> list[ScriptBeat]:
+    """Mechanically fix the two dead-stub shapes the rewrite keeps declining.
+
+    Both shipped into a rendered video, and both survived a story-integrity rewrite AND
+    the dedicated dialogue retry with the offending sentence quoted back at the model.
+    The evidence for beat 11 even CONTAINED what Jin-Woo says ("IT'S OKAY. IT'S ONLY
+    BECAUSE I'M WEAK... I'M USED TO IT.") and the rewrite still returned "tells Lee
+    Joo-hee." three runs running. That is this codebase's stated threshold: a rule the
+    model declines twice stops being a request.
+
+    Neither repair invents content. The stranded-name join moves a verb that is already
+    in the next sentence; the dangling-speech strip removes a clause that says nothing —
+    "Jin-Woo smiles weakly and tells Lee Joo-hee." carries exactly as much information as
+    "Jin-Woo smiles weakly.", minus the broken grammar. Supplying what was actually said
+    would be authoring narration, which belongs to the writer, not the polish.
+    """
+    out: list[ScriptBeat] = []
+    for beat in beats:
+        text = beat.narration
+        text = _STRANDED_NAMES_JOIN_RE.sub(
+            lambda m: f"{m.group('lead')}{m.group('n1')} and {m.group('n2')} {m.group('rest')}",
+            text,
+        )
+        text = _DANGLING_SPEECH_TAIL_RE.sub("", text)
+        text = re.sub(r"\s{2,}", " ", text).strip()
+        out.append(beat.model_copy(update={"narration": text}) if text and text != beat.narration else beat)
+    return out
+
+
 def repair_subject_comma(beats: list[ScriptBeat]) -> list[ScriptBeat]:
     """"Seo Jun-Ho, stands in the throne room" — a comma splice between subject and
     verb, unspeakable aloud.
