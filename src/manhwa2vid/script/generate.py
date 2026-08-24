@@ -33,6 +33,7 @@ from manhwa2vid.script.grounding import (
     enforce_reading_order,
     inject_closer_evidence,
     refresh_plot_for_span,
+    split_beats_at_transitions,
 )
 from manhwa2vid.script.lint import (
     accept_rewrite as _accept_rewrite,
@@ -441,6 +442,9 @@ def _run_outline_pass(
     seeded = preassign_outline_from_facts(synopsis, cards, bible, max_beats=max_beats)
     # Beats must be contiguous runs in reading order, or two of them narrate one moment.
     seeded = enforce_reading_order(seeded)
+    # A beat must not span a time cut the artwork prints — see split_beats_at_transitions.
+    seeded = split_beats_at_transitions(seeded, cards)
+    seeded = enforce_reading_order(seeded)
     # Repartitioning can hand a beat panels its plot_beat never described; refresh it
     # before the plot becomes the MUST COVER spine of the narration prompt.
     seeded = refresh_plot_for_span(seeded, cards)
@@ -488,6 +492,7 @@ def _run_outline_pass(
                 continue
             # Prefer LLM wording but restore panel bindings from seed if LLM drifted
             outline = _reconcile_outline_panels(seeded, outline)
+            outline = split_beats_at_transitions(outline, cards)
             outline = enforce_reading_order(outline)
             outline = refresh_plot_for_span(outline, cards)
             outline = inject_closer_evidence(outline, cards)

@@ -448,6 +448,45 @@ def transition_captions(cards: list[SceneCard]) -> dict[str, str]:
     return out
 
 
+def split_beats_at_transitions(
+    beats: list[ScriptOutlineBeat],
+    cards: list[SceneCard] | None,
+) -> list[ScriptOutlineBeat]:
+    """No beat may STRADDLE a time cut the artwork prints.
+
+    `enforce_reading_order` guarantees each beat is a contiguous run of panels; nothing
+    guaranteed a beat sits inside ONE time frame. Frozen Player's beat 7 held the panel
+    reading "25 YEARS LATER" in its middle while narrating the heroes' farewell twenty-five
+    years earlier — so the beat had to tell two time frames at once, and no opening
+    sentence could possibly mark the jump. The caption panel being pinned into the
+    narration made this visible; it was always true.
+
+    A caption is a CUT: the beat ends before it and a new beat begins at it. Purely a
+    re-partition — every panel keeps its order and its beat, ids are renumbered, no panel
+    is created or lost. The plot text is left alone here; `refresh_plot_for_span` runs
+    afterwards and describes each new span.
+    """
+    if not beats:
+        return beats
+    captions = transition_captions(cards or [])
+    if not captions:
+        return beats
+    out: list[ScriptOutlineBeat] = []
+    for beat in beats:
+        cut_points = [
+            i for i, pid in enumerate(beat.panel_ids) if i > 0 and pid in captions
+        ]
+        if not cut_points:
+            out.append(beat)
+            continue
+        starts = [0, *cut_points]
+        for a, b in zip(starts, [*cut_points, len(beat.panel_ids)]):
+            piece = beat.panel_ids[a:b]
+            if piece:
+                out.append(beat.model_copy(update={"panel_ids": piece}))
+    return [b.model_copy(update={"beat_id": i}) for i, b in enumerate(out, start=1)]
+
+
 def scene_boundaries(
     beats: list[ScriptOutlineBeat],
     cards: list[SceneCard] | None = None,

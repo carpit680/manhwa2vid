@@ -85,3 +85,28 @@ def test_caption_panels_are_never_curated_out():
 
     assert "p0060_01" in pinned                     # pinned: always kept
     assert len(pinned) < len(cards)                 # and curation still cut the rest
+
+
+def test_a_beat_never_straddles_a_printed_time_cut():
+    """enforce_reading_order guarantees a beat is contiguous; nothing guaranteed it sits
+    inside ONE time frame. Frozen Player's beat 7 held the "25 YEARS LATER" panel in its
+    middle while narrating a farewell twenty-five years earlier — so it had to tell two
+    time frames at once and no opening sentence could mark the jump."""
+    from manhwa2vid.script.grounding import split_beats_at_transitions
+
+    cards = [_card("p0001_01"), _card("p0001_02"),
+             _card("p0002_01", page_text='"25 YEARS LATER"'), _card("p0002_02")]
+    beats = [ScriptOutlineBeat(beat_id=1,
+                               panel_ids=["p0001_01", "p0001_02", "p0002_01", "p0002_02"],
+                               plot_beat="the farewell and then the museum")]
+    out = split_beats_at_transitions(beats, cards)
+    assert [b.panel_ids for b in out] == [["p0001_01", "p0001_02"], ["p0002_01", "p0002_02"]]
+    assert [b.beat_id for b in out] == [1, 2]          # renumbered contiguously
+    # Pure re-partition: every panel survives, in order, exactly once.
+    assert [p for b in out for p in b.panel_ids] == beats[0].panel_ids
+
+    # A caption already at a beat's start is not a straddle and must not split.
+    aligned = [ScriptOutlineBeat(beat_id=1, panel_ids=["p0002_01", "p0002_02"], plot_beat="x")]
+    assert len(split_beats_at_transitions(aligned, cards)) == 1
+    # No captions at all -> untouched (Solo Leveling's shape).
+    assert split_beats_at_transitions(aligned, [_card("p0002_01")]) == aligned
