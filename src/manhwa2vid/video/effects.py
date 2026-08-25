@@ -156,12 +156,19 @@ def render_panel_motion_frames(
     height: int,
     num_frames: int,
     config: dict[str, Any],
+    *,
+    seed_salt: int | None = None,
 ) -> list[Image.Image]:
     mode = choose_camera_mode(panel, config)
     if mode == "scroll":
         return render_vertical_scroll_frames(panel_path, width, height, num_frames, config)
 
-    z0, z1 = ken_burns_params(panel.id)
+    # `seed_salt` is the panel's position in the timeline, so a panel shown twice gets
+    # two different camera moves instead of a byte-identical repeat the eye reads as a
+    # glitch. Omitted (None) keeps the original panel-id-only seed, so existing
+    # single-appearance renders are unchanged.
+    seed = panel.id if seed_salt is None else f"{panel.id}:{seed_salt}"
+    z0, z1 = ken_burns_params(seed)
     base = letterbox_panel(panel_path, width, height)
     return render_ken_burns_frames(
         base, num_frames, z0, z1, config, width=width, height=height

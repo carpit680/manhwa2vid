@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 import re
 
 from pathlib import Path
@@ -889,3 +890,63 @@ def test_required_lines_reserve_room_for_framing():
     assert len(required_lines_for_beat(["p1"], cards, {}, max_words=30)) == 2
     # A wider beat can still carry all three.
     assert len(required_lines_for_beat(["p1"], cards, {}, max_words=60)) == 3
+
+
+def test_markdown_beat_without_panel_comment_is_an_error_not_a_silent_wrong_video(tmp_path):
+    """A missing panel comment used to produce a wrong video, silently, two ways.
+
+    `current_panels` was never reset between beats, so beat 2 below inherited beat 1's
+    panels. With no prior beat to inherit from, the fallback id `unknown_N` maps to page
+    9999 in `timeline._panel_sort_key`, making the "nearest" panel the chapter's LAST
+    one — so a comment-less beat played the final image of the video.
+    """
+    from manhwa2vid.script.generate import _parse_markdown_beats
+
+    path = tmp_path / "script.final.md"
+    path.write_text(
+        "# T — Chapters 1\n\n**Hook:** h\n\n## Beats\n\n"
+        "### Beat 1\n<!-- panels: p0001_01, p0001_02 -->\n\nFirst beat.\n\n"
+        "### Beat 2\n\nSecond beat, comment deleted by a human editor.\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="beat 2 has no"):
+        _parse_markdown_beats(path)
+
+
+def test_markdown_parse_survives_a_horizontal_rule_inside_narration(tmp_path):
+    """A `---` line used to `break` the parse, discarding the rest of the script.
+
+    The trailer that follows the real `---` is terminated by its "Edit freely" line, so
+    only that needs to stop parsing. Freeform prose may legitimately contain a rule.
+    """
+    from manhwa2vid.script.generate import _parse_markdown_beats
+
+    path = tmp_path / "script.final.md"
+    path.write_text(
+        "# T — Chapters 1\n\n## Beats\n\n"
+        "### Beat 1\n<!-- panels: p0001_01 -->\n\nBefore the rule.\n\n---\n\n"
+        "### Beat 2\n<!-- panels: p0002_01 -->\n\nAfter the rule.\n\n"
+        "---\nEdit freely. Save approved version as script.final.md\n",
+        encoding="utf-8",
+    )
+    beats = _parse_markdown_beats(path)
+    assert [b.beat_id for b in beats] == [1, 2]
+    assert beats[1].panel_ids == ["p0002_01"]
+    assert "Edit freely" not in " ".join(b.narration for b in beats)
+
+
+def test_markdown_beats_do_not_inherit_the_previous_beats_panels(tmp_path):
+    from manhwa2vid.script.generate import _parse_markdown_beats
+
+    path = tmp_path / "script.final.md"
+    path.write_text(
+        "## Beats\n\n"
+        "### Beat 1\n<!-- panels: p0001_01, p0001_02 | key: p0001_02 -->\n\nOne.\n\n"
+        "### Beat 2\n<!-- panels: p0009_01 -->\n\nTwo.\n",
+        encoding="utf-8",
+    )
+    beats = _parse_markdown_beats(path)
+    assert beats[0].panel_ids == ["p0001_01", "p0001_02"]
+    assert beats[0].key_panel_ids == ["p0001_02"]
+    assert beats[1].panel_ids == ["p0009_01"]
+    assert beats[1].key_panel_ids == []

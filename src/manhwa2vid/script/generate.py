@@ -236,13 +236,48 @@ def _beats_to_markdown(draft: ScriptDraft) -> str:
 
 
 def _parse_markdown_beats(path: Path) -> list[ScriptBeat]:
-    """Parse beats from markdown (for final script after human edit)."""
+    """Parse beats from markdown (for final script after human edit).
+
+    Three failure modes fixed here, all silent and all producing a WRONG VIDEO
+    rather than an error:
+
+    - `current_panels` was never reset between beats, so a beat whose
+      `<!-- panels: -->` comment was deleted inherited the PREVIOUS beat's panels and
+      played someone else's images under its narration.
+    - With no comment at all the fallback id was `unknown_N`, which
+      `timeline._panel_sort_key` maps to page 9999 — the "nearest" surviving panel is
+      then the LAST panel of the chapter, so every comment-less beat played the
+      chapter's final image. The comment is load-bearing; a missing one is now an
+      error naming the beat.
+    - A `---` line anywhere in the body `break`-ed the parse, silently discarding the
+      whole rest of the script. Only the trailer's "Edit freely" line terminates now,
+      so a horizontal rule inside narration is harmless.
+    """
     text = path.read_text(encoding="utf-8")
     beats: list[ScriptBeat] = []
     current_panels: list[str] = []
     current_keys: list[str] = []
     current_lines: list[str] = []
     beat_id = 0
+    seen_comment = False
+
+    def _flush() -> None:
+        if not (current_lines and beat_id):
+            return
+        if not seen_comment:
+            raise ValueError(
+                f"{path.name}: beat {beat_id} has no '<!-- panels: ... -->' comment. "
+                "That comment binds the beat to its panels; without it the beat cannot "
+                "be rendered. Re-run the script stage rather than hand-restoring it."
+            )
+        beats.append(
+            ScriptBeat(
+                beat_id=beat_id,
+                panel_ids=list(current_panels),
+                narration=" ".join(current_lines).strip(),
+                key_panel_ids=[k for k in current_keys if k in current_panels],
+            )
+        )
 
     for line in text.splitlines():
         if line.startswith("<!-- panels:"):
@@ -254,36 +289,22 @@ def _parse_markdown_beats(path: Path) -> list[ScriptBeat]:
                 for p in key_part.replace("key:", "").split(",")
                 if p.strip()
             ]
+            seen_comment = True
         elif line.startswith("### Beat"):
-            if current_lines and beat_id:
-                beats.append(
-                    ScriptBeat(
-                        beat_id=beat_id,
-                        panel_ids=current_panels or [f"unknown_{beat_id}"],
-                        narration=" ".join(current_lines).strip(),
-                        key_panel_ids=[k for k in current_keys if k in current_panels],
-                    )
-                )
+            _flush()
             beat_id += 1
             current_lines = []
+            current_panels = []
+            current_keys = []
+            seen_comment = False
         elif line.startswith("#") or line.startswith("**Hook:") or line == "---":
-            if line == "---":
-                break
             continue
         elif beat_id > 0 and line.strip():
             if line.strip().lower().startswith("edit freely"):
                 break
             current_lines.append(line.strip())
 
-    if current_lines and beat_id:
-        beats.append(
-            ScriptBeat(
-                beat_id=beat_id,
-                panel_ids=current_panels or [f"unknown_{beat_id}"],
-                narration=" ".join(current_lines).strip(),
-                key_panel_ids=[k for k in current_keys if k in current_panels],
-            )
-        )
+    _flush()
     return beats
 
 

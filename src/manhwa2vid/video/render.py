@@ -50,6 +50,7 @@ def _render_panel_clip(
     panel: Panel,
     project_root: Path,
     frames_dir: Path,
+    entry_index: int,
     width: int,
     height: int,
     fps: int,
@@ -60,12 +61,18 @@ def _render_panel_clip(
 ) -> Path:
     panel_path = project_root / entry.panel_path
     num_frames = max(int(entry.duration * fps), 1)
-    clip_path = frames_dir / f"{entry.panel_id}.mp4"
-    clip_dir = frames_dir / entry.panel_id
+    # Named by TIMELINE POSITION, not panel id. A panel may legitimately appear more
+    # than once — a cold open replays a late moment, and a callback re-shows it — and
+    # keying the clip on panel_id alone meant the second render OVERWROTE the first
+    # with a different duration. Both slots in `clips` then pointed at one file, so
+    # every entry after the reuse played the wrong length and the audio desynced for
+    # the rest of the video. Silent, and worse the more the narration calls back.
+    clip_path = frames_dir / f"{entry_index:05d}_{entry.panel_id}.mp4"
+    clip_dir = frames_dir / f"{entry_index:05d}_{entry.panel_id}"
     clip_dir.mkdir(parents=True, exist_ok=True)
 
     motion_frames = render_panel_motion_frames(
-        panel_path, panel, width, height, num_frames, config
+        panel_path, panel, width, height, num_frames, config, seed_salt=entry_index
     )
     if show_badge and motion_frames:
         motion_frames[0] = add_chapter_badge(motion_frames[0], chapters, title)
@@ -291,6 +298,7 @@ def render_video(
                     panel,
                     paths["root"],
                     frames_dir,
+                    i,
                     width,
                     height,
                     fps,
