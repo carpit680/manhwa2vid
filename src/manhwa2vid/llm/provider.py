@@ -310,6 +310,12 @@ class OpenAICompatProvider(LLMProvider):
         if "qwen" in low:
             return {"reasoning_effort": "none"}
         if "gemini-3" in low or "gemini-4" in low:
+            # Pro-tier Gemini rejects a zero thinking budget outright ("Budget 0 is
+            # invalid. This model only works in thinking mode.") — the blanket "none"
+            # here 400'd every call the first time a pro model was tried. "low" keeps
+            # the budget bounded without forbidding what the model requires.
+            if "pro" in low:
+                return {"reasoning_effort": "low"}
             return {"reasoning_effort": "none"}
         return None
 

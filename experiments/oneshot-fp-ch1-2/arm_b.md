@@ -1,0 +1,29 @@
+# One-shot freeform write — gemini-3.1-pro-preview
+
+<!-- project: projects/return-of-the-frozen-player-ch1-2 | temp: 0.9 | tokens: 26650 in / 1205 out -->
+
+Deep in the freezing heart of the final dungeon, Seo Jun-Ho stands alone against the crowned monster in an ice gown. The Frost Queen smiles. She asks how it feels to reach her throne room by leaving his comrades behind to die. Jun-Ho draws his blade. He warns her that his friends are not the type to croak easily. Dark energy surges around his heavy coat. He tells her to shut up. He has no time for this. He launches himself forward, swearing to end the nightmare.
+
+The battle is violently brief. The Queen conjures massive spears of solid ice, but Jun-Ho shatters them with heavy, deliberate strikes. He closes the distance in a blur of dark energy and drives his sword straight through her chest. As her body dissolves into light, system messages flood his vision. He is absorbing her nucleus. But victory comes with a steep price. A new message warns that his body will go into forced hibernation until the core is fully assimilated, and ice immediately crawls up his arms, freezing him in place.
+
+Just seventy-six hours earlier, the Nest Attack Team had hit a dead end. A system prompt declared that only one person could ascend the stairs, causing Khali to slam his fists into the cavern wall, furious they were sidelined. Skaya calmed the tattooed giant down, warning the group their time was short. She suggested Jun-Ho should advance, and the others quickly agreed. The marksman noted their severe disadvantage against ice-based abilities. Khali conceded his spot. The unnamed swordswoman added that Jun-Ho was their absolute best chance, trusting him to make sure their sacrifices mattered. He promised he wouldn't let them down, stepping alone into the cold.
+
+Twenty-five years later, that promise sits frozen in a museum. The world of 2024 remembers the Five Heroes as legendary saviors, preserving their frozen bodies as monuments in a climate-controlled hall. A guide is lecturing a crowd when Jun-Ho's ice shell suddenly cracks. The system announces that the absorption rate has reached one hundred percent. The ice shatters violently, and Jun-Ho collapses onto the floor. He shivers uncontrollably as the system congratulates him for completely absorbing the core, granting him a brand-new skill called Frost EX. The museum erupts into screaming panic. The legendary Specter wakes up.
+
+Days later, Jun-Ho sits in a hospital bed, catching up on a quarter-century of news. His body is still terribly weak, his hands shaking just from gripping the table. Looking out at the pristine, monster-free skyline, he figures the world finally got peace. He asks the empty room if this means he is officially unemployed. Deciding he no longer needs it, he removes his signature mask.
+
+Nervous doctors usher in the Player Association president. Jun-Ho recognizes him instantly, despite the tailored suit and receding hairline. He asks Deok-gu if they still haven't found a cure for baldness after twenty-five years. Deok-gu snaps back, asking if insulting his hair is really the first thing his old friend has to say. The touching reunion devolves into immediate bickering. Deok-gu sighs, admitting Jun-Ho hasn't changed a bit.
+
+The mood quickly shifts when Jun-Ho asks why the hospital staff is treating him like an active hero. The war should be over. Deok-gu sits down heavily. He tells Jun-Ho that the world only celebrated for about a minute. Safe zones appeared when the Queen died, but a towering dimensional elevator also spawned in the Pacific Ocean. A system prompt announced the opening of the second floor, instructing humanity to stay strong until the tenth floor.
+
+Jun-Ho does the mental math. It took their elite team five bloody years to clear the first floor, so realistically, humanity should be around the fifth or seventh floor by now. Deok-gu looks away, avoiding his gaze entirely. After a long silence, the older man confesses that in twenty-five years, humanity has only cleared the second floor.
+
+Jun-Ho is absolutely furious, demanding to know what pathetic excuse justifies stalling for two decades. Deok-gu explains the third floor is a volcanic region entirely covered in magma. Expedition teams found an altar in a sea of lava that required the Frost Queen's nucleus to cool the environment. He tells Jun-Ho they searched the Nest countless times, but they never found the core.
+
+Jun-Ho freezes. He slowly realizes his mistake. He personally absorbed the exact item humanity desperately needed. Backpedaling his anger immediately, he pats Deok-gu's shoulder and suggests that everyone makes mistakes. Deok-gu enthusiastically agrees. He is completely unaware that Jun-Ho is the sole reason the world is stuck.
+
+Wanting to change the subject, Jun-Ho asks about his old comrades. That night, he sneaks out of the hospital to avoid reporters, heading to the Seoul History Museum with cheap liquor. He walks past massive skeletal displays of conquered monsters to enter the climate-controlled memorial hall. The frozen statues stand silently in the blue light.
+
+Jun-Ho sits on the floor. He promises them the world is a better place now, pouring out small paper cups of alcohol. He takes a drink, the sweet taste doing little to dull the bitter reality that they are still trapped in ice. He steps up to Skaya's statue and gently wipes the dust from her frozen hair.
+
+His skin touches the ice, and the system flares to life, confirming his possession of the Frost EX skill. A second message warns that his magic stats are insufficient, meaning he has failed to remove the seal. Jun-Ho stares at the floating blue text in pure shock. The system explicitly states the truth. Once he is strong enough, he can use his new skill to unfreeze the statues.
