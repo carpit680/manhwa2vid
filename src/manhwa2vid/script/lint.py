@@ -1824,6 +1824,57 @@ _ARTICLE_PRONOUN_RE = re.compile(
 )
 # "A hunter and a hunter both shout" — two anonymous agents collapsed onto one descriptor.
 _ECHOED_AGENT_RE = re.compile(r"\b(an?)\s+([a-z][\w'’-]*)\s*(?:,|\s+and)\s*(an?)\s+\2\b", re.I)
+# The unambiguous sub-case: an article sitting DIRECTLY on a pronoun. No English
+# sentence wants "The they" or "a him", the repair is mechanical (drop the article),
+# and there is no noun-vs-adjective judgement to get wrong.
+_BARE_ARTICLE_PRONOUN_RE = re.compile(r"\b(a|an|the)\s+(he|she|they|him|her|them)\b", re.I)
+
+
+def stranded_determiner(text: str, *, strict: bool = False) -> re.Match | None:
+    """`_ARTICLE_PRONOUN_RE` plus the two guards that make it safe to act on.
+
+    The bare regex matches "A worker tells him that the gate is closed" — article, two
+    words, pronoun — which is ordinary English with the pronoun as the OBJECT. That was
+    tolerable while the only caller compared a rewrite's count against the original's
+    (a false positive on both sides cancels), and became a bug the moment
+    `lint_broken_sentences` started reporting it absolutely: a 5-chapter SL run was
+    blocked by a correct sentence.
+
+    Both guards already existed inline in `lint_malformed_phrases`; the newer callers
+    each re-derived the raw regex without them. One definition now, so a detector and
+    the gate that blocks on it cannot disagree about what the defect IS.
+
+    `strict` narrows to the sub-case that can be decided without a POS tagger. With one
+    or two words between the article and the pronoun, "A dejected he walks away" (broken)
+    and "the moment he arrives" / "in a way she never expected" (ordinary reduced relative
+    clauses) are the SAME token shape, and the verb-follows guard passes both — "arrives"
+    ends in -s. That ambiguity is survivable for `narration_defects`, which only compares
+    a rewrite's count against the original's so a symmetric false positive cancels; it is
+    not survivable for a gate that blocks a run. So the blocking caller passes strict=True
+    and sees only the bare form, and the ambiguous form stays advisory — reported for
+    rewrite, never fatal. Widening the strict form needs a real tagger, not a longer regex.
+    """
+    # The bare form is a defect under both tiers, and it must be tested BEFORE the
+    # verb-follows guard: "The they explain that ..." — the shape this detector was
+    # written for — has a bare plural verb, which `_looks_like_verb` (built for -s/-ed/
+    # -ing) rejects, so the guard was throwing away the very case it was guarding.
+    bare = _BARE_ARTICLE_PRONOUN_RE.search(text or "")
+    if bare or strict:
+        return bare
+    match = _ARTICLE_PRONOUN_RE.search(text or "")
+    if not match:
+        return None
+    # A stranded determiner heads a SUBJECT, so a verb has to follow the pronoun.
+    # "The healer treats him after the raid" — object pronoun, no verb after: clean.
+    after = (text or "")[match.end():].split()
+    if not after or not _looks_like_verb(after[0]):
+        return None
+    # A conjunction or preposition between determiner and pronoun means a new clause
+    # started and the pronoun heads THAT one: "he is used to the pain because he is
+    # weak". Only an unbroken determiner-modifier-pronoun run is wrong.
+    if _CLAUSE_BREAKERS & {w.lower().strip(",") for w in match.group(0).split()}:
+        return None
+    return match
 
 
 def lint_malformed_phrases(beats: list[ScriptBeat]) -> dict[int, list[str]]:
@@ -1844,20 +1895,7 @@ def lint_malformed_phrases(beats: list[ScriptBeat]) -> dict[int, list[str]]:
     """
     out: dict[int, list[str]] = {}
     for beat in beats:
-        stranded = _ARTICLE_PRONOUN_RE.search(beat.narration)
-        # A stranded determiner heads a SUBJECT, so a verb has to follow the pronoun.
-        # Without that test the object pronoun in "The healer treats him after the raid"
-        # matched — article, two words, pronoun — and flagged a correct sentence.
-        if stranded:
-            after = beat.narration[stranded.end():].split()
-            if not after or not _looks_like_verb(after[0]):
-                stranded = None
-            # A conjunction or preposition between the determiner and the pronoun means a
-            # new clause started and the pronoun heads THAT one: "he is used to the pain
-            # because he is weak" matches article + two words + pronoun + verb and is
-            # perfectly correct. Only an unbroken determiner-modifier-pronoun run is wrong.
-            elif _CLAUSE_BREAKERS & {w.lower().strip(",") for w in stranded.group(0).split()}:
-                stranded = None
+        stranded = stranded_determiner(beat.narration)
         for match, why in (
             (stranded,
              "an article and its modifiers are stranded on a pronoun; name the person or "
@@ -2253,6 +2291,10 @@ def _trailing_name_list_fragments(text: str) -> list[str]:
 _TRUNCATED_SPEECH_RE = re.compile(
     r"\b(?:telling|tells|told|asking|asks|saying|says|replying|replies|"
     r"answering|answers|admitting|admits|warning|warns|reminding|reminds)\s+"
+    # An honorific is followed by a period that is NOT a sentence terminator, so
+    # "Bak asks Mr. Kim if Jin-Woo is coming" matched on "asks Mr." and flagged a
+    # complete sentence. Same class of bug as _SENTENCE_SPLIT_RE splitting on "Mr.".
+    r"(?!(?:Mr|Mrs|Ms|Dr|St|Jr|Sr)\b)"
     r"(?:him|her|them|it|[A-Z][\w'’-]*(?:[- ][A-Z][\w'’-]*)*)\s*[.!?]",
 )
 
@@ -2285,7 +2327,7 @@ def lint_broken_sentences(beats: list[ScriptBeat]) -> dict[int, list[str]]:
             # through narration_defects — i.e. only as a RELATIVE count inside
             # accept_rewrite — so a stranded determiner the writer produced in a beat no
             # rewrite touched was never examined. Same omission as the fragment case.
-            if _ARTICLE_PRONOUN_RE.search(sent):
+            if stranded_determiner(sent, strict=True):
                 issues.append(f"stranded_determiner: {sent[:60]}")
         if issues:
             report[beat.beat_id] = issues
@@ -2323,7 +2365,7 @@ def narration_defects(text: str) -> list[str]:
     stripped = (text or "").strip()
     if stripped and stripped.split() and stripped.split()[0][:1].islower():
         defects.append("opens mid-sentence")
-    if _ARTICLE_PRONOUN_RE.search(text or ""):
+    if stranded_determiner(text or ""):
         defects.append("stranded determiner on a pronoun")
     if _ECHOED_AGENT_RE.search(text or ""):
         defects.append("same descriptor for two people")

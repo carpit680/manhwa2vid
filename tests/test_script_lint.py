@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 
 from manhwa2vid.models import ScriptBeat
-from manhwa2vid.script.lint import find_violations, lint_beats
+from manhwa2vid.script.lint import (
+    find_violations,
+    lint_beats,
+    lint_broken_sentences,
+    stranded_determiner,
+)
 
 
 def test_find_violations_flags_character() -> None:
@@ -2510,3 +2515,56 @@ def test_standalone_empty_speech_is_dropped_only_when_safe():
     unsafe = ScriptBeat(beat_id=1, panel_ids=["p"], narration=(
         "The large orange demon tells Ju-Hee. She asks how that is possible. Nobody answers."))
     assert repair_broken_sentences([unsafe])[0].narration == unsafe.narration
+
+
+def _beat(bid: int, text: str) -> ScriptBeat:
+    return ScriptBeat(beat_id=bid, panel_ids=["p0001_01"], narration=text)
+
+
+def test_broken_sentence_gate_ignores_object_pronouns_and_honorifics():
+    """Both shapes blocked a real 5-chapter Solo Leveling run, and both are correct English.
+
+    "A worker tells him that ..." is article + two words + OBJECT pronoun, which
+    `_ARTICLE_PRONOUN_RE` matches by construction; "Bak asks Mr. Kim if ..." matched the
+    truncated-speech regex on `asks Mr.` because an honorific's period is not a sentence
+    terminator. Neither detector was new — `lint_broken_sentences` was the first caller to
+    report them ABSOLUTELY rather than as a rewrite-versus-original count, and a false
+    positive that cancels in a comparison fails a gate outright.
+    """
+    beats = [
+        _beat(1, "A worker tells him that the gate has already closed."),
+        _beat(2, "Bak asks Mr. Kim if Jin-Woo is coming to the raid."),
+        _beat(3, "The healer treats him after the raid."),
+        _beat(4, "He is used to the pain because he is weak."),
+    ]
+    assert lint_broken_sentences(beats) == {}
+
+
+def test_broken_sentence_gate_still_blocks_the_bare_stranded_determiner():
+    """The form the detector exists for, plus the guard bug it exposed.
+
+    "The they explain" has a bare plural verb, which `_looks_like_verb` (written for
+    -s/-ed/-ing) rejects — so the verb-follows guard was discarding the exact case it was
+    meant to protect. The bare article-on-pronoun form is now tested before the guards.
+    """
+    flagged = lint_broken_sentences(
+        [_beat(1, "The they explain that the other hunters held higher ranks.")]
+    )
+    assert [i.split(":")[0] for i in flagged[1]] == ["stranded_determiner"]
+
+
+def test_ambiguous_stranded_determiner_is_advisory_not_blocking():
+    """"A dejected he walks away" and "the moment he arrives" are the same token shape.
+
+    One is broken and one is an ordinary reduced relative clause, and the verb-follows
+    guard passes both ("arrives" ends in -s). Rather than lower the bar until the gate
+    stops firing, the ambiguous form is kept OUT of the blocking tier and left to the
+    rewrite path, where a symmetric false positive cancels.
+    """
+    ambiguous = "A dejected he walks away."
+    ordinary = "the moment he arrives at the gate, sirens blare."
+    assert stranded_determiner(ambiguous) is not None
+    assert stranded_determiner(ordinary) is not None      # cannot tell these apart...
+    assert stranded_determiner(ambiguous, strict=True) is None   # ...so neither blocks
+    assert stranded_determiner(ordinary, strict=True) is None
+    assert lint_broken_sentences([_beat(1, ordinary)]) == {}
