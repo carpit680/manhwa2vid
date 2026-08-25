@@ -29,7 +29,12 @@ def _chapter_summary_from_script(paths: dict[str, Path], meta: ProjectMeta) -> s
     for line in text.splitlines():
         if line.startswith("### Beat"):
             continue
-        if line.startswith("<!--") or line.startswith("#") or line.startswith("**") or line == "---":
+        # `**` used to be skipped wholesale to drop the "**Hook:**" line, but that also
+        # deletes any narration paragraph that merely OPENS in bold — freeform prose does
+        # that, and the sentence vanished from the series bible's "story so far".
+        if line.startswith("<!--") or line.startswith("#") or line == "---":
+            continue
+        if line.startswith("**Hook:"):
             continue
         stripped = line.strip()
         if stripped:

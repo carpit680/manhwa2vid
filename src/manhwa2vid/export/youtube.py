@@ -55,8 +55,23 @@ def write_metadata(meta: ProjectMeta, timeline: Timeline, path: Path) -> None:
     path.write_text(yaml.dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
+def _thumbnail_entry(timeline: Timeline):
+    """Pick the thumbnail frame.
+
+    Was unconditionally `entries[0]`, which is only safe while narration starts at the
+    beginning of the chapter. A cold open starts on a LATE moment, so the thumbnail
+    became a spoiler for the chapter's climax. Prefer the longest-dwelling panel among
+    the opening stretch: dwell is proportional to how much narration a panel carries,
+    so it is already the pipeline's own measure of "this panel matters".
+    """
+    if not timeline.entries:
+        return None
+    head = timeline.entries[: max(1, len(timeline.entries) // 5)]
+    return max(head, key=lambda e: e.duration)
+
+
 def write_thumbnail(meta: ProjectMeta, timeline: Timeline, project_root: Path, path: Path) -> None:
-    first = timeline.entries[0] if timeline.entries else None
+    first = _thumbnail_entry(timeline)
     if first:
         panel = project_root / first.panel_path
         if panel.exists():

@@ -109,3 +109,39 @@ def test_panel_salience_prefers_dialogue_then_people():
     ]
     s = panel_salience(cards, attribution)
     assert s["p1"] > s["p2"]
+
+
+def test_budget_keeps_key_panels_when_salience_is_unavailable():
+    """key_panel_ids were silently discarded whenever scene cards were absent.
+
+    tts/engine.py wraps salience loading in a bare except, so any project without
+    enriched cards fell to this branch — a blind positional stride that ignores the
+    writer's "this panel is load-bearing" marking entirely. The story-first
+    architecture has no scene cards at all, making this the only path.
+    """
+    from manhwa2vid.video.timeline import budget_panels_for_beat
+
+    panels = [f"p0001_{i:02d}" for i in range(1, 11)]
+    key = ["p0001_09"]  # late panel a stride would never pick
+    # 6s of audio at a 2s floor affords 3 panels.
+    kept = budget_panels_for_beat(panels, 6.0, 2.0, key)
+    assert len(kept) == 3
+    assert "p0001_09" in kept
+    assert kept == [p for p in panels if p in kept], "beat order must be preserved"
+
+    # Without keys, behaviour is the original stride.
+    assert budget_panels_for_beat(panels, 6.0, 2.0) == ["p0001_01", "p0001_05", "p0001_10"]
+    # A single affordable slot goes to the key panel, not blindly to the first.
+    assert budget_panels_for_beat(panels, 2.0, 2.0, key) == ["p0001_09"]
+    # No budget pressure means nothing is dropped.
+    assert budget_panels_for_beat(panels, 100.0, 2.0, key) == panels
+
+
+def test_budget_preserves_narration_order_not_reading_order():
+    """A cold open lists late panels first; budgeting must not re-sort them."""
+    from manhwa2vid.video.timeline import budget_panels_for_beat
+
+    out_of_reading_order = ["p0020_01", "p0020_02", "p0001_01", "p0001_02"]
+    kept = budget_panels_for_beat(out_of_reading_order, 4.0, 2.0, ["p0001_01"])
+    assert kept == [p for p in out_of_reading_order if p in kept]
+    assert kept[0].startswith("p0020"), "page-20 panels must stay ahead of page-1 panels"

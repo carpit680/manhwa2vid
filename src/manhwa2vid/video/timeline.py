@@ -122,6 +122,7 @@ def budget_panels_for_beat(
     panel_ids: list[str],
     audio_duration_s: float,
     drop_floor: float,
+    key_panel_ids: list[str] | None = None,
 ) -> list[str]:
     """
     Drop panels a beat's audio cannot show for even `drop_floor` seconds each.
@@ -133,6 +134,13 @@ def budget_panels_for_beat(
     This floor is deliberately lower than `min_panel_seconds`: mild compression (a panel
     getting 1.5s instead of 2s) is fine and must not cost the viewer a panel. Only
     genuinely unreadable dwells trigger a drop.
+
+    `key_panel_ids` are kept ahead of their neighbours. This branch runs whenever scene
+    salience is unavailable, and salience loading is wrapped in a bare `except` in
+    tts/engine.py — so on any project without enriched scene cards the writer's explicit
+    "this panel is load-bearing" marking was silently thrown away and replaced by a blind
+    positional stride. The story-first architecture has no scene cards at all, which
+    would make that the ONLY path.
     """
     if not panel_ids or drop_floor <= 0:
         return panel_ids
@@ -140,11 +148,29 @@ def budget_panels_for_beat(
     affordable = max(1, int(audio_duration_s // drop_floor))
     if len(panel_ids) <= affordable:
         return panel_ids
+
+    keys = [p for p in (key_panel_ids or []) if p in panel_ids]
     if affordable == 1:
-        return [panel_ids[0]]
+        return [keys[0]] if keys else [panel_ids[0]]
+
+    chosen: list[str] = []
+    if keys:
+        # Keys first (capped so they cannot crowd out coverage entirely), then a stride
+        # over the rest; finally restore the beat's own order, which IS presentation
+        # order — never global reading order.
+        for pid in keys[:affordable]:
+            chosen.append(pid)
+        rest = [p for p in panel_ids if p not in chosen]
+        remaining = affordable - len(chosen)
+        if remaining > 0 and rest:
+            step = max(1, len(rest) / remaining)
+            for i in range(remaining):
+                idx = min(len(rest) - 1, round(i * step))
+                if rest[idx] not in chosen:
+                    chosen.append(rest[idx])
+        return [p for p in panel_ids if p in chosen]
 
     step = (len(panel_ids) - 1) / (affordable - 1)
-    chosen: list[str] = []
     for i in range(affordable):
         pid = panel_ids[round(i * step)]
         if pid not in chosen:
@@ -293,7 +319,9 @@ def build_timeline(
                 keep_last=beat.beat_id == beats[-1].beat_id,
             )
         else:
-            budgeted = budget_panels_for_beat(panel_ids, duration, drop_floor)
+            budgeted = budget_panels_for_beat(
+                panel_ids, duration, drop_floor, beat.key_panel_ids
+            )
         dropped += len(panel_ids) - len(budgeted)
         panel_ids = budgeted
 

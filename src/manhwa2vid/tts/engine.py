@@ -63,7 +63,11 @@ def run_tts_and_timeline(
         if paths["cast_attribution_json"].exists():
             attribution = json.loads(paths["cast_attribution_json"].read_text(encoding="utf-8"))
         salience = panel_salience(cards, attribution)
-    except Exception:
+    except Exception as exc:
+        # Say so. This was a bare `except: salience = None`, and a swallowed failure here
+        # silently downgrades panel curation to a blind positional stride for the whole
+        # video — the writer's key_panel_ids stop being honoured and nobody is told.
+        console.print(f"[yellow]Panel salience unavailable ({exc}) — using key panels only[/]")
         salience = None
     timeline = build_timeline(script.beats, panels, audio_dir, config, salience=salience)
     save_json(paths["timeline_json"], timeline)
@@ -137,7 +141,15 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
     # planning) and nothing reconciled them, which is exactly why the miss was invisible.
     # This is the reconciliation: the one place where planned and delivered rate can be
     # compared, because it is the first point at which real audio exists.
-    total_words = sum(len(b.narration.split()) for b in beats)
+    # Count words only for beats that actually reached the screen. A beat whose panels
+    # all resolved to nothing is `continue`d in build_timeline, contributing words but no
+    # seconds — so its narration inflated the apparent WPM and could mask a real pace
+    # miss. Harmless while every beat was guaranteed panels; not once narration may
+    # deliberately leave panels unshown.
+    shipped_beat_ids = {e.beat_id for e in timeline.entries}
+    total_words = sum(
+        len(b.narration.split()) for b in beats if b.beat_id in shipped_beat_ids
+    )
     total_seconds = sum(e.duration for e in timeline.entries)
     target_wpm = float(get_nested(config, "script", "target_wpm", default=235))
     tolerance = float(get_nested(config, "qa", "pace_tolerance", default=0.15))
