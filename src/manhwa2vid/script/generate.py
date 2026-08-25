@@ -1824,11 +1824,6 @@ def generate_script(
                 recovered.append(beat)
         beats = recovered
 
-    # The last point at which required lines are known to be landed. Everything after
-    # this — the voice pass, the alignment audit, the deterministic polish, the grammar
-    # round — can and demonstrably does drop them, so keep a copy to reconcile against.
-    _verified_narration = {b.beat_id: b.narration for b in beats}
-
     # Voice LAST, once the facts have stopped moving. Every pass above changes WHAT a
     # beat says; this one changes only how it is delivered, so running it earlier would
     # just have its work overwritten by the next factual rewrite.
@@ -1853,6 +1848,20 @@ def generate_script(
                 )}) if beat.beat_id in set(flat) else beat
                 for beat in beats
             ]
+
+    # Snapshot AFTER the voice pass, not before it.
+    #
+    # Taken before, this quietly undid the voice work. The alignment audit and the
+    # deterministic polish run LATER, so when one of them dropped a system message the
+    # restore rewound all the way past the voice pass as well. Measured on FP: all five
+    # restored beats [4, 19, 21, 26, 31] were also in the voice-pass list, and the
+    # script's short-sentence fraction fell 13% -> 4% with asides 4.3 -> 2.7/1k, purely
+    # as collateral — the voice pass was never what lost the line.
+    #
+    # rewrite_voice carries its own keeps_landed_lines guard, so its output already
+    # preserves every required line it was handed. That makes it the correct baseline: a
+    # later loss now reverts only the later damage.
+    _verified_narration = {b.beat_id: b.narration for b in beats}
 
     hook_bad = lint_hook_grounding(hook, " ".join(
         f"{c.source_text or ''} {c.action or ''} {' '.join(c.key_terms or [])}" for c in cards
