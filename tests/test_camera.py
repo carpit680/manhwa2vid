@@ -237,3 +237,17 @@ def test_visually_empty_rule_matches_the_measured_fixtures():
     # A dark panel is never empty regardless of box shape.
     dark = np.full((300, 800), 40, dtype=np.uint8)
     assert not is_visually_empty(dark)
+
+
+def test_multi_sentence_kokoro_chunks_are_subdivided():
+    """Kokoro chunks on an internal token limit, not on sentences: one measured chunk
+    carried nine sentences in 22 seconds, and single-chunk beats got no weighting at all
+    (6 of 16 FP beats stayed uniform). Chunk-boundary seconds are exact; within a chunk,
+    word count prorates."""
+    from manhwa2vid.video.timeline import panel_weights_from_segments
+
+    one_chunk = [{"text": "A short one. A much longer sentence that goes on for many more words than the first.", "seconds": 10.0}]
+    weights = panel_weights_from_segments(one_chunk, 4)
+    assert weights is not None, "a single multi-sentence chunk must still produce weights"
+    assert len(set(round(w, 2) for w in weights)) > 1
+    assert abs(sum(weights) - 10.0) < 1e-6

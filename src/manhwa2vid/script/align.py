@@ -84,12 +84,19 @@ def request_alignment(
     return list(data.get("map") or [])
 
 
+def _nearest_page(ordered_pages: list[str], page: str) -> str:
+    if page in ordered_pages:
+        return page
+    return min(ordered_pages, key=lambda pg: abs(int(pg or 0) - int(page or 0)))
+
+
 def expand_to_panels(
     entries: list[dict[str, Any]],
     n_paragraphs: int,
     panels: list[Panel],
     *,
     empty_ids: set[str] | None = None,
+    min_panels: dict[int, int] | None = None,
 ) -> list[list[str]]:
     """Turn paragraph→page ranges into paragraph→panel lists, deterministically.
 
@@ -98,6 +105,7 @@ def expand_to_panels(
     rather than "a beat with no images", because a beat that resolves to zero panels has
     its audio dropped from the mix entirely.
     """
+    min_panels = min_panels or {}
     by_page: dict[str, list[str]] = {}
     for panel in panels:
         by_page.setdefault(_page_of(panel.id), []).append(panel.id)
@@ -141,6 +149,24 @@ def expand_to_panels(
             kept = [pid for pid in picked if pid not in empty_ids]
             if kept:
                 picked = kept
+        if picked and min_panels.get(index, 0) > len(picked):
+            # The paragraph's airtime needs more images than its range holds — one FP
+            # beat ended up as a single panel frozen for 17 seconds because the range
+            # was thin and the emptiness filter thinned it further. Borrow whole
+            # adjacent pages, nearest first, until the estimated dwell is sane.
+            need = min_panels[index]
+            lo_i = ordered_pages.index(_nearest_page(ordered_pages, lo))
+            hi_i = ordered_pages.index(_nearest_page(ordered_pages, hi))
+            while len(picked) < need and (lo_i > 0 or hi_i < len(ordered_pages) - 1):
+                skip = empty_ids or set()
+                if hi_i < len(ordered_pages) - 1:
+                    hi_i += 1
+                    extra = [p for p in by_page[ordered_pages[hi_i]] if p not in skip]
+                    picked = picked + extra
+                if len(picked) < need and lo_i > 0:
+                    lo_i -= 1
+                    extra = [p for p in by_page[ordered_pages[lo_i]] if p not in skip]
+                    picked = extra + picked
         if not picked:
             # The range named pages that have no story panels (all blank/filtered).
             # Borrow the nearest page that does, so the beat keeps its audio.
@@ -233,7 +259,18 @@ def align_script(
     scores = {pid: score for pid, (_empty, score) in stats.items()}
     if empty_ids:
         console.print(f"[dim]Align: {len(empty_ids)} visually empty panel(s) excluded[/]")
-    panel_lists = expand_to_panels(entries, len(para_texts), panels, empty_ids=empty_ids)
+    # Airtime estimate per paragraph: words / (wpm/60). A paragraph must own at least
+    # ceil(airtime / max_panel_seconds) panels or a single image freezes on screen for
+    # its whole read (measured: one 17-second hold).
+    wpm = float(get_nested(config, "script", "target_wpm", default=200))
+    max_sec = float(get_nested(config, "video", "max_panel_seconds", default=5.0))
+    min_panels = {
+        i + 1: max(1, int(-(-len(t.split()) / (wpm / 60.0) // max_sec)))
+        for i, t in enumerate(para_texts)
+    }
+    panel_lists = expand_to_panels(
+        entries, len(para_texts), panels, empty_ids=empty_ids, min_panels=min_panels
+    )
 
     beats = [
         ScriptBeat(

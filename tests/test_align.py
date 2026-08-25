@@ -228,3 +228,17 @@ def test_identity_gate_is_advisory_and_its_limit_is_pinned():
     assert unknown_names("The hall stills. Then Kang Min-Su interrupts him.", allowed) == [
         "Kang Min-Su"
     ]
+
+
+def test_thin_range_borrows_adjacent_pages_for_airtime():
+    """A paragraph must own enough panels for its airtime — one FP beat ended up as a
+    single panel frozen for 17 seconds after the emptiness filter thinned its range."""
+    from manhwa2vid.script.align import expand_to_panels
+
+    entries = [{"paragraph": 1, "first_page": "0003", "last_page": "0003"}]
+    # page 0003 has 1 panel; a ~40s paragraph at 5s/panel needs 8.
+    out = expand_to_panels(entries, 1, PANELS, min_panels={1: 8})
+    assert len(out[0]) >= 8, f"got only {len(out[0])} panels"
+    assert "p0003_01" in out[0], "the original range must survive"
+    # without a requirement, the thin range stays thin
+    assert expand_to_panels(entries, 1, PANELS) == [["p0003_01"]]

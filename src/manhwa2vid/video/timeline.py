@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import wave
 from pathlib import Path
 from typing import Any
@@ -178,6 +179,37 @@ def budget_panels_for_beat(
     return chosen
 
 
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+
+def _subdivide_segments(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Split multi-sentence segments into per-sentence entries by word proration.
+
+    Kokoro's chunks are NOT sentences: it splits on an internal token limit, so one
+    measured chunk carried nine sentences and 22 seconds, and a beat that fit in a
+    single chunk got no weighting at all (6 of 16 FP beats stayed uniform). The chunk
+    boundary timings are exact; inside a chunk, word count is the best available
+    estimate — exact at the seams, prorated within.
+    """
+    out: list[dict[str, Any]] = []
+    for seg in segments:
+        text = str(seg.get("text") or "")
+        seconds = max(float(seg.get("seconds", 0.0)), 0.0)
+        sentences = [x.strip() for x in _SENTENCE_SPLIT.split(text.strip()) if x.strip()]
+        if len(sentences) <= 1 or seconds <= 0:
+            out.append(seg)
+            continue
+        total_words = sum(len(x.split()) for x in sentences) or 1
+        for sentence in sentences:
+            out.append(
+                {
+                    "text": sentence,
+                    "seconds": seconds * len(sentence.split()) / total_words,
+                }
+            )
+    return out
+
+
 def panel_weights_from_segments(
     segments: list[dict[str, Any]], n_panels: int
 ) -> list[float] | None:
@@ -193,6 +225,7 @@ def panel_weights_from_segments(
     already chose and ordered these panels for this text, so position carries the
     correspondence, and a fuzzy re-match here could only disagree with it.
     """
+    segments = _subdivide_segments(segments)
     seconds = [max(float(seg.get("seconds", 0.0)), 0.0) for seg in segments]
     total = sum(seconds)
     if n_panels <= 0 or total <= 0:
