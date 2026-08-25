@@ -32,6 +32,9 @@ from manhwa2vid.models import save_json
 
 console = Console()
 
+#: Distinctive words a system message needs before the recap is held to it.
+_MIN_SPINE_WORDS = 3
+
 _AUDIT_SYSTEM = """You are fact-checking a finished manhwa recap against the chapter's
 actual pages. You do not rewrite anything — you report.
 
@@ -74,13 +77,31 @@ def _undelivered_spine(text: str, facts: dict[str, Any]) -> list[str]:
     """
     lowered = set(re.findall(r"[a-z']+", (text or "").lower()))
     missing: list[str] = []
+    seen: set[str] = set()
     for message in facts.get("system_messages") or []:
-        words = [w for w in re.findall(r"[a-z']+", str(message).lower()) if len(w) > 3]
-        if not words:
+        text_of = str(message).strip()
+        key = text_of.lower()
+        if key in seen:
+            # A chapter prints the same message twice; asking for it twice made the
+            # reviser paste it in twice.
+            continue
+        seen.add(key)
+        words = [w for w in re.findall(r"[a-z']+", key) if len(w) > 3]
+        # Ceremony with no story content is not spine. Requiring it drove the reviser to
+        # paste bracketed text verbatim into the prose — which the writer's own brief
+        # forbids, and which reads as a screen-reader rather than a narrator.
+        #
+        # Threshold measured against Frozen Player's 22 real messages, not guessed. At 3
+        # distinctive words it drops exactly the ceremony ("[CONGRATULATIONS.]" 1,
+        # "[2ND FLOOR]" 1, "[ABSORPTION RATE 100%.]" 2, "[AUTHENTICATION SUCCESSFUL.]" 2)
+        # and keeps every plot-bearing one. Note "[INSUFFICIENT MAGIC STATS.]" sits
+        # EXACTLY at 3 and is genuine spine — it is the cliffhanger's mechanism — so 3 is
+        # the only workable value: 4 would discard the beat this gate most exists for.
+        if len(set(words)) < _MIN_SPINE_WORDS:
             continue
         hits = sum(1 for w in set(words) if w in lowered)
         if hits < max(1, len(set(words)) // 2):
-            missing.append(str(message))
+            missing.append(text_of)
     return missing
 
 
@@ -132,7 +153,11 @@ def revise_once(
         f"- WRONG: {f.get('quote', '')!r} — {f.get('problem', '')} (page {f.get('page', '?')})"
         for f in majors
     ]
-    issues += [f"- MISSING: the narration never delivers {m!r}" for m in missing]
+    issues += [
+        f"- MISSING: the narration never conveys what {m!r} SAYS. Work its meaning into "
+        "the prose in your own words — do NOT quote the bracketed text."
+        for m in missing
+    ]
 
     from manhwa2vid.llm.provider import get_llm_provider
 

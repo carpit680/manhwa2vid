@@ -153,3 +153,53 @@ def test_short_paragraphs_are_left_alone():
 
     paras = ["Short and complete.", "Also short."]
     assert split_long_paragraphs(paras, max_words=90) == paras
+
+
+def test_identity_gate_ignores_places_caps_and_merged_proper_nouns():
+    """Three false-positive classes that all fired on the first readable-pages run.
+
+    The gate must stay quiet on things that are correct, or it teaches the reader to
+    ignore it — while still catching an invented person, which is its whole job.
+    """
+    from manhwa2vid.script.story_first import unknown_names
+
+    allowed = {"Seo Jun-Ho", "Deok-gu"}
+
+    # Places are not characters and will never be in a CHARACTER glossary.
+    assert unknown_names("He runs to the Pacific Ocean. Then he stops.", allowed) == []
+    assert unknown_names("It happened in Seoul History Museum. Lights flicker.", allowed) == []
+
+    # Transcribed bracketed system text is caps, not a name.
+    assert unknown_names("A window reads CONGRATULATIONS SURVIVOR. He blinks.", allowed) == []
+
+    # Adjacent proper nouns from different noun phrases merge under a greedy match:
+    # "the modern Earth Jun-Ho sees" is not a character called "Earth Jun-Ho".
+    assert unknown_names("He studies the modern Earth Jun-Ho sees now. It is quiet.", allowed) == []
+
+    # ...and the real thing still fires.
+    assert unknown_names("The room stills. Then Kang Min-Su interrupts him.", allowed) == ["Kang Min-Su"]
+
+
+def test_ceremonial_system_messages_are_not_spine():
+    """Requiring every bracketed line drove the reviser to paste them in verbatim.
+
+    "[CONGRATULATIONS.]" and "[AUTHENTICATION SUCCESSFUL.]" carry no story; demanding
+    them produced narration that reads like a screen reader, which the writer's own
+    brief forbids. A duplicate message asked for twice got pasted twice.
+    """
+    from manhwa2vid.script.audit import _undelivered_spine
+
+    facts = {
+        "system_messages": [
+            "[CONGRATULATIONS.]",
+            "[CONGRATULATIONS.]",
+            "[AUTHENTICATION SUCCESSFUL.]",
+            "[YOU ARE ABLE TO REMOVE THE SEAL ON THE ICE STATUS.]",
+        ]
+    }
+    narration = "He wakes up and walks to the hall. The ice holds his friends."
+    missing = _undelivered_spine(narration, facts)
+    assert missing == ["[YOU ARE ABLE TO REMOVE THE SEAL ON THE ICE STATUS.]"]
+
+    delivered = "He learns he can remove the seal on the ice once he is strong enough."
+    assert _undelivered_spine(delivered, facts) == []

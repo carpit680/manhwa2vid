@@ -45,9 +45,11 @@ def unknown_names(text: str, allowed: set[str]) -> list[str]:
     if not allowed:
         return []
     known = {a.lower() for a in allowed}
-    # Individual words of a known name: "Jun-Ho" for "Seo Jun-Ho".
+    # Individual words of a known name: "Jun-Ho" for "Seo Jun-Ho". Split on WHITESPACE
+    # only — splitting hyphens too turned "Seo Jun-Ho" into {seo, jun, ho}, so the very
+    # common "Jun-Ho" was never recognised as known.
     for name in list(allowed):
-        for part in re.split(r"[\s-]+", name):
+        for part in name.split():
             if len(part) > 2:
                 known.add(part.lower())
     # Glossary entries carry articles and roles the narration naturally drops: the
@@ -58,6 +60,16 @@ def unknown_names(text: str, allowed: set[str]) -> list[str]:
     haystack = " || ".join(known)
 
     found: dict[str, int] = {}
+    # Places are not characters. "Pacific Ocean", "Seoul History Museum" and
+    # "Antarctica" are real, correct, and will never be in a CHARACTER glossary — the
+    # gate exists to catch an invented PERSON, and flagging geography just teaches the
+    # reader to ignore it. A name preceded by a locative preposition is a place.
+    text = re.sub(
+        r"\b(?:in|at|on|to|from|into|across|near|over|under|inside|outside|toward|towards)"
+        r"\s+(?:the\s+)?[A-Z][\w'’-]*(?:[- ][A-Z][\w'’-]*)*",
+        " ",
+        text or "",
+    )
     for sentence in re.split(r"(?<=[.!?])\s+", text or ""):
         # Drop the sentence's FIRST WORD before scanning. Testing "does this candidate
         # start the sentence" does not work: the multi-word pattern is greedy, so
@@ -74,6 +86,22 @@ def unknown_names(text: str, allowed: set[str]) -> list[str]:
                 continue
             # A single common word is far more likely sentence-case than a name.
             if " " not in candidate and "-" not in candidate:
+                continue
+            # Bracketed system text is transcribed in caps and is not a name.
+            if candidate.isupper():
+                continue
+            # Two adjacent proper nouns from DIFFERENT noun phrases merge under a greedy
+            # multi-word match: "the modern Earth Jun-Ho sees outside his window" yields
+            # the candidate "Earth Jun-Ho". If any word-run inside the candidate is a
+            # name we know, this is a merge artifact, not an invention — an invented
+            # person contains no known name at all.
+            parts = candidate.split()
+            if len(parts) > 1 and any(
+                " ".join(parts[i:j]).lower() in known
+                for i in range(len(parts))
+                for j in range(i + 1, len(parts) + 1)
+                if (i, j) != (0, len(parts))
+            ):
                 continue
             found[candidate] = found.get(candidate, 0) + 1
     return sorted(found)
