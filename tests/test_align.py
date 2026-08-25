@@ -203,3 +203,28 @@ def test_ceremonial_system_messages_are_not_spine():
 
     delivered = "He learns he can remove the seal on the ice once he is strong enough."
     assert _undelivered_spine(delivered, facts) == []
+
+
+def test_identity_gate_is_advisory_and_its_limit_is_pinned():
+    """The gate reports; it does not block. This test records WHY.
+
+    Across three real runs on two titles it produced five false-positive classes and no
+    true positives. Four are now handled; the fifth — a correctly-named place that is
+    not preceded by a locative preposition, like "the commandments of the Carthenon
+    Temple" — needs a POS tagger to separate from an invented person, so it is recorded
+    as a known limit rather than chased with another heuristic.
+    """
+    from manhwa2vid.script.story_first import unknown_names
+
+    allowed = {"Sung Jin-Woo"}
+    # Handled classes stay quiet.
+    assert unknown_names("He is nobody. Jin-Woo is an E-Rank Hunter now.", allowed) == []
+    assert unknown_names("They run to the Carthenon Temple. It is cold.", allowed) == []
+    # KNOWN LIMIT: same place, no locative preposition, still reported.
+    assert unknown_names(
+        "He reads them. It lists the commandments of the Carthenon Temple.", allowed
+    ) == ["Carthenon Temple"]
+    # The case it exists for still fires.
+    assert unknown_names("The hall stills. Then Kang Min-Su interrupts him.", allowed) == [
+        "Kang Min-Su"
+    ]

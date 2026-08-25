@@ -27,6 +27,10 @@ console = Console()
 
 #: Sentence-case words that open a sentence are not evidence of a name.
 _CAPITALISED_RE = re.compile(r"\b([A-Z][a-z]+(?:[- ][A-Z][a-z]+)*)\b")
+#: "E-Rank Hunter", "S-Class Gate" — a single-letter grade prefix does not match
+#: [A-Z][a-z]+, so the scan starts at "Rank" and reports a name nobody wrote. The whole
+#: grade token goes: stripping only the "E-" leaves "Rank Hunter", which still matches.
+_GRADE_PREFIX_RE = re.compile(r"\b[A-Z]-[A-Z][a-z]+")
 
 
 def unknown_names(text: str, allowed: set[str]) -> list[str]:
@@ -38,9 +42,24 @@ def unknown_names(text: str, allowed: set[str]) -> list[str]:
     bystander gets caught here, and the fix is a one-line glossary edit rather than
     archaeology through a 174-descriptor profile.
 
-    Deliberately loose about sentence-initial words — the check is for MULTI-word or
-    clearly-foreign names, because flagging every capitalised sentence opener would
-    drown the signal.
+    ADVISORY, NOT BLOCKING — and that is a measured conclusion, not a concession.
+    Across three real runs on two titles this produced FIVE distinct false-positive
+    classes and zero true positives:
+
+      glossary articles/roles  "Player Association" vs "the Player Association president"
+      real-world places        "Pacific Ocean", "Seoul History Museum", "Carthenon Temple"
+      transcribed system text  caps runs lifted from bracketed windows
+      merged proper nouns      "the modern Earth Jun-Ho sees" -> "Earth Jun-Ho"
+      grade prefixes           "an E-Rank Hunter" -> "Rank Hunter"
+
+    Each was individually fixable, and fixing three of them did not stop the fourth and
+    fifth from appearing on the next title. Separating an invented PERSON from a
+    correctly-named place, rank or organisation needs a tagger, not a longer regex, so
+    the honest limit is recorded here rather than hidden behind another heuristic.
+
+    The real defence against an invented character is the audit stage, which sees the
+    pages and catches misattribution directly — it caught Jun-Ho touching the wrong
+    teammate's ice block. This stays as a report worth reading before approving.
     """
     if not allowed:
         return []
@@ -70,6 +89,7 @@ def unknown_names(text: str, allowed: set[str]) -> list[str]:
         " ",
         text or "",
     )
+    text = _GRADE_PREFIX_RE.sub("", text)
     for sentence in re.split(r"(?<=[.!?])\s+", text or ""):
         # Drop the sentence's FIRST WORD before scanning. Testing "does this candidate
         # start the sentence" does not work: the multi-word pattern is greedy, so
@@ -161,7 +181,7 @@ def generate_story_first_script(
     strangers = unknown_names(text, glossary_names(paths))
     report.add(
         "name-integrity",
-        False if strangers else True,
+        "warn" if strangers else True,
         f"narration uses name(s) absent from the glossary: {strangers} — either the "
         "writer invented them or the glossary is missing an alias; fix glossary.json",
         unknown=strangers,
