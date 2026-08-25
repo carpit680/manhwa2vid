@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,7 @@ from manhwa2vid.models import ProjectMeta, save_json
 from manhwa2vid.panels.filter import load_story_panels
 from manhwa2vid.script.generate import load_script_beats
 from manhwa2vid.tts.provider import get_tts_provider
-from manhwa2vid.video.timeline import build_timeline
+from manhwa2vid.video.timeline import _wav_duration, build_timeline
 
 console = Console()
 
@@ -48,6 +49,7 @@ def run_tts_and_timeline(
             out = audio_dir / f"beat_{beat.beat_id:03d}.wav"
             if not out.exists() or force:
                 provider.synthesize(beat.narration, out, config)
+                _ensure_segments_sidecar(beat.narration, out)
             progress.advance(task)
 
     panels = load_story_panels(paths)
@@ -77,6 +79,40 @@ def run_tts_and_timeline(
     )
 
     _enforce_timeline_qa(script.beats, panels, timeline, paths, config)
+
+
+def _ensure_segments_sidecar(narration: str, wav_path: Path) -> None:
+    """Guarantee a per-sentence timing sidecar exists next to the WAV.
+
+    Kokoro writes an EXACT one during synthesis (it splits on sentences internally and
+    the chunk lengths are free). Every other provider returns opaque audio, so the
+    fallback prorates the measured WAV duration across sentences by word count. Same
+    schema either way — the timeline never knows which provider ran. Word-proration is
+    systematically imperfect (pauses, numbers, names), which is exactly why the Kokoro
+    path keeps the real numbers instead of estimating.
+    """
+    sidecar = wav_path.with_suffix(".segments.json")
+    if sidecar.exists():
+        return
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", narration.strip()) if s.strip()]
+    if not sentences:
+        return
+    try:
+        duration = _wav_duration(wav_path)
+    except Exception:
+        return
+    total_words = sum(len(s.split()) for s in sentences) or 1
+    sidecar.write_text(
+        json.dumps(
+            [
+                {"text": s, "seconds": round(duration * len(s.split()) / total_words, 4)}
+                for s in sentences
+            ],
+            ensure_ascii=False,
+            indent=1,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:

@@ -56,7 +56,15 @@ class KokoroTTSProvider(TTSProvider):
         out_wav = out_path.with_suffix(".wav")
         out_wav.parent.mkdir(parents=True, exist_ok=True)
 
-        chunks = [audio for _graphemes, _phonemes, audio in pipeline(text, voice=voice, speed=speed)]
+        # Keep the (sentence text, audio) pairing — Kokoro splits on sentence
+        # boundaries internally, so per-sentence durations are produced for free at
+        # synthesis time. They were thrown away for the pipeline's whole life, which is
+        # why every panel in a beat dwelt for an identical slice of the beat's audio:
+        # the timeline had no idea WHEN in the beat each sentence was spoken.
+        segments: list[tuple[str, Any]] = [
+            (graphemes, audio) for graphemes, _phonemes, audio in pipeline(text, voice=voice, speed=speed)
+        ]
+        chunks = [audio for _g, audio in segments]
         if not chunks:
             raise RuntimeError(f"Kokoro returned no audio for: {text[:60]!r}")
 
@@ -72,6 +80,20 @@ class KokoroTTSProvider(TTSProvider):
                     padded.append(gap)
                 padded.append(np.asarray(chunk, dtype="float32"))
             audio = np.concatenate(padded)
+
+        # Sidecar: exact per-sentence timing, join gaps folded into the preceding
+        # segment so the seconds sum to the WAV's real duration.
+        import json as _json
+
+        sidecar = []
+        for i, (graphemes, chunk) in enumerate(segments):
+            seconds = len(np.asarray(chunk)) / SAMPLE_RATE
+            if i:
+                seconds += 0.06
+            sidecar.append({"text": str(graphemes).strip(), "seconds": round(seconds, 4)})
+        out_wav.with_suffix(".segments.json").write_text(
+            _json.dumps(sidecar, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
 
         peak = float(abs(audio).max()) if audio.size else 0.0
         if peak > 0.89:

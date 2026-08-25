@@ -299,7 +299,7 @@ video:
   width: 1920
   height: 1080
   fps: 30
-  min_panel_seconds: 2.0   # reference averages 3.2s of airtime per sentence
+  min_panel_seconds: 1.5  # was 2.0 — sentence-weighted dwell needs room to move fast under short sentences
   max_panel_seconds: 5.0   # was 10.0 — long dwells read as slideshow next to the reference
   # Panels are dropped (not flashed) when a beat's narration cannot show them this long.
   # Lower than min_panel_seconds on purpose: mild compression is fine, 0.4s strobing is not.

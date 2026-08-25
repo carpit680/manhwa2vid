@@ -145,3 +145,44 @@ def test_budget_preserves_narration_order_not_reading_order():
     kept = budget_panels_for_beat(out_of_reading_order, 4.0, 2.0, ["p0001_01"])
     assert kept == [p for p in out_of_reading_order if p in kept]
     assert kept[0].startswith("p0020"), "page-20 panels must stay ahead of page-1 panels"
+
+
+def test_weighted_split_follows_narration_and_keeps_av_lock():
+    """Dwell must follow what the narration is saying, not a metronome.
+
+    Before weights existed, 16/16 FP beats and 34/38 SL beats gave every panel a
+    byte-identical dwell — the picture never lingered on what was being said.
+    """
+    from manhwa2vid.video.timeline import panel_weights_from_segments, split_beat_durations
+
+    segments = [
+        {"text": "Long sentence about the fight.", "seconds": 6.0},
+        {"text": "Short.", "seconds": 1.0},
+        {"text": "Another long one describing the aftermath.", "seconds": 5.0},
+    ]
+    weights = panel_weights_from_segments(segments, 6)
+    durations = split_beat_durations(12.0, 6, min_sec=1.5, max_sec=5.0, weights=weights)
+    assert abs(sum(durations) - 12.0) < 1e-6, "A/V lock is non-negotiable"
+    assert len(set(round(d, 2) for d in durations)) > 1, "dwell must vary with the narration"
+    # The short sentence's panel is the shortest on screen (floored at min_sec).
+    assert min(durations) == durations[3]
+
+    # No sidecar -> None -> today's even split, so old projects behave identically.
+    assert panel_weights_from_segments([], 6) is None
+    assert split_beat_durations(12.0, 6, min_sec=1.5, max_sec=5.0) == [2.0] * 6
+    # A single sentence has nothing to weight; even split IS the right answer.
+    assert panel_weights_from_segments([{"seconds": 5.0}], 4) is None
+
+
+def test_tiny_sentence_rides_its_boundary_panel():
+    """A sentence too short to own a panel must not vanish from the weight mass."""
+    from manhwa2vid.video.timeline import panel_weights_from_segments
+
+    segments = [
+        {"seconds": 10.0},
+        {"seconds": 0.2},   # rounds to an empty panel run
+        {"seconds": 10.0},
+    ]
+    weights = panel_weights_from_segments(segments, 4)
+    assert weights is not None
+    assert abs(sum(weights) - 20.2) < 1e-6, "no seconds may be lost"

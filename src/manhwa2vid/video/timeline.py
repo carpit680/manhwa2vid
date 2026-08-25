@@ -178,6 +178,63 @@ def budget_panels_for_beat(
     return chosen
 
 
+def panel_weights_from_segments(
+    segments: list[dict[str, Any]], n_panels: int
+) -> list[float] | None:
+    """Turn per-sentence timings into per-panel dwell weights.
+
+    Panels are already in presentation order and sentences in spoken order, so the
+    assignment is contiguous: each sentence owns a run of panels sized pro-rata by its
+    share of the beat's audio, and every panel in that run splits the sentence's seconds
+    evenly. The result: the screen holds on a moment for as long as the narrator is
+    talking about it, and short punch sentences flick past — which is the entire ask.
+
+    Deliberately NOT content-matching sentences to panels semantically: the aligner
+    already chose and ordered these panels for this text, so position carries the
+    correspondence, and a fuzzy re-match here could only disagree with it.
+    """
+    seconds = [max(float(seg.get("seconds", 0.0)), 0.0) for seg in segments]
+    total = sum(seconds)
+    if n_panels <= 0 or total <= 0:
+        return None
+    if len(seconds) == 1:
+        return None  # one sentence — even split IS the right answer
+
+    # Sentence i owns panels [bounds[i], bounds[i+1]) — cumulative pro-rata. A tiny
+    # sentence may round to an empty run; handled below.
+    bounds = [0]
+    acc = 0.0
+    for sec in seconds:
+        acc += sec
+        bounds.append(round(acc / total * n_panels))
+    bounds[-1] = n_panels
+
+    weights = [0.0] * n_panels
+    for i, sec in enumerate(seconds):
+        lo, hi = bounds[i], bounds[i + 1]
+        if hi <= lo:
+            # Sentence too short to own a panel: its time rides on the panel at the
+            # boundary so the audio position still matches the picture.
+            idx = min(max(lo, 0), n_panels - 1)
+            weights[idx] += sec
+            continue
+        share = sec / (hi - lo)
+        for j in range(lo, hi):
+            weights[j] += share
+    return weights if sum(weights) > 0 else None
+
+
+def load_beat_segments(audio_dir: Path, beat_id: int) -> list[dict[str, Any]] | None:
+    path = audio_dir / f"beat_{beat_id:03d}.segments.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) and data else None
+    except Exception:
+        return None
+
+
 def _panel_sort_key(panel_id: str) -> tuple[int, int]:
     import re
 
@@ -207,21 +264,39 @@ def _resolve_panels_for_beat(beat: ScriptBeat, panel_map: dict[str, Panel], all_
     return all_ids[:1]
 
 
-def split_beat_durations(audio_duration_s: float, n_panels: int, *, min_sec: float, max_sec: float) -> list[float]:
+def split_beat_durations(
+    audio_duration_s: float,
+    n_panels: int,
+    *,
+    min_sec: float,
+    max_sec: float,
+    weights: list[float] | None = None,
+) -> list[float]:
     """
     Split beat audio across panels so sum(durations) == audio_duration exactly.
 
-    Prefer even split. If even split exceeds max_sec, cap at max and redistribute
-    remainder to other panels (still summing to audio). Never extend past audio
-    to satisfy min_sec — borrow from longer siblings when possible; otherwise
-    allow panels shorter than min_sec so A/V stay locked.
+    `weights` makes dwell follow the NARRATION: a panel's share of the beat's audio is
+    its share of the weight mass (in practice, the measured seconds of the sentence it
+    illustrates). Without weights the split is even — which is what made every video a
+    metronome: measured before this existed, 16/16 FP beats and 34/38 SL beats gave
+    every panel a byte-identical dwell, so the picture never lingered on what was being
+    said. The cap/lift/sum-lock machinery below is weight-agnostic.
+
+    If even/weighted split exceeds max_sec, cap at max and redistribute remainder to
+    other panels (still summing to audio). Never extend past audio to satisfy min_sec —
+    borrow from longer siblings when possible; otherwise allow panels shorter than
+    min_sec so A/V stay locked.
     """
     if n_panels <= 0:
         return []
     if n_panels == 1:
         return [audio_duration_s]
 
-    raw = [audio_duration_s / n_panels] * n_panels
+    if weights and len(weights) == n_panels and sum(weights) > 0:
+        mass = sum(weights)
+        raw = [audio_duration_s * max(w, 0.0) / mass for w in weights]
+    else:
+        raw = [audio_duration_s / n_panels] * n_panels
     # Cap highs, then redistribute leftover to panels still under max
     for _ in range(n_panels + 2):
         over = [(i, d - max_sec) for i, d in enumerate(raw) if d > max_sec + 1e-9]
@@ -325,7 +400,12 @@ def build_timeline(
         dropped += len(panel_ids) - len(budgeted)
         panel_ids = budgeted
 
-        segs = split_beat_durations(duration, len(panel_ids), min_sec=min_sec, max_sec=max_sec)
+        weights = panel_weights_from_segments(
+            load_beat_segments(audio_dir, beat.beat_id) or [], len(panel_ids)
+        )
+        segs = split_beat_durations(
+            duration, len(panel_ids), min_sec=min_sec, max_sec=max_sec, weights=weights
+        )
         for pid, seg in zip(panel_ids, segs):
             panel = panel_map[pid]
             entries.append(
