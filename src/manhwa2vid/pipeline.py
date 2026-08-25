@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import json
 from pathlib import Path
 
@@ -88,7 +90,12 @@ def run_stage(
         # Two architectures during the transition. "freeform" is the story-first path
         # (read -> write -> audit -> revise -> align); "classic" is the panel-locked
         # pipeline it replaces. See experiments/oneshot-fp-ch1-2/comparison.md.
-        architecture = str(get_nested(config, "script", "architecture", default="classic"))
+        # Env wins over config, like every other provider selection in this codebase.
+        # It also keeps tests from having to mutate the shared config.yaml, which made
+        # the two pipeline tests race and fail on a different gate each run.
+        architecture = os.getenv("SCRIPT_ARCHITECTURE") or str(
+            get_nested(config, "script", "architecture", default="classic")
+        )
         if architecture == "freeform":
             from manhwa2vid.script.story_first import generate_story_first_script
 

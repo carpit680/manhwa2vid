@@ -60,30 +60,6 @@ def sample_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return project_dir
 
 
-@pytest.fixture
-def pin_classic_architecture():
-    """Pin script.architecture=classic for this test.
-
-    It asserts the CLASSIC path's behaviour, so it must not silently start exercising
-    the freeform path when the config default flips — which is exactly what happened
-    while the freeform path was being validated, and the failure looked like a real
-    regression for several minutes.
-    """
-    import yaml
-
-    from manhwa2vid.config import find_repo_root
-
-    path = find_repo_root() / "config.yaml"
-    original = path.read_text(encoding="utf-8")
-    cfg = yaml.safe_load(original)
-    cfg["script"]["architecture"] = "classic"
-    path.write_text(yaml.dump(cfg, sort_keys=False), encoding="utf-8")
-    try:
-        yield
-    finally:
-        path.write_text(original, encoding="utf-8")
-
-
 def test_ingest_and_panels(sample_project: Path) -> None:
     run_stage(sample_project, PipelineStage.INGEST)
     run_stage(sample_project, PipelineStage.PANELS)
@@ -95,7 +71,11 @@ def test_ingest_and_panels(sample_project: Path) -> None:
     assert len(panels) >= 2
 
 
-def test_full_pipeline_mock(sample_project: Path, pin_classic_architecture) -> None:
+def test_full_pipeline_mock(sample_project: Path, monkeypatch) -> None:
+    # Pin the architecture this test asserts. It had started exercising the freeform
+    # path whenever the config default was left flipped, and mutating the shared
+    # config.yaml to pin it made this test and the freeform one race.
+    monkeypatch.setenv("SCRIPT_ARCHITECTURE", "classic")
     run_all_until_review(sample_project)
 
     paths = project_paths(sample_project)
@@ -204,36 +184,26 @@ def test_freeform_pipeline_mock(sample_project: Path, monkeypatch) -> None:
     downstream half consumes — and that panels bind to paragraphs rather than the other
     way round.
     """
-    import yaml
+    monkeypatch.setenv("SCRIPT_ARCHITECTURE", "freeform")
 
-    from manhwa2vid.config import find_repo_root
+    for stage in (PipelineStage.INGEST, PipelineStage.PANELS, PipelineStage.SCRIPT):
+        run_stage(sample_project, stage)
 
-    cfg_path = find_repo_root() / "config.yaml"
-    original = cfg_path.read_text(encoding="utf-8")
-    cfg = yaml.safe_load(original)
-    cfg["script"]["architecture"] = "freeform"
-    cfg_path.write_text(yaml.dump(cfg, sort_keys=False), encoding="utf-8")
-    try:
-        for stage in (PipelineStage.INGEST, PipelineStage.PANELS, PipelineStage.SCRIPT):
-            run_stage(sample_project, stage)
+    paths = project_paths(sample_project)
+    assert paths["chapter_facts_json"].exists(), "read stage must record facts"
+    assert paths["script_freeform"].exists(), "writer must leave the prose behind"
+    assert paths["script_alignment_json"].exists(), "alignment map is kept for debugging"
 
-        paths = project_paths(sample_project)
-        assert paths["chapter_facts_json"].exists(), "read stage must record facts"
-        assert paths["script_freeform"].exists(), "writer must leave the prose behind"
-        assert paths["script_alignment_json"].exists(), "alignment map is kept for debugging"
+    draft = json.loads(paths["script_json"].read_text())
+    beats = draft["beats"]
+    assert len(beats) >= 2
+    assert len({b["beat_id"] for b in beats}) == len(beats), "beat_id must be unique"
+    assert all(b["panel_ids"] for b in beats), "a beat with no panels loses its audio"
+    assert all(b["narration"].strip() for b in beats)
 
-        draft = json.loads(paths["script_json"].read_text())
-        beats = draft["beats"]
-        assert len(beats) >= 2
-        assert len({b["beat_id"] for b in beats}) == len(beats), "beat_id must be unique"
-        assert all(b["panel_ids"] for b in beats), "a beat with no panels loses its audio"
-        assert all(b["narration"].strip() for b in beats)
+    # The draft round-trips through the markdown the human edits.
+    from manhwa2vid.script.generate import _parse_markdown_beats
 
-        # The draft round-trips through the markdown the human edits.
-        from manhwa2vid.script.generate import _parse_markdown_beats
-
-        reparsed = _parse_markdown_beats(paths["script_draft"])
-        assert [b["beat_id"] for b in beats] == [b.beat_id for b in reparsed]
-        assert [b["panel_ids"] for b in beats] == [b.panel_ids for b in reparsed]
-    finally:
-        cfg_path.write_text(original, encoding="utf-8")
+    reparsed = _parse_markdown_beats(paths["script_draft"])
+    assert [b["beat_id"] for b in beats] == [b.beat_id for b in reparsed]
+    assert [b["panel_ids"] for b in beats] == [b.panel_ids for b in reparsed]
