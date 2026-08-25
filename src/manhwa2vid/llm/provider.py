@@ -203,6 +203,18 @@ class LLMProvider(ABC):
         """
         return self.describe_panels([path for _label, path in labeled], prompt)
 
+    def describe_labeled_panels_text(
+        self, labeled: list[tuple[str, Path]], system: str, user: str
+    ) -> str:
+        """Same interleaving, but the answer is PROSE and must not be JSON-extracted.
+
+        `describe_labeled_panels` ends in `_extract_json_object`, which is right for scene
+        cards and destructive for narration — it would return "{}" for a perfectly good
+        paragraph. The story-first writer needs images in and prose out, so it gets its
+        own path rather than a flag on the JSON one.
+        """
+        raise NotImplementedError
+
 
 class OpenAIProvider(LLMProvider):
     def __init__(self, model: str | None = None, vision_model: str | None = None) -> None:
@@ -285,6 +297,10 @@ class OpenAICompatProvider(LLMProvider):
     DEFAULT_TEXT_MODEL: str = ""
     DEFAULT_VISION_MODEL: str = ""
     MAX_VISION_TOKENS: int = 4096
+    #: Prose needs far more headroom than scene cards: the first whole-chapter
+    #: write truncated at the vision cap and came back as a 258-word stub where
+    #: 939 words were wanted.
+    MAX_PROSE_TOKENS: int = 32768
 
     #: Why the last call stopped ("stop" | "length" | ...). "length" means truncated.
     last_finish_reason: str = ""
@@ -412,6 +428,40 @@ class OpenAICompatProvider(LLMProvider):
                 }
             )
         return self._vision_call(content)
+
+    def describe_labeled_panels_text(
+        self, labeled: list[tuple[str, Path]], system: str, user: str
+    ) -> str:
+        content: list[dict[str, Any]] = [{"type": "text", "text": user}]
+        for label, path in labeled:
+            media_type, data = encode_image_for_api(path)
+            content.append({"type": "text", "text": label})
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{media_type};base64,{data}"},
+                }
+            )
+
+        def call() -> Any:
+            kwargs: dict[str, Any] = {
+                "model": self.vision_model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": content},
+                ],
+                "max_completion_tokens": self.MAX_PROSE_TOKENS,
+            }
+            extra = self._extra_body(self.vision_model)
+            if extra:
+                kwargs["extra_body"] = extra
+            if self.temperature is not None:
+                kwargs["temperature"] = self.temperature
+            return self.client.chat.completions.create(**kwargs)
+
+        resp = _retry_on_rate_limit(call)
+        self._record_finish(resp)
+        return resp.choices[0].message.content or ""
 
     def _vision_call(self, content: list[dict[str, Any]]) -> str:
 

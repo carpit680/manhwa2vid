@@ -326,6 +326,18 @@ def project_paths(project_dir: Path) -> dict[str, Path]:
         # annotating individual panels (arc summary + temporal devices).
         "scene_story_map_json": project_dir / "scene_story_map.json",
         "cast_attribution_json": project_dir / "cast_attribution.json",
+        # --- story-first (freeform) architecture ---
+        #: What the pages actually SAY, read straight off the images: verbatim system
+        #: messages, key dialogue, explicit time markers, cast sightings. The audit
+        #: stage checks delivery against this; the writer is not limited to it.
+        "chapter_facts_json": project_dir / "chapter_facts.json",
+        #: The narration as prose, before any panel binding exists.
+        "script_freeform": project_dir / "script.freeform.md",
+        #: Grounding findings from the audit pass, and what the single revision did.
+        "script_audit_json": project_dir / "script.audit.json",
+        #: paragraph index -> page range, the aligner's raw output (kept for debugging
+        #: a bad binding without re-running the call).
+        "script_alignment_json": project_dir / "script.alignment.json",
         "script_synopsis_json": project_dir / "script.synopsis.json",
         "script_outline_json": project_dir / "script.outline.json",
         "script_draft": project_dir / "script.draft.md",
