@@ -176,6 +176,10 @@ def effective_pronoun(profile: CharacterProfile) -> str:
     return inferred or (profile.pronoun or "they")
 
 
+# How far one side must outweigh the other before descriptors overrule a stored pronoun.
+_PRONOUN_DOMINANCE = 4
+
+
 def infer_pronoun_from_descriptors(profile: CharacterProfile) -> str:
     """Read a character's gender off the descriptors the vision pass already wrote.
 
@@ -186,10 +190,20 @@ def infer_pronoun_from_descriptors(profile: CharacterProfile) -> str:
     one beat and "her staff" for the same character two beats later — the kind of
     contradiction a viewer notices immediately.
 
-    Requires agreement: at least two descriptors pointing the same way and none pointing
-    the other. A single mention decides nothing, and a genuinely mixed set is left alone
-    rather than guessed at — "they" is a legitimate answer, just not one that should
-    survive three descriptors saying "man".
+    Requires agreement: at least two descriptors pointing the same way, and that side
+    outweighing the other at least four to one. A single mention decides nothing, and a
+    genuinely mixed set is left alone rather than guessed at — "they" is a legitimate
+    answer, just not one that should survive three descriptors saying "man".
+
+    The dominance ratio replaced an absolute `== 0` requirement, which is a purity rule
+    where a majority rule was wanted and which fails precisely as evidence grows. Sung
+    Jin-Woo's profile carries 174 descriptors after five chapters — 131 male, 20 female,
+    the latter from other characters' descriptors leaking in during cast merges — so the
+    zero-tolerance test abstained on the most thoroughly evidenced character in the bible
+    and the recap narrated "They grit his teeth" about a man described as one 131 times.
+    Measured across both series bibles, 4:1 flips exactly two profiles (Jin-Woo and Bak,
+    both male) and leaves every genuinely mixed profile abstaining, including an 11-vs-28
+    one that is polluted enough that guessing would be wrong.
     """
     female = male = 0
     for text in [*profile.descriptors, profile.role or ""]:
@@ -198,9 +212,9 @@ def infer_pronoun_from_descriptors(profile: CharacterProfile) -> str:
             female += 1
         if words & _MALE_WORDS:
             male += 1
-    if female >= 2 and male == 0:
+    if female >= 2 and female >= _PRONOUN_DOMINANCE * male:
         return "she"
-    if male >= 2 and female == 0:
+    if male >= 2 and male >= _PRONOUN_DOMINANCE * female:
         return "he"
     return ""
 

@@ -2613,3 +2613,23 @@ def test_bare_name_repair_does_not_swallow_a_name_that_ends_a_real_sentence():
     ]
     for text in intact:
         assert repair_broken_sentences([_beat(1, text)])[0].narration == text
+
+
+def test_mixed_number_pronoun_blocks_and_does_not_fire_on_real_plurals():
+    """"They grit his teeth" reached a rendered 5-chapter script in seven beats.
+
+    Every existing check passed it: grammatical in isolation, carries a verb, and neither
+    the fragment nor the stranded-determiner detector models agreement. It is the audible
+    symptom of a bible pronoun that never resolved, so it blocks — the fix belongs in the
+    profile, not in a narration rewrite that the next chapter would re-break.
+    """
+    flagged = lint_broken_sentences([_beat(2, "They grit his teeth. He has zero options left.")])
+    assert [i.split(":")[0] for i in flagged[2]] == ["mixed_number"]
+
+    for genuine_plural in (
+        "They raise their weapons.",
+        "They walk among the pedestrians.",
+        "Ju-Hee and Bak look at his severed arm.",
+        "They and his brother argue about the raid.",
+    ):
+        assert lint_broken_sentences([_beat(1, genuine_plural)]) == {}

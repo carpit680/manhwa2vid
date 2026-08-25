@@ -2331,6 +2331,35 @@ _TRUNCATED_SPEECH_RE = re.compile(
 )
 
 
+# "They grit his teeth." — a plural subject carrying a singular possessive for the same
+# person. Narrow by construction: subject pronoun, then a short verb-and-modifier span
+# with no second subject in it, then a gendered possessive.
+_MIXED_NUMBER_RE = re.compile(
+    r"\bThey\b(?:\s+(?!and\b|or\b|but\b|while\b|as\b)[\w'’-]+){1,3}\s+(his|her)\b",
+    re.I,
+)
+
+
+def mixed_number_pronouns(text: str) -> list[str]:
+    """Sentences that call one person "they" and then "his"/"her" in the same breath.
+
+    Not a style nit — it is the audible symptom of a character whose bible pronoun never
+    resolved, and it reached a rendered 5-chapter script nine times ("They grit his
+    teeth", "They look ... his"). Every existing check passed it: the sentence is
+    grammatical in isolation, carries a verb, and neither the fragment nor the
+    stranded-determiner detectors model agreement.
+
+    Detection only. The repair is to fix the PRONOUN in the bible — rewriting the
+    narration would paper over a wrong profile that the next chapter re-uses.
+    """
+    hits: list[str] = []
+    for sentence in _SENTENCE_SPLIT_RE.split((text or "").strip()):
+        sent = sentence.strip()
+        if sent and _MIXED_NUMBER_RE.search(sent):
+            hits.append(sent[:80])
+    return hits
+
+
 def lint_broken_sentences(beats: list[ScriptBeat]) -> dict[int, list[str]]:
     """Every sentence in a beat, not just its first — the gap that shipped two dead
     stubs into a rendered video.
@@ -2361,6 +2390,10 @@ def lint_broken_sentences(beats: list[ScriptBeat]) -> dict[int, list[str]]:
             # rewrite touched was never examined. Same omission as the fragment case.
             if stranded_determiner(sent, strict=True):
                 issues.append(f"stranded_determiner: {sent[:60]}")
+        # Number disagreement on one person ("They grit his teeth"). Blocking, because
+        # the cause is a bible pronoun that never resolved and the fix belongs THERE —
+        # a run that ships this is narrating a character it cannot correctly refer to.
+        issues += [f"mixed_number: {h}" for h in mixed_number_pronouns(beat.narration)]
         if issues:
             report[beat.beat_id] = issues
     return report
