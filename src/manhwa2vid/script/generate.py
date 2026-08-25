@@ -2316,17 +2316,34 @@ def generate_script(
     )
     malformed = sorted(lint_malformed_opening(beats))
     broken = lint_broken_sentences(beats)
+    # Tiered by REPAIRABILITY. A verbless fragment and a stranded determiner are both
+    # fixed deterministically by repair_broken_sentences, so one surviving to here means
+    # the repair failed and the run is genuinely broken — fail. A standalone empty-speech
+    # sentence ("The large orange demon tells Ju-Hee.") cannot always be repaired: the
+    # deletion guard correctly refuses when the next sentence opens on a bare pronoun that
+    # would lose its antecedent, and inventing what was said is the writer's job, not the
+    # polish's. Warn on those rather than block a run on a defect with no safe fix.
+    _hard = {
+        b: [i for i in iss if not i.startswith("truncated_speech:")]
+        for b, iss in broken.items()
+    }
+    _hard = {b: iss for b, iss in _hard.items() if iss}
+    _soft = {b: iss for b, iss in broken.items() if any(i.startswith("truncated_speech:") for i in iss)}
     final_report.add(
         "beats-wellformed",
-        not (malformed or broken),
+        (False if (malformed or _hard) else ("warn" if _soft else True)),
         "; ".join(
             ([f"beat(s) starting mid-sentence after repair: {malformed}"] if malformed else [])
-            + ([f"broken sentences survived the rewrite rounds: "
-                + "; ".join(f"beat {b}: {v[0]}" for b, v in sorted(broken.items())[:3])]
-               if broken else [])
+            + ([f"unrepaired broken sentences: "
+                + "; ".join(f"beat {b}: {v[0]}" for b, v in sorted(_hard.items())[:3])]
+               if _hard else [])
+            + ([f"empty speech clause with no safe repair: "
+                + "; ".join(f"beat {b}: {v[0]}" for b, v in sorted(_soft.items())[:3])]
+               if _soft else [])
         ),
         malformed=malformed,
-        broken=sorted(broken),
+        broken=sorted(_hard),
+        unrepairable=sorted(_soft),
     )
     # Persist BEFORE enforcing. A failing gate still blocks the stage — enforce raises
     # and nothing downstream runs — but the artifact it is complaining about now exists

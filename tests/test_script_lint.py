@@ -2460,3 +2460,53 @@ def test_echoed_agent_catches_the_comma_separated_form():
         "A man and a woman argue near the stall.",
     ]:
         assert not narration_defects(ok), ok
+
+
+def test_sentence_splitter_does_not_break_on_honorifics():
+    """"Mr. Kim tells Sung Jin-Woo." split into "Mr." + "Kim tells Sung Jin-Woo.", which
+    is wrong everywhere _SENTENCE_SPLIT_RE is used: it inflates short_sentence_fraction
+    with one-token sentences, misleads trim and the dedupe passes about where a sentence
+    starts, and made repair_broken_sentences delete the wrong half and emit "Mr. Jin-Woo
+    laughs nervously"."""
+    from manhwa2vid.script.lint import _SENTENCE_SPLIT_RE
+
+    assert _SENTENCE_SPLIT_RE.split("Mr. Kim tells Sung Jin-Woo. Jin-Woo laughs.") == [
+        "Mr. Kim tells Sung Jin-Woo.", "Jin-Woo laughs."
+    ]
+    assert _SENTENCE_SPLIT_RE.split("Dr. Song arrives. She checks the wound.") == [
+        "Dr. Song arrives.", "She checks the wound."
+    ]
+    assert len(_SENTENCE_SPLIT_RE.split("He steps through. Nobody follows.")) == 2
+
+
+def test_stranded_determiner_is_repaired_and_checked_absolutely():
+    """"The they explain that the other hunters held higher ranks" shipped in a 5-chapter
+    run. _ARTICLE_PRONOUN_RE always detected it, but only via narration_defects — a
+    RELATIVE count inside accept_rewrite — so one the writer produced in an untouched beat
+    was never examined. A bare article on a bare pronoun is also unambiguously repairable,
+    unlike "A dejected he walks away" which needs to know which person."""
+    from manhwa2vid.script.lint import lint_broken_sentences, repair_broken_sentences
+
+    beat = ScriptBeat(beat_id=1, panel_ids=["p"], narration=(
+        "The demon speaks first. The they explain the ranks were higher. Nobody argues."))
+    assert any(i.startswith("stranded_determiner:") for i in lint_broken_sentences([beat])[1])
+    fixed = repair_broken_sentences([beat])[0].narration
+    assert "They explain the ranks were higher." in fixed
+    assert lint_broken_sentences([ScriptBeat(beat_id=1, panel_ids=["p"], narration=fixed)]) == {}
+
+
+def test_standalone_empty_speech_is_dropped_only_when_safe():
+    """Deleting "Mr. Kim tells Sung Jin-Woo." is safe when a named subject follows. It is
+    NOT safe before "She asks how that is possible." — that strands the pronoun with no
+    antecedent left in the beat, trading one defect for a worse one."""
+    from manhwa2vid.script.lint import repair_broken_sentences
+
+    safe = ScriptBeat(beat_id=1, panel_ids=["p"], narration=(
+        "Mr. Kim tells Sung Jin-Woo. Jin-Woo laughs nervously and agrees. Ju-Hee tells him to move."))
+    out = repair_broken_sentences([safe])[0].narration
+    assert out.startswith("Jin-Woo laughs")
+    assert "Mr. Jin-Woo" not in out
+
+    unsafe = ScriptBeat(beat_id=1, panel_ids=["p"], narration=(
+        "The large orange demon tells Ju-Hee. She asks how that is possible. Nobody answers."))
+    assert repair_broken_sentences([unsafe])[0].narration == unsafe.narration

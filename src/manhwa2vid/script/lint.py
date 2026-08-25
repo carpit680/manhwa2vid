@@ -383,7 +383,15 @@ _BODY_INVENTORY_RE = re.compile(
     re.I,
 )
 
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+# An honorific's period is not a sentence end. "Mr. Kim tells Sung Jin-Woo." split into
+# "Mr." + "Kim tells Sung Jin-Woo.", which is wrong everywhere this is used — it inflates
+# short_sentence_fraction with one-token "sentences", misleads trim_overlong_beats and the
+# dedupe passes about where a sentence begins, and made repair_broken_sentences delete the
+# wrong half and emit "Mr. Jin-Woo laughs nervously". Each lookbehind is fixed-width,
+# which is what Python's re requires.
+_SENTENCE_SPLIT_RE = re.compile(
+    r"(?<=[.!?])(?<!Mr\.)(?<!Ms\.)(?<!Dr\.)(?<!St\.)(?<!Jr\.)(?<!Sr\.)(?<!Mrs\.)\s+"
+)
 _PRONOUN_START_RE = re.compile(r"^(?:He|She|They|His|Her|Their)\b")
 
 
@@ -2269,8 +2277,16 @@ def lint_broken_sentences(beats: list[ScriptBeat]) -> dict[int, list[str]]:
     for beat in beats:
         issues = [f"fragment: {s[:60]}" for s in sentence_fragments(beat.narration)]
         for sent in _SENTENCE_SPLIT_RE.split(beat.narration.strip()):
-            if _TRUNCATED_SPEECH_RE.search(sent.strip()):
-                issues.append(f"truncated_speech: {sent.strip()[:60]}")
+            sent = sent.strip()
+            if _TRUNCATED_SPEECH_RE.search(sent):
+                issues.append(f"truncated_speech: {sent[:60]}")
+            # "The they explain that the other hunters held higher ranks" shipped in a
+            # 5-chapter run. _ARTICLE_PRONOUN_RE has always detected this, but only
+            # through narration_defects — i.e. only as a RELATIVE count inside
+            # accept_rewrite — so a stranded determiner the writer produced in a beat no
+            # rewrite touched was never examined. Same omission as the fragment case.
+            if _ARTICLE_PRONOUN_RE.search(sent):
+                issues.append(f"stranded_determiner: {sent[:60]}")
         if issues:
             report[beat.beat_id] = issues
     return report
@@ -3399,6 +3415,33 @@ _DANGLING_SPEECH_TAIL_RE = re.compile(
 )
 
 
+def _drop_empty_speech_sentence(text: str) -> str:
+    """Remove a whole sentence that is nothing but "X tells Y." — no content.
+
+    The tail form (", telling Y." / "and tells Y.") is strippable back to the clause it
+    hangs off. A STANDALONE one has nothing to fall back to: cutting the verb from
+    "Mr. Kim tells Sung Jin-Woo." leaves "Mr. Kim." So the sentence goes entirely.
+
+    Two guards, both about not trading one defect for a worse one: at least two sentences
+    must survive, and the following sentence must not open on a bare pronoun — deleting
+    "The demon tells Ju-Hee." before "She asks how that is possible." would strand
+    "She" with no antecedent anywhere in the beat.
+    """
+    sentences = [s for s in _SENTENCE_SPLIT_RE.split((text or "").strip()) if s.strip()]
+    if len(sentences) < 3:
+        return text
+    keep: list[str] = []
+    for i, sent in enumerate(sentences):
+        bare = sent.strip()
+        is_empty_speech = bool(_TRUNCATED_SPEECH_RE.search(bare)) and len(bare.split()) <= 6
+        nxt = sentences[i + 1].strip() if i + 1 < len(sentences) else ""
+        strands_pronoun = bool(_PRONOUN_START_RE.match(nxt))
+        if is_empty_speech and not strands_pronoun and len(sentences) - 1 >= 2:
+            continue
+        keep.append(sent)
+    return " ".join(keep).strip() if len(keep) >= 2 else text
+
+
 def repair_broken_sentences(beats: list[ScriptBeat]) -> list[ScriptBeat]:
     """Mechanically fix the two dead-stub shapes the rewrite keeps declining.
 
@@ -3418,6 +3461,16 @@ def repair_broken_sentences(beats: list[ScriptBeat]) -> list[ScriptBeat]:
     out: list[ScriptBeat] = []
     for beat in beats:
         text = beat.narration
+        # "The they explain..." -> "They explain...". Only when the article sits DIRECTLY
+        # on the pronoun: _ARTICLE_PRONOUN_RE's docstring is right that "A dejected he
+        # walks away" cannot be repaired without knowing which person, but a bare article
+        # on a bare pronoun carries no such ambiguity.
+        text = re.sub(
+            r"\b(The|A|An|the|a|an)\s+(they|he|she|him|her|them|They|He|She|Him|Her|Them)\b",
+            lambda m: m.group(2).capitalize() if m.group(1)[0].isupper() else m.group(2).lower(),
+            text,
+        )
+        text = _drop_empty_speech_sentence(text)
         text = _STRANDED_NAMES_JOIN_RE.sub(
             lambda m: f"{m.group('lead')}{m.group('n1')} and {m.group('n2')} {m.group('rest')}",
             text,
