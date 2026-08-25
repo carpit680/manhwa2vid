@@ -95,3 +95,36 @@ def test_key_panels_spread_across_the_beat():
 def test_paragraph_split_is_the_beat_boundary():
     text = "First movement.\n\nSecond movement.\n\n\nThird movement.\n"
     assert paragraphs(text) == ["First movement.", "Second movement.", "Third movement."]
+
+
+# --- identity gate -------------------------------------------------------------------
+
+def test_name_integrity_flags_invented_names_and_accepts_known_aliases():
+    """The whole identity system, replacing protagonist election + pronoun inference +
+    alias scoring + descriptor consolidation: is this name one we actually know?
+
+    A wrongly-elected protagonist once put "large orange demon" into five beats and a
+    174-descriptor profile made the lead "they". Neither can happen against a flat
+    glossary — and when this gate fires, the fix is one line of glossary.json.
+    """
+    from manhwa2vid.script.story_first import unknown_names
+
+    allowed = {"Seo Jun-Ho", "Specter", "Deok-gu", "Frost Queen"}
+    text = (
+        "Deep in the cavern, Seo Jun-Ho draws his blade. The Frost Queen laughs at him. "
+        "Later, Deok-gu explains the elevator. Then Kang Min-Su interrupts them."
+    )
+    assert unknown_names(text, allowed) == ["Kang Min-Su"]
+
+    # A first-name-only reference to a known full name is fine.
+    assert unknown_names("The healer nods. Jun-Ho says nothing.", allowed) == []
+    # No glossary means the gate cannot judge, so it must not block.
+    assert unknown_names(text, set()) == []
+
+
+def test_name_integrity_ignores_sentence_openers():
+    """Sentence-case openers are not names; flagging them would drown the signal."""
+    from manhwa2vid.script.story_first import unknown_names
+
+    text = "Deep breaths. Cold air bites. Nothing moves in the throne room."
+    assert unknown_names(text, {"Seo Jun-Ho"}) == []

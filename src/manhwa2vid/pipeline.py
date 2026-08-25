@@ -7,7 +7,7 @@ from pathlib import Path
 
 from rich.console import Console
 
-from manhwa2vid.config import load_config
+from manhwa2vid.config import get_nested, load_config
 from manhwa2vid.export.youtube import export_youtube_pack
 from manhwa2vid.ingest import ingest_source
 from manhwa2vid.models import (
@@ -85,7 +85,16 @@ def run_stage(
         run_cast_linking(meta, paths, config, force=force)
         mark_stage(checkpoint, stage, paths)
     elif stage == PipelineStage.SCRIPT:
-        generate_script(meta, paths, config, force=force, keep_upstream=keep_upstream)
+        # Two architectures during the transition. "freeform" is the story-first path
+        # (read -> write -> audit -> revise -> align); "classic" is the panel-locked
+        # pipeline it replaces. See experiments/oneshot-fp-ch1-2/comparison.md.
+        architecture = str(get_nested(config, "script", "architecture", default="classic"))
+        if architecture == "freeform":
+            from manhwa2vid.script.story_first import generate_story_first_script
+
+            generate_story_first_script(meta, paths, config, force=force)
+        else:
+            generate_script(meta, paths, config, force=force, keep_upstream=keep_upstream)
         mark_stage(checkpoint, stage, paths)
     elif stage == PipelineStage.TTS:
         if not paths["script_final"].exists() and not checkpoint.script_approved:
