@@ -269,8 +269,17 @@ def render_video(
     else:
         latest_preview = paths["output"] / "preview.mp4"
         if latest_preview.exists() and not force:
-            console.print(f"[dim]Using existing render[/] → {latest_preview}")
-            return latest_preview
+            # A cache hit is only valid if the preview is NEWER than the timeline it
+            # was cut from. Render was the one stage that cached on its own output
+            # without checking its input's age, and the gap shipped: a re-run script
+            # regenerated audio and timeline, render printed a cache hit, and the user
+            # was handed yesterday's video with today's metrics reported against it.
+            if latest_preview.stat().st_mtime >= paths["timeline_json"].stat().st_mtime:
+                console.print(f"[dim]Using existing render[/] → {latest_preview}")
+                return latest_preview
+            console.print(
+                "[yellow]Existing preview is older than timeline.json — re-rendering[/]"
+            )
         output = preview_output_path(paths["output"])
 
     paths["output"].mkdir(parents=True, exist_ok=True)

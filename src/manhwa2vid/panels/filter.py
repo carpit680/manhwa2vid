@@ -169,14 +169,30 @@ def apply_panel_filter(
 
     # Backfill ink stats for panels persisted before stats existed, so the blank rule
     # applies to cached projects without forcing a panels re-run.
-    needs_backfill = [p for p in panels if p.ink_ratio is None or p.dark_ratio is None]
+    needs_backfill = [
+        p for p in panels
+        if p.ink_ratio is None or p.dark_ratio is None or p.content_area_ratio is None
+    ]
     if needs_backfill:
-        from manhwa2vid.panels.split import panel_ink_stats_from_file
+        from manhwa2vid.models import PanelBBox
+        from manhwa2vid.panels.split import content_bbox_from_file, panel_ink_stats_from_file
 
         for panel in needs_backfill:
-            stats = panel_ink_stats_from_file(paths["root"] / panel.image_path)
+            path = paths["root"] / panel.image_path
+            stats = panel_ink_stats_from_file(path)
             if stats is not None:
                 panel.ink_ratio, panel.dark_ratio = stats
+            result = content_bbox_from_file(path)
+            if result is not None:
+                box, (img_w, img_h) = result
+                if box is not None:
+                    x, y, w, h = box
+                    panel.content_box = PanelBBox(x=x, y=y, width=w, height=h)
+                    area = img_w * img_h
+                    panel.content_area_ratio = round((w * h) / area, 4) if area else 0.0
+                else:
+                    # Readable image with zero content: an all-white sliver.
+                    panel.content_area_ratio = 0.0
         save_json(paths["panels_json"], panels)
 
     excluded = build_exclusion_map(panels, scene_cards, sources, config)

@@ -18,8 +18,41 @@ def cosine_ease(t: float) -> float:
     return (1.0 - math.cos(math.pi * t)) / 2.0
 
 
+def crop_to_content(panel: Image.Image, pad_frac: float = 0.04) -> Image.Image:
+    """Crop away white margins so the frame is filled with art, not paper.
+
+    Measured need: ~48 shown panels across the two real projects carry their content in
+    under 60% of their area, and `letterbox_panel` fit the WHOLE png — margins included —
+    so their art rendered at barely half the size the screen allowed. A 4% pad keeps
+    the crop from feeling clinical.
+
+    Known limit, recorded where the decision is made: this cannot tell art ink from
+    speech-bubble ink (no bubble geometry exists — OCR boxes are empty on both real
+    projects), so a bubble-heavy panel stays bubble-heavy. Bubble avoidance needs a
+    white-blob detector or OCR-with-boxes; separate work.
+    """
+    gray = panel.convert("L")
+    mask = gray.point(lambda v: 255 if v < 240 else 0)
+    box = mask.getbbox()
+    if box is None:
+        return panel
+    x0, y0, x1, y1 = box
+    if (x1 - x0) * (y1 - y0) >= 0.95 * panel.width * panel.height:
+        return panel  # nothing worth cropping
+    pad_x = int(panel.width * pad_frac)
+    pad_y = int(panel.height * pad_frac)
+    return panel.crop(
+        (
+            max(0, x0 - pad_x),
+            max(0, y0 - pad_y),
+            min(panel.width, x1 + pad_x),
+            min(panel.height, y1 + pad_y),
+        )
+    )
+
+
 def letterbox_panel(panel_path: Path, width: int, height: int, blur_bg: bool = True) -> Image.Image:
-    panel = Image.open(panel_path).convert("RGB")
+    panel = crop_to_content(Image.open(panel_path).convert("RGB"))
     canvas = Image.new("RGB", (width, height), (0, 0, 0))
 
     if blur_bg:
@@ -71,7 +104,10 @@ def render_vertical_scroll_frames(
     out_w = width * supersample
     out_h = height * supersample
 
-    panel = Image.open(panel_path).convert("RGB")
+    # Crop margins first so the scroll traverses ART, not the blank lead-in and
+    # tail a webtoon strip carries; the camera previously spent readable seconds on
+    # empty paper at both ends of every tall panel.
+    panel = crop_to_content(Image.open(panel_path).convert("RGB"))
     scale = out_w / panel.width
     scaled_h = max(int(panel.height * scale), out_h)
     scaled = panel.resize((out_w, scaled_h), Image.Resampling.LANCZOS)
@@ -83,15 +119,21 @@ def render_vertical_scroll_frames(
     # cannot be traversed at a readable speed, show the top portion instead of racing through it.
     fps = int(get_nested(config, "video", "fps", default=30))
     max_px_per_sec = float(get_nested(config, "video", "max_scroll_px_per_sec", default=600.0))
+    start_y = 0
     if max_px_per_sec > 0 and fps > 0:
         duration = num_frames / fps
-        allowed_travel = max_px_per_sec * duration * supersample
-        max_y = min(max_y, int(allowed_travel))
+        allowed_travel = int(max_px_per_sec * duration * supersample)
+        if allowed_travel < max_y:
+            # Cannot traverse the whole strip at a readable speed. Previously the camera
+            # pinned to the TOP and the bottom of the strip simply never appeared —
+            # arbitrary with respect to content. Center the reachable window instead.
+            start_y = (max_y - allowed_travel) // 2
+            max_y = allowed_travel
 
     frames: list[Image.Image] = []
     for i in range(num_frames):
         t = i / max(num_frames - 1, 1)
-        y = int(max_y * cosine_ease(t))
+        y = start_y + int(max_y * cosine_ease(t))
         crop = scaled.crop((0, y, out_w, y + out_h))
         frames.append(crop.resize((width, height), Image.Resampling.LANCZOS))
     return frames

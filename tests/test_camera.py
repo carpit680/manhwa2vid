@@ -186,3 +186,54 @@ def test_tiny_sentence_rides_its_boundary_panel():
     weights = panel_weights_from_segments(segments, 4)
     assert weights is not None
     assert abs(sum(weights) - 20.2) < 1e-6, "no seconds may be lost"
+
+
+def test_crop_to_content_fills_the_frame_with_art():
+    """Margins must not eat the screen: measured, ~48 shown panels carried their art in
+    under 60% of their area and the whole PNG — margins included — was fit to frame."""
+    from PIL import Image
+
+    from manhwa2vid.video.effects import crop_to_content
+
+    # Art in the center 40% of a mostly-white image.
+    img = Image.new("RGB", (800, 600), (255, 255, 255))
+    for x in range(240, 560):
+        for y in range(180, 420):
+            img.putpixel((x, y), (30, 30, 30))
+    cropped = crop_to_content(img)
+    assert cropped.width < 800 * 0.6 and cropped.height < 600 * 0.6
+    # Pure-art image is untouched.
+    art = Image.new("RGB", (400, 300), (40, 40, 40))
+    assert crop_to_content(art).size == (400, 300)
+    # All-white image cannot crash.
+    blank = Image.new("RGB", (100, 100), (255, 255, 255))
+    assert crop_to_content(blank).size == (100, 100)
+
+
+def test_visually_empty_rule_matches_the_measured_fixtures():
+    """Calibrated on the 34 real offenders; these synthetic twins pin the shape.
+
+    The global blank gate (ink<=0.30) cannot catch these — a small dense blob clears a
+    global threshold while the frame is visually nothing.
+    """
+    import numpy as np
+
+    from manhwa2vid.panels.split import is_visually_empty
+
+    white = np.full((300, 800), 255, dtype=np.uint8)
+
+    # Small dense text blob in a white field (the p0009_02 / p0076_02 shape).
+    blob = white.copy(); blob[130:160, 300:500] = 0
+    assert is_visually_empty(blob)
+
+    # Big but faint content box (the p0020_03 / p0146_01 shape): a large sparse scatter.
+    sparse = white.copy(); sparse[::4, ::4] = 200
+    assert is_visually_empty(sparse)
+
+    # Real art: >30% of the frame is genuinely dark.
+    art = white.copy(); art[30:270, 100:700] = 60
+    assert not is_visually_empty(art)
+
+    # A dark panel is never empty regardless of box shape.
+    dark = np.full((300, 800), 40, dtype=np.uint8)
+    assert not is_visually_empty(dark)

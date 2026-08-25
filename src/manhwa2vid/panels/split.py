@@ -93,6 +93,96 @@ def panel_ink_stats_from_file(path: Path) -> tuple[float, float] | None:
     return panel_ink_stats(img)
 
 
+def content_bbox(img: np.ndarray, thresh: int = 240) -> tuple[int, int, int, int] | None:
+    """Tight (x, y, w, h) around non-white content, or None for a blank image.
+
+    The spatial complement of `panel_ink_stats`: those are global scalars, so a panel
+    that is one small drawing in a sea of white margin looks "inky enough" while the
+    letterboxed frame is mostly nothing. Measured across both real projects, the median
+    shown panel's content fills ~87-92% of its area — but ~48 shown panels sat under
+    60%, and the whole PNG including margin was what got fit to screen.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    mask = gray < thresh
+    if not mask.any():
+        return None
+    rows = np.where(mask.any(axis=1))[0]
+    cols = np.where(mask.any(axis=0))[0]
+    y0, y1 = int(rows[0]), int(rows[-1]) + 1
+    x0, x1 = int(cols[0]), int(cols[-1]) + 1
+    return (x0, y0, x1 - x0, y1 - y0)
+
+
+def is_visually_empty(img: np.ndarray) -> bool:
+    """A panel not worth screen time: mostly white, and what remains is margin or specks.
+
+    The global blank gate (`is_blank_panel`, ink<=0.30) cannot catch these — a small
+    dense blob of text in a white field clears a global ink threshold while the frame is
+    visually nothing. Calibrated against 34 measured panels the old rule shipped
+    (2.5s each of near-blank screen): white>70% AND (content box under half the area OR
+    the box itself under half ink) drops all 34 — including a two-finger transition
+    sliver — and keeps every measured piece of real art, down to a 63%-white sparse
+    action panel. Applied at ALIGN time, not split time: these panels stay in the
+    inventory (they are part of the page), they just don't get shown.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    if float((gray >= 240).mean()) <= 0.70:
+        return False
+    box = content_bbox(gray)
+    if box is None:
+        return True
+    x, y, w, h = box
+    total_h, total_w = gray.shape[:2]
+    if (w * h) / (total_w * total_h) < 0.5:
+        return True
+    crop = gray[y : y + h, x : x + w]
+    return float((crop < 240).mean()) < 0.5
+
+
+def is_visually_empty_file(path: Path) -> bool:
+    img = cv2.imread(str(path))
+    return False if img is None else is_visually_empty(img)
+
+
+def panel_visual_stats_file(path: Path) -> tuple[bool, float]:
+    """(visually_empty, content_score) in one image read.
+
+    content_score = fraction of the whole image that is content pixels inside the
+    content box — i.e. how much of the frame is actually art. Used to rank key panels
+    now that the story-first path has no scene-card salience: a positional spread was
+    the placeholder, and it happily crowned a margin-heavy panel.
+    """
+    img = cv2.imread(str(path))
+    if img is None:
+        return False, 0.0
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    box = content_bbox(gray)
+    if box is None:
+        return True, 0.0
+    x, y, w, h = box
+    total_h, total_w = gray.shape[:2]
+    crop = gray[y : y + h, x : x + w]
+    density = float((crop < 240).mean())
+    score = (w * h) / (total_w * total_h) * density
+    return is_visually_empty(gray), score
+
+
+def content_bbox_from_file(
+    path: Path, thresh: int = 240
+) -> tuple[tuple[int, int, int, int] | None, tuple[int, int]] | None:
+    """(content box or None, (image_w, image_h)) — box and size from the SAME pixels.
+
+    The ratio consumers compute must divide by the image's own dimensions, not by
+    `Panel.bbox` (page coordinates): the two can disagree after ingest rescaling, and a
+    ratio mixing the coordinate spaces is silently wrong.
+    """
+    img = cv2.imread(str(path))
+    if img is None:
+        return None
+    h, w = img.shape[:2]
+    return content_bbox(img, thresh), (w, h)
+
+
 def _panel_metadata(width: int, height: int, config: dict[str, Any], *, split_method: str) -> dict[str, Any]:
     aspect = height / max(width, 1)
     scroll_threshold = float(get_nested(config, "panels", "strip_scroll_aspect", default=2.0))

@@ -88,6 +88,8 @@ def expand_to_panels(
     entries: list[dict[str, Any]],
     n_paragraphs: int,
     panels: list[Panel],
+    *,
+    empty_ids: set[str] | None = None,
 ) -> list[list[str]]:
     """Turn paragraph→page ranges into paragraph→panel lists, deterministically.
 
@@ -133,6 +135,12 @@ def expand_to_panels(
             lo, hi = ranges[index]
 
         picked = [pid for page in ordered_pages if lo <= page <= hi for pid in by_page[page]]
+        if empty_ids:
+            # Visually empty panels (mostly-white margins, transition fragments) are
+            # never worth 2.5s of screen; drop them unless they are ALL the range has.
+            kept = [pid for pid in picked if pid not in empty_ids]
+            if kept:
+                picked = kept
         if not picked:
             # The range named pages that have no story panels (all blank/filtered).
             # Borrow the nearest page that does, so the beat keeps its audio.
@@ -142,15 +150,24 @@ def expand_to_panels(
     return out
 
 
-def key_panels_for(panel_ids: list[str], max_keys: int = 3) -> list[str]:
-    """A few load-bearing panels per beat, evenly spread across its run.
+def key_panels_for(
+    panel_ids: list[str],
+    max_keys: int = 3,
+    scores: dict[str, float] | None = None,
+) -> list[str]:
+    """A few load-bearing panels per beat, returned in the beat's own order.
 
-    With no scene cards there is no salience signal, so this is deliberately positional
-    rather than pretending to judge importance. It exists so `budget_panels_for_beat`
-    keeps a spread when it has to drop panels, instead of clustering on the opening.
+    With content scores available (fraction of the frame that is actually art), the
+    keys are the most content-dense panels — replacing the positional spread that was
+    only ever a placeholder and happily crowned a margin-heavy panel. Without scores,
+    the positional spread remains so old callers behave identically.
     """
     if len(panel_ids) <= max_keys:
         return list(panel_ids)
+    if scores:
+        ranked = sorted(panel_ids, key=lambda pid: scores.get(pid, 0.0), reverse=True)
+        chosen = set(ranked[:max_keys])
+        return [pid for pid in panel_ids if pid in chosen]
     step = (len(panel_ids) - 1) / (max_keys - 1)
     keys: list[str] = []
     for i in range(max_keys):
@@ -208,14 +225,22 @@ def align_script(
 
     entries = request_alignment(para_texts, pages, config)
     save_json(paths["script_alignment_json"], {"map": entries})
-    panel_lists = expand_to_panels(entries, len(para_texts), panels)
+
+    from manhwa2vid.panels.split import panel_visual_stats_file
+
+    stats = {p.id: panel_visual_stats_file(paths["root"] / p.image_path) for p in panels}
+    empty_ids = {pid for pid, (empty, _score) in stats.items() if empty}
+    scores = {pid: score for pid, (_empty, score) in stats.items()}
+    if empty_ids:
+        console.print(f"[dim]Align: {len(empty_ids)} visually empty panel(s) excluded[/]")
+    panel_lists = expand_to_panels(entries, len(para_texts), panels, empty_ids=empty_ids)
 
     beats = [
         ScriptBeat(
             beat_id=i,
             panel_ids=pids,
             narration=para,
-            key_panel_ids=key_panels_for(pids),
+            key_panel_ids=key_panels_for(pids, scores=scores),
         )
         for i, (para, pids) in enumerate(zip(para_texts, panel_lists), start=1)
     ]
@@ -230,7 +255,10 @@ def align_script(
     )
 
     shown = {pid for b in beats for pid in b.panel_ids}
-    fraction = len(shown) / max(1, len(panels))
+    # Coverage over panels WORTH showing — deliberately dropping blanks must not read
+    # as lost coverage.
+    countable = [p for p in panels if p.id not in empty_ids]
+    fraction = len(shown) / max(1, len(countable))
     floor = float(get_nested(config, "align", "min_panel_fraction", default=0.4))
     report.add(
         "panel-coverage",
@@ -240,7 +268,8 @@ def align_script(
         "was selective",
         fraction=round(fraction, 3),
         shown=len(shown),
-        total=len(panels),
+        total=len(countable),
+        excluded_empty=len(empty_ids),
     )
     console.print(
         f"[green]Aligned[/] {len(beats)} paragraph(s) → {len(shown)}/{len(panels)} "

@@ -61,8 +61,10 @@ VOICE — wry, confident, gen-Z-coded. Measured targets from the reference chann
 - Similes are welcome (~2 per 1000 words). Zero first person: never "I" or "we".
 - On-screen system messages (bracketed game-like text) are STORY EVENTS. Deliver what
   they say — they are usually the chapter's spine and the most commonly dropped thing.
-- Never describe artwork as artwork: no "panel", "scene", "we see", "the image shows",
-  and no clothing or hair inventories unless the detail carries story weight.
+- Never describe artwork as artwork: no "panel", "scene", "we see", "the image shows".
+  Describe a character's look at most ONCE, when first naming them — it helps the
+  viewer attach the name to a face; after that, never mention clothes or hair again
+  unless they changed and the change matters.
 - Name characters from the glossary once they are introduced; use a role epithet
   ("the healer") only before a name exists. Never invent a name.
 

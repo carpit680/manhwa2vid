@@ -80,6 +80,13 @@ class Panel(BaseModel):
     # backfilled lazily by apply_panel_filter). Used to exclude blank transition slivers.
     ink_ratio: float | None = None   # fraction of pixels with gray < 245
     dark_ratio: float | None = None  # fraction of pixels with gray < 128
+    #: Tight box around non-white content, in PANEL-LOCAL pixels (None = not yet
+    #: computed; backfilled lazily like the ink stats). The spatial complement of the
+    #: scalars above: the camera should frame this, not the margins around it.
+    content_box: PanelBBox | None = None
+    #: content_box area / panel area — the "how much of this image is actually art"
+    #: number. A visually empty panel has a tiny box OR a large box of faint specks.
+    content_area_ratio: float | None = None
 
 
 class PageSplitResult(BaseModel):

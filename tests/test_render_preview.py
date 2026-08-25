@@ -54,3 +54,21 @@ def test_reused_panel_gets_its_own_clip_and_camera_move() -> None:
     assert first != second, "a re-shown panel should not repeat its exact camera move"
     # Unsalted seeding stays stable for the ordinary single-appearance case.
     assert ken_burns_params(panel.id) == ken_burns_params(panel.id)
+
+
+def test_preview_cache_hit_refused_when_timeline_is_newer(tmp_path) -> None:
+    """The stale-video incident: script re-ran, audio and timeline regenerated, render
+    printed a cache hit, and the user was handed yesterday's video. A cache hit is only
+    valid when the preview is newer than the timeline it was cut from."""
+    import os
+
+    out = tmp_path / "output"; out.mkdir()
+    preview = out / "preview.mp4"; preview.write_bytes(b"old")
+    timeline = tmp_path / "timeline.json"; timeline.write_text("{}")
+    # preview older than timeline -> stale
+    os.utime(preview, (1000, 1000))
+    os.utime(timeline, (2000, 2000))
+    assert preview.stat().st_mtime < timeline.stat().st_mtime
+    # fresh preview -> valid hit
+    os.utime(preview, (3000, 3000))
+    assert preview.stat().st_mtime >= timeline.stat().st_mtime
