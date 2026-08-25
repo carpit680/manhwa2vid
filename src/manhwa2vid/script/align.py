@@ -24,6 +24,7 @@ from typing import Any
 from rich.console import Console
 
 from manhwa2vid.config import get_nested
+from manhwa2vid.llm.vision_utils import page_max_width
 from manhwa2vid.models import Panel, ScriptBeat, save_json
 from manhwa2vid.panels.filter import load_story_panels
 from manhwa2vid.qa import QAReport
@@ -77,6 +78,7 @@ def request_alignment(
     raw = provider.describe_labeled_panels(
         [(f"[page {p.stem}]", p) for p in pages],
         f"{_SYSTEM}\n\nPARAGRAPHS:\n\n{numbered}",
+        max_width=page_max_width(config),
     )
     data = json.loads(raw) if isinstance(raw, str) else raw
     return list(data.get("map") or [])

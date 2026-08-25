@@ -27,6 +27,7 @@ from typing import Any
 from rich.console import Console
 
 from manhwa2vid.config import get_nested
+from manhwa2vid.llm.vision_utils import page_max_width
 from manhwa2vid.models import ProjectMeta, save_json
 
 console = Console()
@@ -94,7 +95,9 @@ def read_chapter_facts(
     # page binding is positional in the message rather than a count the model has to
     # maintain — the same reason the scene pass uses it (a 59-image run once came back
     # correct but bound three positions off).
-    raw = provider.describe_labeled_panels([(f"[page {p.stem}]", p) for p in pages], _SYSTEM)
+    raw = provider.describe_labeled_panels(
+        [(f"[page {p.stem}]", p) for p in pages], _SYSTEM, max_width=page_max_width(config)
+    )
     facts = json.loads(raw) if isinstance(raw, str) else raw
     facts.setdefault("system_messages", [])
     facts.setdefault("key_dialogue", [])

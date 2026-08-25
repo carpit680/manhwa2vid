@@ -30,6 +30,7 @@ from typing import Any
 from rich.console import Console
 
 from manhwa2vid.config import get_nested
+from manhwa2vid.llm.vision_utils import page_max_width
 from manhwa2vid.models import ProjectMeta
 
 console = Console()
@@ -169,7 +170,10 @@ def write_freeform_script(
         parts.append("The chapter pages follow in reading order. Read them all, then write.")
 
         raw = provider.describe_labeled_panels_text(
-            [(f"[page {p.stem}]", p) for p in window], _SYSTEM, "\n\n".join(parts)
+            [(f"[page {p.stem}]", p) for p in window],
+            _SYSTEM,
+            "\n\n".join(parts),
+            max_width=page_max_width(config),
         )
         written.append(raw.strip())
 

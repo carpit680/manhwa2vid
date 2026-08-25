@@ -191,7 +191,9 @@ class LLMProvider(ABC):
     def describe_panels(self, image_paths: list[Path], prompt: str) -> str:
         ...
 
-    def describe_labeled_panels(self, labeled: list[tuple[str, Path]], prompt: str) -> str:
+    def describe_labeled_panels(
+        self, labeled: list[tuple[str, Path]], prompt: str, *, max_width: int | None = None
+    ) -> str:
         """Annotate images whose identity must be unambiguous.
 
         Handing a model N images plus a text list of N ids does NOT bind them: on a
@@ -204,7 +206,8 @@ class LLMProvider(ABC):
         return self.describe_panels([path for _label, path in labeled], prompt)
 
     def describe_labeled_panels_text(
-        self, labeled: list[tuple[str, Path]], system: str, user: str
+        self, labeled: list[tuple[str, Path]], system: str, user: str,
+        *, max_width: int | None = None,
     ) -> str:
         """Same interleaving, but the answer is PROSE and must not be JSON-extracted.
 
@@ -403,11 +406,13 @@ class OpenAICompatProvider(LLMProvider):
         content = resp.choices[0].message.content or ""
         return _extract_json_object(content) if json_mode else content
 
-    def describe_labeled_panels(self, labeled: list[tuple[str, Path]], prompt: str) -> str:
+    def describe_labeled_panels(
+        self, labeled: list[tuple[str, Path]], prompt: str, *, max_width: int | None = None
+    ) -> str:
         """Interleave each label immediately before its image so binding is positional."""
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for label, path in labeled:
-            media_type, data = encode_image_for_api(path)
+            media_type, data = encode_image_for_api(path, max_width=max_width)
             content.append({"type": "text", "text": label})
             content.append(
                 {
@@ -430,11 +435,12 @@ class OpenAICompatProvider(LLMProvider):
         return self._vision_call(content)
 
     def describe_labeled_panels_text(
-        self, labeled: list[tuple[str, Path]], system: str, user: str
+        self, labeled: list[tuple[str, Path]], system: str, user: str,
+        *, max_width: int | None = None,
     ) -> str:
         content: list[dict[str, Any]] = [{"type": "text", "text": user}]
         for label, path in labeled:
-            media_type, data = encode_image_for_api(path)
+            media_type, data = encode_image_for_api(path, max_width=max_width)
             content.append({"type": "text", "text": label})
             content.append(
                 {
@@ -698,7 +704,8 @@ class MockLLMProvider(LLMProvider):
         return "Mock recap narration."
 
     def describe_labeled_panels_text(
-        self, labeled: list[tuple[str, Path]], system: str, user: str
+        self, labeled: list[tuple[str, Path]], system: str, user: str,
+        *, max_width: int | None = None,
     ) -> str:
         """Prose stand-in for the freeform writer and the single reviser.
 

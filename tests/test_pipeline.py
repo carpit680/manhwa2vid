@@ -60,6 +60,30 @@ def sample_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return project_dir
 
 
+@pytest.fixture
+def pin_classic_architecture():
+    """Pin script.architecture=classic for this test.
+
+    It asserts the CLASSIC path's behaviour, so it must not silently start exercising
+    the freeform path when the config default flips — which is exactly what happened
+    while the freeform path was being validated, and the failure looked like a real
+    regression for several minutes.
+    """
+    import yaml
+
+    from manhwa2vid.config import find_repo_root
+
+    path = find_repo_root() / "config.yaml"
+    original = path.read_text(encoding="utf-8")
+    cfg = yaml.safe_load(original)
+    cfg["script"]["architecture"] = "classic"
+    path.write_text(yaml.dump(cfg, sort_keys=False), encoding="utf-8")
+    try:
+        yield
+    finally:
+        path.write_text(original, encoding="utf-8")
+
+
 def test_ingest_and_panels(sample_project: Path) -> None:
     run_stage(sample_project, PipelineStage.INGEST)
     run_stage(sample_project, PipelineStage.PANELS)
@@ -71,7 +95,7 @@ def test_ingest_and_panels(sample_project: Path) -> None:
     assert len(panels) >= 2
 
 
-def test_full_pipeline_mock(sample_project: Path) -> None:
+def test_full_pipeline_mock(sample_project: Path, pin_classic_architecture) -> None:
     run_all_until_review(sample_project)
 
     paths = project_paths(sample_project)

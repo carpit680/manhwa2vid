@@ -27,6 +27,7 @@ from typing import Any
 from rich.console import Console
 
 from manhwa2vid.config import get_nested
+from manhwa2vid.llm.vision_utils import page_max_width
 from manhwa2vid.models import save_json
 
 console = Console()
@@ -102,6 +103,7 @@ def audit_script(
     raw = provider.describe_labeled_panels(
         [(f"[page {p.stem}]", p) for p in pages],
         f"{_AUDIT_SYSTEM}\n\nRECAP NARRATION:\n\n{text}",
+        max_width=page_max_width(config),
     )
     data = json.loads(raw) if isinstance(raw, str) else raw
     findings = [f for f in (data.get("findings") or []) if isinstance(f, dict)]
@@ -145,6 +147,7 @@ def revise_once(
         [(f"[page {p.stem}]", p) for p in pages],
         _REVISE_SYSTEM,
         "FINDINGS TO FIX:\n" + "\n".join(issues) + f"\n\nCURRENT NARRATION:\n\n{text}",
+        max_width=page_max_width(config),
     ).strip()
 
     before = len(majors) + len(missing)

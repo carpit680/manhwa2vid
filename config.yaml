@@ -108,6 +108,12 @@ read:
   # verbatim system messages, plot-carrying dialogue, time markers, cast.
   provider: gemini
   model: gemini-3-flash-preview
+  # Width cap for whole-PAGE calls (read / write / audit / align). NOT
+  # scene.vision_max_side (512), which is tuned for panel crops and destroys pages: a
+  # webtoon strip is ~800x10000, so a longest-side cap renders it as a 40px-wide sliver
+  # and every caption and system message becomes unreadable. Measured: the printed
+  # "76 HOURS EARLIER" marker was invisible to every page stage until this was fixed.
+  page_max_width: 1024
 
 audit:
   # Grounding check + the single permitted revision. Needs to catch subtle drift
