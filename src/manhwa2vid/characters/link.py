@@ -647,6 +647,41 @@ def _normalize_mc_attribution(cards: list[SceneCard], bible: SeriesBible) -> lis
     return normalized
 
 
+def _reelect_protagonist(bible: SeriesBible, config: dict[str, Any]) -> None:
+    """Re-run the protagonist election now that the bible has real appearance counts.
+
+    The election lived in exactly one place — `run_character_quest`, i.e. the SCOUT stage
+    — and `quest_completed` then froze the result at SERIES level, permanently. Scout is
+    the moment the bible has the LEAST evidence: a handful of vision samples from
+    lookahead chapters. `detect_protagonist` scores mostly on `len(appearances)`, so at
+    that moment a crowd descriptor the VLM invented can outscore the real lead, and the
+    193-appearance count `cast` is about to accumulate never reaches the decision.
+
+    That is what happened on a 5-chapter Solo Leveling run: a profile whose id said
+    "various hunters in a large stone hall" and whose canonical_name said "large orange
+    demon" was elected, stamped with narration_labels=["large orange demon"], and those
+    labels went into the naming rules every script prompt embeds. Five beats then called
+    Sung Jin-Woo "the demon". Re-electing here scores him 398 to 29.5.
+
+    Deliberately unconditional rather than "only if unset": the stale value is exactly the
+    thing that needs overriding, and `detect_protagonist` is deterministic on a bible that
+    only ever accumulates, so this converges rather than thrashing between chapters. The
+    defect is worse the more chapters a project spans, which is why one-chapter runs never
+    exposed it.
+    """
+    from manhwa2vid.characters.quest import detect_protagonist, set_protagonist_labels
+
+    elected = detect_protagonist(bible, config)
+    if not elected or elected == bible.protagonist_id:
+        return
+    previous = bible.protagonist_id or "unset"
+    set_protagonist_labels(bible, elected, config)
+    console.print(
+        f"[yellow]Cast: protagonist re-elected on appearance evidence[/] — "
+        f"{previous} -> {elected}"
+    )
+
+
 def _load_scene_cards_for_cast(paths: dict[str, Path], *, force: bool) -> list[SceneCard]:
     source = paths["scene_json"] if force else (
         paths["scene_enriched_json"] if paths["scene_enriched_json"].exists() else paths["scene_json"]
@@ -853,6 +888,8 @@ def run_cast_linking(
             f"[dim]Cast: re-demoted {reverted} back-view identification(s) claimed before "
             f"a face-on introduction[/]"
         )
+
+    _reelect_protagonist(bible, config)
 
     attribution = _build_attribution(enriched)
     save_json(paths["scene_enriched_json"], enriched)

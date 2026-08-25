@@ -9,6 +9,8 @@ from manhwa2vid.script.lint import (
     find_violations,
     lint_beats,
     lint_broken_sentences,
+    repair_broken_sentences,
+    sentence_fragments,
     stranded_determiner,
 )
 
@@ -2568,3 +2570,46 @@ def test_ambiguous_stranded_determiner_is_advisory_not_blocking():
     assert stranded_determiner(ambiguous, strict=True) is None   # ...so neither blocks
     assert stranded_determiner(ordinary, strict=True) is None
     assert lint_broken_sentences([_beat(1, ordinary)]) == {}
+
+
+def test_bare_name_sentence_is_a_fragment_but_a_one_word_beat_is_not():
+    """"Ju-Hee." and "Sung Jin-Woo." both shipped into a 5-chapter Solo Leveling script.
+
+    `sentence_fragments` skips sentences under `min_words` so a deliberate one-word beat
+    survives — but those are COMMON nouns. A sentence that is nothing but a proper name is
+    a clause whose verb phrase a polish pass deleted, and it gets spoken aloud as a stub.
+    """
+    assert sentence_fragments("Mr. Kim both vote to fight. Ju-Hee. She looks down.") == ["Ju-Hee."]
+    assert sentence_fragments("Sung Jin-Woo. He tells Song Chi-Yul about the raid.") == ["Sung Jin-Woo."]
+    for deliberate in ("Silence. The statue raises its spear.", "Not this time. He steps back."):
+        assert sentence_fragments(deliberate) == []
+
+
+def test_bare_name_repair_splices_the_severed_subject_back():
+    beats = [
+        _beat(22, "Mr. Kim both vote to fight. Ju-Hee. She looks down with a worried expression."),
+        _beat(50, "Sung Jin-Woo. He tells Song Chi-Yul that he has done a B-rank raid twice."),
+    ]
+    out = repair_broken_sentences(beats)
+    assert out[0].narration.endswith("Ju-Hee looks down with a worried expression.")
+    assert out[1].narration.startswith("Sung Jin-Woo tells Song Chi-Yul")
+    assert lint_broken_sentences(out) == {}
+
+
+def test_bare_name_repair_does_not_swallow_a_name_that_ends_a_real_sentence():
+    """The first version of this repair mangled five CORRECT beats in the run it fixed.
+
+    It matched any name-then-period-then-pronoun span, so "Ju-Hee channels her magic into
+    Sung Jin-Woo. She asks him why..." collapsed into "...into Sung Jin-Woo asks him
+    why...". "Sung Jin-Woo." is a bare name in isolation but the TAIL of a full sentence
+    here, and only a sentence-level view tells those apart.
+    """
+    intact = [
+        "Ju-Hee channels her glowing magic directly into Sung Jin-Woo. "
+        "She asks him why he is so adamant on working as a hunter.",
+        "A trembling hand grips the sleeve of Sung Jin-Woo. "
+        "He tries to process the second commandment of the temple.",
+        "Glowing green crosses float around Sung Jin-Woo. He turns his head to look back.",
+    ]
+    for text in intact:
+        assert repair_broken_sentences([_beat(1, text)])[0].narration == text

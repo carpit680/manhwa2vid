@@ -2221,6 +2221,30 @@ def lint_unanchored_opening(
     return out
 
 
+_NAME_TOKEN_RE = re.compile(r"^[A-Z][\w'’-]*[.!?]?$")
+
+
+def _is_bare_name_sentence(sentence: str) -> bool:
+    """A short sentence made only of capitalised name tokens, with no verb.
+
+    Kept narrow on purpose: "Silence." and "Not this time." must survive, so a token has
+    to be capitalised AND the sentence must carry nothing verb-shaped. "Sung Jin-Woo." is
+    two tokens and qualifies; "Silence." is one token but is checked for verb-shape and,
+    more importantly, is a common noun the writer chose — the cost of losing a rare
+    intentional name-beat is one flat sentence, against shipping a dead stub as audio.
+    """
+    words = sentence.split()
+    if not words or len(words) > 3:
+        return False
+    if any(_looks_like_verb(w) for w in words):
+        return False
+    if not all(_NAME_TOKEN_RE.match(w) for w in words):
+        return False
+    # A single common-noun beat ("Silence.", "Darkness.") is deliberate; require either a
+    # multi-token name or an internal hyphen/apostrophe, which a one-word noun lacks.
+    return len(words) > 1 or bool(re.search(r"[-’\']", words[0]))
+
+
 def sentence_fragments(text: str, *, min_words: int = 3) -> list[str]:
     """Sentences carrying no verb at all — "Jin-Woo and Lee Joo-hee."
 
@@ -2236,6 +2260,14 @@ def sentence_fragments(text: str, *, min_words: int = 3) -> list[str]:
     for sentence in _SENTENCE_SPLIT_RE.split((text or "").strip()):
         words = sentence.split()
         if len(words) < min_words:
+            # ...with one exception. The min_words carve-out exists for a deliberate
+            # one-word beat ("Silence."), and those are COMMON nouns. A sentence that is
+            # nothing but a proper name — "Ju-Hee." / "Sung Jin-Woo." — is never a
+            # stylistic choice in this register; it is a clause whose verb phrase was
+            # deleted by a polish pass, and it gets SPOKEN as a dead stub. Two shipped in
+            # one 5-chapter run, both invisible to every check because of this branch.
+            if _is_bare_name_sentence(sentence):
+                out.append(sentence.strip())
             continue
         if any(_looks_like_verb(w) for w in words):
             continue
@@ -3484,6 +3516,41 @@ def _drop_empty_speech_sentence(text: str) -> str:
     return " ".join(keep).strip() if len(keep) >= 2 else text
 
 
+# "Ju-Hee. She looks down." — a bare name, then a sentence whose subject is the pronoun
+# that name should have been. The verb already exists; only the subject was severed.
+_PRONOUN_SUBJECT_RE = re.compile(r"^(He|She|They)\s+(?P<rest>[a-z].*)$", re.S)
+
+
+def _rejoin_bare_name_sentence(text: str) -> str:
+    """Splice a stranded name back onto the clause it was severed from.
+
+    Invents nothing — the verb phrase is already sitting in the next sentence, and the
+    pronoun it currently uses is precisely the one the name would have supplied.
+
+    Works on whole SENTENCES rather than a regex over the running text. The first attempt
+    matched any name-then-period-then-pronoun span and mangled five correct beats in the
+    same run it was meant to fix: "Ju-Hee channels her magic into Sung Jin-Woo. She asks
+    him why..." became "...into Sung Jin-Woo asks him why...", because "Sung Jin-Woo." is
+    a bare name in isolation but was the TAIL of a complete sentence, not the whole of one.
+    The condition was never "is this a name" — it is "is this sentence nothing but a name",
+    and only a sentence-level view can tell those apart.
+    """
+    sentences = [x.strip() for x in _SENTENCE_SPLIT_RE.split((text or "").strip()) if x.strip()]
+    out: list[str] = []
+    i = 0
+    while i < len(sentences):
+        sent = sentences[i]
+        follower = sentences[i + 1] if i + 1 < len(sentences) else ""
+        match = _PRONOUN_SUBJECT_RE.match(follower) if follower else None
+        if match and _is_bare_name_sentence(sent):
+            out.append(f"{sent.rstrip('.!?')} {match.group('rest')}")
+            i += 2
+            continue
+        out.append(sent)
+        i += 1
+    return " ".join(out)
+
+
 def repair_broken_sentences(beats: list[ScriptBeat]) -> list[ScriptBeat]:
     """Mechanically fix the two dead-stub shapes the rewrite keeps declining.
 
@@ -3513,6 +3580,7 @@ def repair_broken_sentences(beats: list[ScriptBeat]) -> list[ScriptBeat]:
             text,
         )
         text = _drop_empty_speech_sentence(text)
+        text = _rejoin_bare_name_sentence(text)
         text = _STRANDED_NAMES_JOIN_RE.sub(
             lambda m: f"{m.group('lead')}{m.group('n1')} and {m.group('n2')} {m.group('rest')}",
             text,
