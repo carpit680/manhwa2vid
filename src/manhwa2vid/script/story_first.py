@@ -45,11 +45,17 @@ def unknown_names(text: str, allowed: set[str]) -> list[str]:
     if not allowed:
         return []
     known = {a.lower() for a in allowed}
-    # Also accept individual words of a known name: "Jun-Ho" for "Seo Jun-Ho".
+    # Individual words of a known name: "Jun-Ho" for "Seo Jun-Ho".
     for name in list(allowed):
         for part in re.split(r"[\s-]+", name):
             if len(part) > 2:
                 known.add(part.lower())
+    # Glossary entries carry articles and roles the narration naturally drops: the
+    # glossary says "the Nest Attack Team" and "the Player Association president" while
+    # the writing says "Nest Attack Team" and "Player Association". Exact matching flagged
+    # both as invented on the first real run. A candidate contained inside a known entry
+    # is known — a genuinely invented name is not a sub-phrase of anything we have.
+    haystack = " || ".join(known)
 
     found: dict[str, int] = {}
     for sentence in re.split(r"(?<=[.!?])\s+", text or ""):
@@ -63,7 +69,8 @@ def unknown_names(text: str, allowed: set[str]) -> list[str]:
             continue
         for match in _CAPITALISED_RE.finditer(body[1]):
             candidate = match.group(1)
-            if candidate.lower() in known:
+            lowered = candidate.lower()
+            if lowered in known or lowered in haystack:
                 continue
             # A single common word is far more likely sentence-case than a name.
             if " " not in candidate and "-" not in candidate:

@@ -72,10 +72,8 @@ SHAPE:
 - End on the chapter's forward edge — the unresolved thing that makes the next chapter
   necessary. Never end on a summary, and never end on a hedge.
 
-Write plain prose paragraphs. One paragraph per story movement — a paragraph is the
-unit that will later be matched to images, so keep each one to a single continuous
-moment. No headings, no beat numbers, no metadata, no bullet points. Only the words the
-voice actor reads aloud."""
+Write plain prose paragraphs, one per story movement. No headings, no beat numbers, no
+metadata, no bullet points. Only the words the voice actor reads aloud."""
 
 
 def _budget_words(meta: ProjectMeta, config: dict[str, Any], n_chapters: int) -> tuple[int, int]:

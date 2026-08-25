@@ -158,13 +158,49 @@ def key_panels_for(panel_ids: list[str], max_keys: int = 3) -> list[str]:
     return keys
 
 
+def split_long_paragraphs(paras: list[str], max_words: int = 90) -> list[str]:
+    """Break paragraphs too long to bind to images precisely, at sentence boundaries.
+
+    Granularity is a PRODUCTION concern and belongs here, not in the writer's prompt.
+    Telling the writer "a paragraph is the unit that will later be matched to images"
+    leaked exactly the panel-thinking this architecture removes, and the run that carried
+    that line produced 10 paragraphs for 198 panels — ~20 panels of screen time per audio
+    file, which is far too coarse for A/V precision. The writing is untouched: this only
+    decides where an already-written paragraph is cut.
+    """
+    out: list[str] = []
+    for para in paras:
+        words = para.split()
+        if len(words) <= max_words:
+            out.append(para)
+            continue
+        sentences = re.split(r"(?<=[.!?])\s+", para.strip())
+        chunk: list[str] = []
+        count = 0
+        for sentence in sentences:
+            chunk.append(sentence)
+            count += len(sentence.split())
+            if count >= max_words:
+                out.append(" ".join(chunk))
+                chunk, count = [], 0
+        if chunk:
+            # Never leave a stub: fold a short tail back into the previous chunk.
+            tail = " ".join(chunk)
+            if len(tail.split()) < 20 and out:
+                out[-1] = f"{out[-1]} {tail}"
+            else:
+                out.append(tail)
+    return out
+
+
 def align_script(
     text: str,
     paths: dict[str, Path],
     config: dict[str, Any],
 ) -> tuple[list[ScriptBeat], QAReport]:
     """Freeform prose in, ScriptBeats out. One beat per paragraph."""
-    para_texts = paragraphs(text)
+    max_words = int(get_nested(config, "align", "max_beat_words", default=90))
+    para_texts = split_long_paragraphs(paragraphs(text), max_words)
     pages = sorted(paths["pages"].glob("*.png"))
     panels = load_story_panels(paths)
 

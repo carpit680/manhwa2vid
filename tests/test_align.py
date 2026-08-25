@@ -128,3 +128,28 @@ def test_name_integrity_ignores_sentence_openers():
 
     text = "Deep breaths. Cold air bites. Nothing moves in the throne room."
     assert unknown_names(text, {"Seo Jun-Ho"}) == []
+
+
+def test_long_paragraph_split_preserves_every_word():
+    """Granularity is a production concern, handled here rather than in the prompt.
+
+    The first freeform run told the WRITER that "a paragraph is the unit that will later
+    be matched to images" — leaking panel-thinking straight back into the creative act
+    this architecture exists to keep clean — and produced 10 paragraphs for 198 panels,
+    about 20 panels of screen time per audio file. Splitting after the fact fixes the
+    granularity without the writer ever knowing images exist.
+    """
+    from manhwa2vid.script.align import split_long_paragraphs
+
+    para = " ".join(f"Sentence number {i} runs on for a little while." for i in range(1, 21))
+    out = split_long_paragraphs([para], max_words=40)
+    assert len(out) > 1
+    assert " ".join(out).split() == para.split(), "no word may be lost or reordered"
+    assert all(len(p.split()) >= 20 for p in out), "no stub chunks"
+
+
+def test_short_paragraphs_are_left_alone():
+    from manhwa2vid.script.align import split_long_paragraphs
+
+    paras = ["Short and complete.", "Also short."]
+    assert split_long_paragraphs(paras, max_words=90) == paras

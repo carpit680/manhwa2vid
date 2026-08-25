@@ -170,3 +170,46 @@ def test_blank_panel_detection_is_color_symmetric():
     assert is_blank_panel(_p(1.0, 1.0), {})           # black sliver
     assert not is_blank_panel(_p(0.97, 0.95), {})     # black caption panel (white text)
     assert not is_blank_panel(_p(0.5, 0.3), {})       # ordinary art
+
+
+def test_freeform_pipeline_mock(sample_project: Path, monkeypatch) -> None:
+    """The story-first path end to end, offline.
+
+    Covers what the classic test cannot: that a script written as prose, with no
+    outline and no panel conservation, still lands in the ScriptBeat contract the whole
+    downstream half consumes — and that panels bind to paragraphs rather than the other
+    way round.
+    """
+    import yaml
+
+    from manhwa2vid.config import find_repo_root
+
+    cfg_path = find_repo_root() / "config.yaml"
+    original = cfg_path.read_text(encoding="utf-8")
+    cfg = yaml.safe_load(original)
+    cfg["script"]["architecture"] = "freeform"
+    cfg_path.write_text(yaml.dump(cfg, sort_keys=False), encoding="utf-8")
+    try:
+        for stage in (PipelineStage.INGEST, PipelineStage.PANELS, PipelineStage.SCRIPT):
+            run_stage(sample_project, stage)
+
+        paths = project_paths(sample_project)
+        assert paths["chapter_facts_json"].exists(), "read stage must record facts"
+        assert paths["script_freeform"].exists(), "writer must leave the prose behind"
+        assert paths["script_alignment_json"].exists(), "alignment map is kept for debugging"
+
+        draft = json.loads(paths["script_json"].read_text())
+        beats = draft["beats"]
+        assert len(beats) >= 2
+        assert len({b["beat_id"] for b in beats}) == len(beats), "beat_id must be unique"
+        assert all(b["panel_ids"] for b in beats), "a beat with no panels loses its audio"
+        assert all(b["narration"].strip() for b in beats)
+
+        # The draft round-trips through the markdown the human edits.
+        from manhwa2vid.script.generate import _parse_markdown_beats
+
+        reparsed = _parse_markdown_beats(paths["script_draft"])
+        assert [b["beat_id"] for b in beats] == [b.beat_id for b in reparsed]
+        assert [b["panel_ids"] for b in beats] == [b.panel_ids for b in reparsed]
+    finally:
+        cfg_path.write_text(original, encoding="utf-8")

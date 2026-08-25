@@ -697,11 +697,82 @@ class MockLLMProvider(LLMProvider):
                 return user.split("Original narration:")[-1].strip()
         return "Mock recap narration."
 
+    def describe_labeled_panels_text(
+        self, labeled: list[tuple[str, Path]], system: str, user: str
+    ) -> str:
+        """Prose stand-in for the freeform writer and the single reviser.
+
+        Emits several paragraphs with varied sentence lengths and a marked time jump, so
+        the alignment split, the well-formedness checks and the pace gate all see
+        something realistic. Names come from the glossary block in `user` when present,
+        keeping the identity gate meaningful offline.
+        """
+        if "correcting specific factual errors" in system:
+            # The reviser must return the narration essentially unchanged, or the
+            # "accept only if findings shrink" logic has nothing stable to compare.
+            marker = "CURRENT NARRATION:"
+            return user.split(marker, 1)[1].strip() if marker in user else user.strip()
+        name = "Hero"
+        for line in user.splitlines():
+            stripped = line.strip().strip('",: ')
+            if stripped and stripped[0].isupper() and " " not in stripped and len(stripped) > 3:
+                if line.strip().endswith(("[", "{", ":")) is False and '"' in line:
+                    name = stripped
+                    break
+        return (
+            f"Deep in the dark, {name} draws a blade against the crowned monster. "
+            f"She laughs at him. He tells her to stop talking. The strike lands.\n\n"
+            f"Twenty-five years later, the ice cracks open in a quiet museum hall. "
+            f"{name} falls to the floor, shaking. A system message says the absorption "
+            f"finally hit one hundred percent.\n\n"
+            f"Days on, {name} learns the tower still stands. Humanity has only cleared "
+            f"one floor. He goes quiet, because he knows exactly where the missing core "
+            f"went. It is inside him."
+        )
+
     def describe_panels(self, image_paths: list[Path], prompt: str) -> str:
         ids = []
         for p in image_paths:
             stem = p.stem
             ids.append(stem if stem.startswith("p") else f"panel_{stem}")
+        # --- story-first architecture. These branches keep the freeform path testable
+        # offline; CLAUDE.md's warning applies in both directions, so if a prompt in
+        # read.py / align.py / audit.py changes, change the matched phrase here too.
+        if "cataloguing what a manhwa chapter's pages literally show" in prompt:
+            return json.dumps(
+                {
+                    "system_messages": ["[YOU HAVE ABSORBED THE CORE.]"],
+                    "key_dialogue": [
+                        {"page": ids[0][1:5] if ids else "0001",
+                         "speaker": "Hero", "line": "we have only cleared one floor"}
+                    ],
+                    "time_markers": [{"page": "0002", "text": "25 YEARS LATER"}],
+                    "cast": [{"name": "Hero", "aliases": ["the hero"], "note": "protagonist"}],
+                    "plot_spine": ["the hero wins", "the hero wakes", "the hero sets out"],
+                }
+            )
+        if "match paragraphs of a finished recap" in prompt:
+            # One entry per paragraph, spread evenly over the pages we were shown, so
+            # expand_to_panels gets a realistic map without a real model.
+            import re as _re
+
+            n = len(_re.findall(r"\[paragraph \d+\]", prompt)) or 1
+            pages = [i[1:5] for i in ids] or ["0001"]
+            step = max(1, len(pages) // n)
+            return json.dumps(
+                {
+                    "map": [
+                        {
+                            "paragraph": k + 1,
+                            "first_page": pages[min(k * step, len(pages) - 1)],
+                            "last_page": pages[min(k * step + step - 1, len(pages) - 1)],
+                        }
+                        for k in range(n)
+                    ]
+                }
+            )
+        if "fact-checking a finished manhwa recap" in prompt:
+            return json.dumps({"findings": []})
         if "Choose the better narration" in prompt:
             # Placed ABOVE the fact-check branch: a judge prompt that fell through to it
             # would get {"unsupported": [], "severity": "none"} and silently "pass".
