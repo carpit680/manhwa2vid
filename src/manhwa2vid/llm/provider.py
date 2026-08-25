@@ -623,6 +623,22 @@ class MockLLMProvider(LLMProvider):
                     "hook": "Everything changes in an instant.",
                 }
             )
+        # The targeted prose passes (script/passes.py) are plain-prose, not json_mode, so
+        # they land here. Echo the ORIGINAL narration back, exactly as the "rewrite this
+        # recap beat" branch above does — a mock that returns boilerplate silently wipes
+        # every beat it touches, which is indistinguishable from the content-loss bugs
+        # these passes exist to avoid. CLAUDE.md's warning applies: a new prompt needs its
+        # mock branch, or the suite starts asserting that a real defect is acceptable.
+        if any(
+            marker in system
+            for marker in (
+                "REWRITE THIS TRANSITION BEAT",
+                "REWRITE THIS EXPOSITION BEAT",
+                "REWRITE THIS BEAT IN THE CHANNEL'S VOICE",
+            )
+        ):
+            if "Original narration:" in user:
+                return user.split("Original narration:")[-1].strip()
         return "Mock recap narration."
 
     def describe_panels(self, image_paths: list[Path], prompt: str) -> str:
