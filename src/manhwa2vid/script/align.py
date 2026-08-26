@@ -162,6 +162,54 @@ def locate_boundary_panels(
     return found
 
 
+def distribute_within_blocks(
+    panel_lists: list[list[str]],
+    ordered_ids: list[str],
+    block_of: list[int],
+    blocks: list[tuple[int, int]],
+    min_panels: dict[int, int] | None = None,
+) -> list[list[str]]:
+    """Give each paragraph its own forward run of panels — no overlap, no rewinding.
+
+    The alignment model returns a page RANGE per paragraph and neighbouring ranges
+    overlap, so taking every panel on those pages made consecutive beats replay each
+    other: measured on Frozen Player, 8 of 16 beats began BEFORE the previous beat
+    ended, one restarting a page the previous beat had just walked through. On screen
+    that is the video rewinding mid-sentence.
+
+    The model's ranges still decide WHERE each paragraph sits — they become the target
+    end of its run. This only enforces what a recap always wants inside one time block:
+    move forward, cover the block once. Blocks themselves may jump backward in story
+    time; that is the flashback, and the block split already handles it.
+    """
+    min_panels = min_panels or {}
+    index_of = {pid: i for i, pid in enumerate(ordered_ids)}
+    out: list[list[str]] = [[] for _ in panel_lists]
+
+    for block_idx, (lo, hi) in enumerate(blocks):
+        members = [i for i, b in enumerate(block_of) if b == block_idx]
+        if not members:
+            continue
+        cursor = lo
+        for n, para_i in enumerate(members):
+            remaining = len(members) - n - 1
+            if n == len(members) - 1:
+                end = hi
+            else:
+                want = max(1, min_panels.get(para_i + 1, 1))
+                positions = [index_of[q] for q in panel_lists[para_i] if q in index_of]
+                target = max(positions) + 1 if positions else cursor + want
+                end = min(max(target, cursor + want), hi - remaining)
+            end = max(end, cursor + 1)
+            out[para_i] = ordered_ids[cursor:end]
+            cursor = min(end, hi)
+        if cursor < hi:
+            out[members[-1]] = out[members[-1]] + ordered_ids[cursor:hi]
+    return [
+        run or [ordered_ids[blocks[block_of[i]][0]]] for i, run in enumerate(out)
+    ]
+
+
 def clamp_to_time_blocks(
     panel_lists: list[list[str]],
     para_texts: list[str],
@@ -198,6 +246,9 @@ def clamp_to_time_blocks(
     first_para_of_block: dict[int, int] = {}
     for i, block_idx in enumerate(block_of):
         first_para_of_block.setdefault(block_idx, i)
+
+    clamp_to_time_blocks.last_blocks = blocks          # reused by the caller
+    clamp_to_time_blocks.last_block_of = block_of
 
     out: list[list[str]] = []
     for pids, block_idx in zip(panel_lists, block_of):
@@ -410,12 +461,22 @@ def align_script(
     panel_lists = expand_to_panels(
         entries, len(para_texts), panels, empty_ids=empty_ids, min_panels=min_panels
     )
+    ordered_ids = [
+        p.id for p in sorted(panels, key=lambda x: x.id) if p.id not in empty_ids
+    ]
     if boundary_ids:
-        ordered_ids = [p.id for p in sorted(panels, key=lambda x: x.id)]
         panel_lists = clamp_to_time_blocks(
             panel_lists, para_texts, ordered_ids, boundary_ids
         )
+        blocks = clamp_to_time_blocks.last_blocks
+        block_of = clamp_to_time_blocks.last_block_of
         console.print(f"[dim]Align: time blocks cut at {boundary_ids}[/]")
+    else:
+        blocks = [(0, len(ordered_ids))]
+        block_of = [0] * len(para_texts)
+    panel_lists = distribute_within_blocks(
+        panel_lists, ordered_ids, block_of, blocks, min_panels
+    )
 
     beats = [
         ScriptBeat(

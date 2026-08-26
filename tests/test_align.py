@@ -315,3 +315,38 @@ def test_jump_paragraph_opens_on_the_caption_panel():
     paras = ["The queen stands tall.", "Seventy-six hours earlier, the team stands."]
     out = clamp_to_time_blocks([ordered[0:12], ordered[15:18]], paras, ordered, ["p0005_14"])
     assert out[1][0] == "p0005_14"
+
+
+def test_paragraphs_get_forward_non_overlapping_runs():
+    """Neighbouring page ranges overlap, so taking every panel on a paragraph's pages
+    made consecutive beats replay each other — measured on FP, 8 of 16 beats began
+    BEFORE the previous beat ended. On screen that is the video rewinding mid-sentence.
+    """
+    from manhwa2vid.script.align import distribute_within_blocks
+
+    ordered = [f"p{p:04d}_{i:02d}" for p in range(1, 5) for i in range(1, 6)]  # 20 panels
+    overlapping = [ordered[0:12], ordered[8:14], ordered[10:20]]
+    out = distribute_within_blocks(overlapping, ordered, [0, 0, 0], [(0, len(ordered))])
+
+    assert all(out), "no paragraph may end up empty"
+    flat = [pid for run in out for pid in run]
+    assert len(flat) == len(set(flat)), "a panel must not be shown by two beats"
+    idx = {pid: i for i, pid in enumerate(ordered)}
+    for earlier, later in zip(out, out[1:]):
+        assert idx[later[0]] > idx[earlier[-1]], "runs must move forward"
+    assert out[-1][-1] == ordered[-1], "the block's tail must be covered"
+
+
+def test_forward_runs_respect_time_blocks():
+    """Blocks may jump backward in story time — that is the flashback. Forward progress
+    is only required WITHIN a block."""
+    from manhwa2vid.script.align import distribute_within_blocks
+
+    ordered = [f"p0001_{i:02d}" for i in range(1, 11)]
+    blocks = [(0, 5), (5, 10)]
+    out = distribute_within_blocks(
+        [ordered[0:3], ordered[3:5], ordered[5:8], ordered[8:10]],
+        ordered, [0, 0, 1, 1], blocks,
+    )
+    assert all(p in ordered[0:5] for p in out[0] + out[1])
+    assert all(p in ordered[5:10] for p in out[2] + out[3])
