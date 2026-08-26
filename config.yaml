@@ -343,6 +343,11 @@ video:
   height: 1080
   fps: 30
   end_card_seconds: 4.5  # closing card with BGM under it; 0 disables
+  # Real-ESRGAN anime 2x on shown panels (cached in <project>/panels_2x/). Source art
+  # is 720-800px wide; fill-frame magnifies 2.4-2.7x at 1080p and Lanczos alone is soft.
+  upscale:
+    enabled: true
+    scale: 2
   min_panel_seconds: 1.0  # matches align.min_shot_seconds — Mamoru's measured p10 is
                           # 0.95s and 22% of his shots run under 1.5s, so a 1.5 floor
                           # flattened our distribution (median 4.78s vs his 2.87s)

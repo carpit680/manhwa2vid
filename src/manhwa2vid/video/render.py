@@ -60,8 +60,12 @@ def _render_panel_clip(
     chapters: str,
     title: str,
     show_badge: bool,
+    upscale_map: dict[str, Path] | None = None,
 ) -> Path:
     panel_path = project_root / entry.panel_path
+    upscaled = upscale_map.get(panel_path.name) if upscale_map else None
+    if upscaled is not None:
+        panel_path = upscaled
     num_frames = max(int(entry.duration * fps), 1)
     # Named by TIMELINE POSITION, not panel id. A panel may legitimately appear more
     # than once — a cold open replays a late moment, and a callback re-shows it — and
@@ -347,6 +351,19 @@ def render_video(
     paths["output"].mkdir(parents=True, exist_ok=True)
     panels = {p.id: p for p in load_story_panels(paths)}
 
+    # Optional 2x anime upscale for the panels actually on screen (cached in
+    # panels_2x/). Source art is 720-800px wide; the fill-frame camera magnifies
+    # 2.4-2.7x at 1080p, and Lanczos alone is visibly soft at that zoom.
+    from manhwa2vid.video.upscale import upscale_panels
+
+    shown = []
+    seen_paths: set[str] = set()
+    for entry in timeline.entries:
+        if entry.panel_path not in seen_paths:
+            seen_paths.add(entry.panel_path)
+            shown.append(paths["root"] / entry.panel_path)
+    upscale_map = upscale_panels(shown, paths["root"], config)
+
     with tempfile.TemporaryDirectory(prefix="m2v_") as tmp:
         frames_dir = Path(tmp) / "frames"
         frames_dir.mkdir()
@@ -377,6 +394,7 @@ def render_video(
                     meta.chapters,
                     meta.title,
                     show_badge,
+                    upscale_map,
                 )
                 clips.append(clip)
                 progress.advance(task)

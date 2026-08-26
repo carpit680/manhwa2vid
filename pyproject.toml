@@ -30,6 +30,7 @@ ocr = ["paddleocr>=2.7", "paddlepaddle>=2.6"]
 translate = ["transformers>=4.40", "sentencepiece>=0.2", "torch"]
 tts-chatterbox = ["chatterbox-tts", "soundfile"]
 tts-kokoro = ["kokoro>=0.9", "soundfile"]
+upscale = ["spandrel>=0.4", "torch"]
 # After install, for RTX 5070/5090 (Blackwell sm_120) use PyTorch cu128 nightly:
 #   pip install --pre torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 dev = ["pytest>=8"]
