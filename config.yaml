@@ -11,6 +11,17 @@ panels:
   fallback_overlap: 80
   split_image_files: hybrid  # one_to_one | always_split | hybrid
   strip_scroll_aspect: 2.0
+  # 2D collage splitting: gutter bands whose content is several disconnected regions
+  # (insets staggered in x/y on a flat background) are split per region. Values measured
+  # on SL p0002_02 (3 regions) / FP p0004_03 (2) / FP p0005_14 (continuous, untouched).
+  regions:
+    enabled: true
+    tol: 18                 # brightness distance from page background = content
+    close_px: 5             # morphological close; 9+ re-bridges staggered insets
+    min_area_frac: 0.004    # component smaller than this fraction of the band is noise
+    bubble_bright_frac: 0.45  # region mostly >232 brightness = bare bubble, absorbed
+    max_regions: 6
+    pad_frac: 0.03
   filter_non_story: true
   filter_by_filename: true
   exclude_panel_ids: ["p0010_02"]  # ch1: diagonal page-transition sliver just above the blank threshold

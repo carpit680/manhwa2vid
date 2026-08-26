@@ -204,19 +204,23 @@ def _make_panel(
     *,
     confidence: float,
     split_method: str,
+    x0: int = 0,
+    pw: int | None = None,
 ) -> Panel:
     h, w = img.shape[:2]
-    crop = img[y0 : y0 + ph, 0:w]
+    if pw is None:
+        pw = w
+    crop = img[y0 : y0 + ph, x0 : x0 + pw]
     panel_id = f"p{page_num:04d}_{idx + 1:02d}"
     panel_path = panels_dir / f"{panel_id}.png"
     panel_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(panel_path), crop)
-    meta = _panel_metadata(w, ph, config, split_method=split_method)
+    meta = _panel_metadata(pw, ph, config, split_method=split_method)
     ink, dark = panel_ink_stats(crop)
     return Panel(
         id=panel_id,
         page_num=page_num,
-        bbox=PanelBBox(x=0, y=y0, width=w, height=ph),
+        bbox=PanelBBox(x=x0, y=y0, width=pw, height=ph),
         image_path=str(panel_path.relative_to(project_root)),
         confidence=confidence,
         split_method=split_method,
@@ -225,6 +229,57 @@ def _make_panel(
         ink_ratio=ink,
         dark_ratio=dark,
     )
+
+
+def _expand_region_bboxes(
+    img: np.ndarray,
+    bboxes: list[tuple[int, int]],
+    config: dict[str, Any],
+) -> list[tuple[int, int, int, int, bool]]:
+    """Second splitting dimension: break collage bands into their content regions.
+
+    `_find_gutter_rows` can only separate panels stacked full-width with a uniform row
+    between them. Modern webtoon pages are collages — insets of different widths
+    staggered in x AND y on a flat background, bridged by speech bubbles — so a gutter
+    band often contains several story panels that no horizontal cut can reach. Measured
+    case: SL page 2's band 2 (720x1633) held three panels plus three bubbles and became
+    the video's opening shot, a bubble on black crawled past for six seconds.
+
+    Input is the gutter bands (y0, height); output is (x, y, w, h, from_collage) boxes —
+    bands that are one continuous piece pass through at full width (False), collage
+    bands are replaced by their regions (True; bubbles absorbed into their art, reading
+    order preserved).
+    """
+    if not bool(get_nested(config, "panels", "regions", "enabled", default=True)):
+        h, w = img.shape[:2]
+        return [(0, y0, w, ph, False) for y0, ph in bboxes]
+
+    from manhwa2vid.panels.regions import split_collage_regions
+
+    h, w = img.shape[:2]
+    min_height = _px(config, w, "panels", "min_panel_height", default=120)
+    out: list[tuple[int, int, int, int, bool]] = []
+    for y0, ph in bboxes:
+        band = img[y0 : y0 + ph, 0:w]
+        regions = split_collage_regions(
+            band,
+            tol=int(get_nested(config, "panels", "regions", "tol", default=18)),
+            close_px=int(get_nested(config, "panels", "regions", "close_px", default=5)),
+            min_area_frac=float(
+                get_nested(config, "panels", "regions", "min_area_frac", default=0.004)
+            ),
+            bubble_bright_frac=float(
+                get_nested(config, "panels", "regions", "bubble_bright_frac", default=0.45)
+            ),
+            max_regions=int(get_nested(config, "panels", "regions", "max_regions", default=6)),
+            min_height=min_height,
+            pad_frac=float(get_nested(config, "panels", "regions", "pad_frac", default=0.03)),
+        )
+        if not regions:
+            out.append((0, y0, w, ph, False))
+        else:
+            out.extend((rx, y0 + ry, rw, rh, True) for rx, ry, rw, rh in regions)
+    return out
 
 
 def _bbox_has_content(img: np.ndarray, y0: int, height: int, min_ink_ratio: float = 0.06) -> bool:
@@ -305,6 +360,11 @@ def _split_page_image(
         method = "full_page"
         confidence = 0.3
 
+    if method == "gutter":
+        boxes = _expand_region_bboxes(img, bboxes, config)
+    else:
+        boxes = [(0, y0, w, ph, False) for y0, ph in bboxes]
+
     panels = [
         _make_panel(
             img,
@@ -316,9 +376,11 @@ def _split_page_image(
             project_root,
             config,
             confidence=confidence,
-            split_method=method,
+            split_method="region" if from_collage else method,
+            x0=x0,
+            pw=pw,
         )
-        for idx, (y0, ph) in enumerate(bboxes)
+        for idx, (x0, y0, pw, ph, from_collage) in enumerate(boxes)
     ]
 
     return PageSplitResult(
@@ -345,6 +407,7 @@ def _split_image_hybrid(
     bboxes = _gutter_bboxes(img, config)
 
     if len(bboxes) >= 2:
+        boxes = _expand_region_bboxes(img, bboxes, config)
         panels = [
             _make_panel(
                 img,
@@ -356,15 +419,47 @@ def _split_image_hybrid(
                 project_root,
                 config,
                 confidence=0.85,
-                split_method="gutter",
+                split_method="region" if from_collage else "gutter",
+                x0=x0,
+                pw=pw,
             )
-            for idx, (y0, ph) in enumerate(bboxes)
+            for idx, (x0, y0, pw, ph, from_collage) in enumerate(boxes)
         ]
         return PageSplitResult(
             page_num=page_num,
             panels=panels,
             confidence=0.85,
             split_method="gutter",
+            low_confidence=False,
+        )
+
+    # No gutters found — but a gutterless page is not necessarily one continuous strip.
+    # The measured worst case (FP p0004_03, 800x5682) was two scenes joined diagonally:
+    # no full-width uniform row anywhere, yet plainly two pieces of content.
+    boxes = _expand_region_bboxes(img, [(0, h)], config)
+    if len(boxes) >= 2:
+        panels = [
+            _make_panel(
+                img,
+                page_num,
+                idx,
+                y0,
+                ph,
+                panels_dir,
+                project_root,
+                config,
+                confidence=0.85,
+                split_method="region",
+                x0=x0,
+                pw=pw,
+            )
+            for idx, (x0, y0, pw, ph, _from_collage) in enumerate(boxes)
+        ]
+        return PageSplitResult(
+            page_num=page_num,
+            panels=panels,
+            confidence=0.85,
+            split_method="region",
             low_confidence=False,
         )
 
