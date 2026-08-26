@@ -438,6 +438,16 @@ def build_timeline(
                         end=cursor + seg,
                         duration=seg,
                         beat_id=beat.beat_id,
+                        # `audio_file` is how _mix_audio finds the narration at all: it
+                        # collects the distinct files off the entries. Omitting it here
+                        # produced a completely SILENT render, and nothing failed —
+                        # _mix_audio takes an empty list as "no narration" and copies the
+                        # video through. Any new TimelineEntry construction must set it.
+                        audio_file=(
+                            str(audio_path.relative_to(audio_dir.parent))
+                            if audio_path.exists()
+                            else None
+                        ),
                         subtitle_text=beat.narration,
                     )
                 )

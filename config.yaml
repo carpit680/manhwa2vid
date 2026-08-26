@@ -136,7 +136,12 @@ align:
   # videos: 86% (Frozen Player) and 93% (Solo Leveling) of matchable sentences were
   # showing a panel that does not depict them.
   match_enabled: true
-  match_model: gemini-3-flash-preview
+  # Pro tier, decided on measurement: flash matched 74% of Frozen Player's sentences
+  # but only 52% of Solo Leveling's, and an unmatched sentence HOLDS — so a low
+  # match rate directly becomes slow pacing (SL 1.3 sentences/shot, 12.8 cuts/min
+  # against Mamoru's 16.3, median shot 5.0s against his 2.87s). The 2x2 experiment
+  # already showed pro is markedly better at grounded page reading.
+  match_model: gemini-3.1-pro-preview
   # Panels per matching call. The scene pass windows at 12 for the same reason: id
   # binding drifts with many interleaved images (measured +3 shift at 59).
   match_window_panels: 16
@@ -147,7 +152,7 @@ align:
 
 script:
   # freeform | classic
-  architecture: classic
+  architecture: freeform   # story-first is now the default path
   # The writer. Pro tier: arm B vs arm C showed identical CONTENT at both tiers and
   # reference-quality prose only at pro.
   freeform_model: gemini-3.1-pro-preview
@@ -168,7 +173,9 @@ script:
   # panel budget is planned from (curate.words_per_shown_panel), so it moves together
   # with tts.kokoro_speed — calibrated to 1.05, measured at exactly 200 WPM over five
   # real beats. Letting them drift apart is the bug the narration-pace gate exists for.
-  target_wpm: 200       # reference speaks 237; we deliberately sit slower
+  target_wpm: 220       # was 200. Mamoru speaks 237; at 200 our sentences ran
+                        # 4.71s each against his 3.23s, which is what made our
+                        # shots longer than his despite cutting MORE per sentence
   genz_level: light     # reference measures ~0 SLANG (0.07/1k) but 7.2/1k casual
                         # epithets for the hero ("bro", "the guy") — those are register,
                         # not slang, and reading 0.07 as "no personality" was the error
@@ -261,6 +268,9 @@ script:
   dialogue_delivery_gate: system
 
 qa:
+  # +-15% of a 220 target is +-33 WPM, wide enough that a run delivering 250 passed
+  # cleanly. 8% still absorbs ordinary synthesis variance but catches a real miss.
+  pace_tolerance: 0.08
   max_fallback_fraction: 0.34 # grounded-fallback may rescue beats, not author the script
   enforce: true             # failed gates block the next stage (--force-past-qa overrides)
 
@@ -283,7 +293,11 @@ tts:
   # 1.05 -> 184 WPM, 1.14 -> 194, 1.19 -> 202. Calibrate the way the pipeline RUNS,
   # not the way it is convenient to bench — the narration-pace gate is what caught
   # the 16-WPM gap between the two.
-  kokoro_speed: 1.19    # synthesis-time rate, NOT a time-stretch — no atempo artifacts
+  kokoro_speed: 1.29    # paired with script.target_wpm — the panel budget is planned
+                        # from the target, so a target the voice does not actually
+                        # deliver makes every dwell wrong. Measured: 1.19 delivered
+                        # 191 WPM, so 220 needs ~1.37. The narration-pace gate
+                        # re-measures after synthesis and warns if this drifted.
   kokoro_lang: a        # 'a' = American English
   # Chatterbox-only settings below:
   device: cuda          # cuda | cpu | mps — auto-detects if omitted
@@ -313,7 +327,9 @@ video:
   width: 1920
   height: 1080
   fps: 30
-  min_panel_seconds: 1.5  # was 2.0 — sentence-weighted dwell needs room to move fast under short sentences
+  min_panel_seconds: 1.0  # matches align.min_shot_seconds — Mamoru's measured p10 is
+                          # 0.95s and 22% of his shots run under 1.5s, so a 1.5 floor
+                          # flattened our distribution (median 4.78s vs his 2.87s)
   max_panel_seconds: 5.0   # was 10.0 — long dwells read as slideshow next to the reference
   # Panels are dropped (not flashed) when a beat's narration cannot show them this long.
   # Lower than min_panel_seconds on purpose: mild compression is fine, 0.4s strobing is not.

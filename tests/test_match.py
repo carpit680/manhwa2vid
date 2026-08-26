@@ -106,3 +106,41 @@ def test_hold_carries_across_a_beat_boundary():
     plan = plan_shots(shotlist, segs, floor=1.0)
     assert plan[1] == [("p1", 3.0)]
     assert plan[2] == [("p1", 2.0), ("p2", 3.0)], "beat 2 opens on the held panel"
+
+
+def test_shot_plan_entries_carry_their_audio_file(tmp_path):
+    """A shot-plan render came out completely SILENT and nothing failed.
+
+    _mix_audio collects narration by reading `audio_file` off the timeline entries; the
+    shot-plan branch built entries without it, so the list came back empty and _mix_audio
+    treated that as "no narration" and copied the video straight through. Silence is the
+    one defect that no gate looks for, so it is pinned here.
+    """
+    import wave
+
+    from manhwa2vid.models import Panel, PanelBBox, ScriptBeat
+    from manhwa2vid.video.timeline import build_timeline
+
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    wav = audio_dir / "beat_001.wav"
+    with wave.open(str(wav), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(24000)
+        w.writeframes(b"\x00\x00" * 24000 * 4)   # 4 seconds
+
+    panels = [
+        Panel(id=f"p0001_{i:02d}", page_num=1,
+              bbox=PanelBBox(x=0, y=0, width=10, height=10),
+              image_path=f"panels/p0001_{i:02d}.png")
+        for i in (1, 2)
+    ]
+    beats = [ScriptBeat(beat_id=1, panel_ids=[p.id for p in panels], narration="One. Two.")]
+    timeline = build_timeline(
+        beats, panels, audio_dir, {},
+        shot_plan={1: [("p0001_01", 2.0), ("p0001_02", 2.0)]},
+    )
+    assert timeline.entries, "the shot plan must produce entries"
+    assert all(e.audio_file for e in timeline.entries), "every entry needs its audio file"
+    assert {e.audio_file for e in timeline.entries} == {"audio/beat_001.wav"}
