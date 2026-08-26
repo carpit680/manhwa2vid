@@ -230,6 +230,7 @@ def plan_shots(
     floor: float = 1.0,
     panel_order: list[str] | None = None,
     accent_floor: float = 0.4,
+    text_only: set[str] | None = None,
 ) -> dict[int, list[tuple[str, float]]] | None:
     """Join claims with measured sentence seconds into per-beat (panel, seconds) shots.
 
@@ -272,6 +273,30 @@ def plan_shots(
                 }
             )
 
+    # A claimed panel that is nothing but a speech bubble becomes a wall of text on the
+    # page background — the reference channel never shows one, and every bubble in its
+    # frames sits WITH the art it belongs to. The matcher is right that the line lives
+    # there, but our narrator is already speaking that line, so the screen should carry
+    # the moment instead: swap in the nearest art panel in reading order.
+    if text_only and panel_order:
+        art_at = {pid: i for i, pid in enumerate(panel_order)}
+        art_seq = [pid for pid in panel_order if pid not in text_only]
+        for item in flat:
+            swapped: list[str] = []
+            for pid in item["panels"]:
+                if pid not in text_only or pid not in art_at:
+                    swapped.append(pid)
+                    continue
+                here = art_at[pid]
+                nearest = min(
+                    art_seq, key=lambda a: abs(art_at[a] - here), default=None
+                )
+                if nearest is None:
+                    swapped.append(pid)      # nothing but text anywhere — keep the claim
+                elif nearest not in swapped:
+                    swapped.append(nearest)
+            item["panels"] = swapped
+
     # Bounded fill: rewrite each unclaimed RUN's panels from the reading-order gap
     # between its surrounding anchors.
     if panel_order:
@@ -298,7 +323,7 @@ def plan_shots(
                 gap = [
                     pid
                     for pid in panel_order[lo + 1 : hi]
-                    if pid not in claimed
+                    if pid not in claimed and pid not in (text_only or ())
                 ]
                 if gap:
                     assigned = _fill_run_panels(

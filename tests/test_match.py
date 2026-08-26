@@ -279,3 +279,44 @@ def test_accent_bursts_are_capped():
     runs.append(cur)
     assert max(runs) <= 3, f"burst of {max(runs)} short shots survived: {durs}"
     assert abs(sum(durs) - 9.0) < 1e-6, "A/V total preserved through burst merging"
+
+
+def test_bubble_only_panel_is_swapped_for_its_art():
+    """A claimed panel that is nothing but a speech bubble becomes a wall of text on
+    the page background. The narrator is already speaking that line, so the screen
+    shows the nearest art instead — the reference channel never frames a bare bubble."""
+    order = ["p1", "p2", "p3", "p4"]
+    plan = plan_shots(
+        _sl(["p1"], ["p2"], ["p4"]),
+        {1: [{"seconds": 2.0}, {"seconds": 2.0}, {"seconds": 2.0}]},
+        floor=1.0,
+        panel_order=order,
+        text_only={"p2"},
+    )
+    shown = [pid for pid, _ in plan[1]]
+    assert "p2" not in shown, f"bare bubble still on screen: {shown}"
+    assert abs(sum(s for _, s in plan[1]) - 6.0) < 1e-6
+
+
+def test_fill_never_volunteers_a_bubble_panel():
+    order = ["p1", "p2", "p3", "p4", "p5"]
+    plan = plan_shots(
+        _sl(["p1"], [], ["p5"]),
+        {1: [{"seconds": 2.0}, {"seconds": 3.0}, {"seconds": 2.0}]},
+        floor=1.0,
+        panel_order=order,
+        text_only={"p3"},
+    )
+    assert "p3" not in [pid for pid, _ in plan[1]]
+
+
+def test_all_text_only_leaves_the_claim_alone():
+    """No art anywhere to swap to: keep the claim rather than emptying the shot."""
+    plan = plan_shots(
+        _sl(["p1"]),
+        {1: [{"seconds": 3.0}]},
+        floor=1.0,
+        panel_order=["p1"],
+        text_only={"p1"},
+    )
+    assert plan[1] == [("p1", 3.0)]

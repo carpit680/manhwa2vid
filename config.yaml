@@ -188,6 +188,10 @@ script:
   # panel budget is planned from (curate.words_per_shown_panel), so it moves together
   # with tts.kokoro_speed — calibrated to 1.05, measured at exactly 200 WPM over five
   # real beats. Letting them drift apart is the bug the narration-pace gate exists for.
+  # Closing ask written INTO the narration as a continuation of the last story line,
+  # the way the reference channel does it — a static subscribe card is a wall the
+  # viewer hits, a continued sentence keeps them listening. See script/outro.py.
+  outro_cta: true
   target_wpm: 220       # was 200. Mamoru speaks 237; at 200 our sentences ran
                         # 4.71s each against his 3.23s, which is what made our
                         # shots longer than his despite cutting MORE per sentence

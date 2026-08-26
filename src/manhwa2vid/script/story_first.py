@@ -20,6 +20,7 @@ from manhwa2vid.qa import QAReport, enforce, qa_forced
 from manhwa2vid.script.align import align_script
 from manhwa2vid.script.audit import audit_and_revise
 from manhwa2vid.script.freeform import paragraphs, write_freeform_script
+from manhwa2vid.script.outro import append_outro
 from manhwa2vid.script.lint import lint_broken_sentences
 from manhwa2vid.script.read import glossary_names, read_chapter_facts
 
@@ -160,6 +161,12 @@ def generate_story_first_script(
     else:
         record = {"audit": {"majors": [], "undelivered_system_messages": []},
                   "revision": {"revised": False, "reason": "disabled"}}
+
+    # The closing ask, written as a continuation of the last thing said about the
+    # story. Appended AFTER the audit so it sees the final sentence it must follow,
+    # and so the audit never tries to ground it against panels.
+    text = append_outro(text, meta, paths, config)
+    paths["script_freeform"].write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
 
     beats, align_report = align_script(text, paths, config)
 

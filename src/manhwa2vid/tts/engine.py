@@ -100,20 +100,28 @@ def run_tts_and_timeline(
         from manhwa2vid.panels.regions import is_text_only_panel
         from manhwa2vid.panels.split import is_visually_empty_file
 
-        def _fill_worthy(p) -> bool:
+        text_only: set[str] = set()
+        empty: set[str] = set()
+        for p in panels:
             path = paths["root"] / p.image_path
             if is_visually_empty_file(path):
-                return False
+                empty.add(p.id)
+                continue
             img = cv2.imread(str(path))
-            return img is None or not is_text_only_panel(img)
+            if img is not None and is_text_only_panel(img):
+                text_only.add(p.id)
 
-        fill_order = [p.id for p in panels if _fill_worthy(p)]
+        # Reading order for both fill candidates and bubble substitution. Text-only
+        # panels stay in the ORDER (so a swap can find its neighbour) but are excluded
+        # from fill by the planner itself.
+        fill_order = [p.id for p in panels if p.id not in empty]
         shot_plan = plan_shots(
             shotlist,
             segments_by_beat,
             floor=floor,
             panel_order=fill_order,
             accent_floor=accent_floor,
+            text_only=text_only,
         )
         if shot_plan:
             shots = sum(len(v) for v in shot_plan.values())
