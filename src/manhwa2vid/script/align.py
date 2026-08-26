@@ -29,6 +29,7 @@ from manhwa2vid.models import Panel, ScriptBeat, save_json
 from manhwa2vid.panels.filter import load_story_panels
 from manhwa2vid.qa import QAReport
 from manhwa2vid.script.freeform import paragraphs
+from manhwa2vid.script.sentences import split_sentences
 
 console = Console()
 
@@ -449,7 +450,7 @@ def split_long_paragraphs(paras: list[str], max_words: int = 90) -> list[str]:
         if len(words) <= max_words:
             out.append(para)
             continue
-        sentences = re.split(r"(?<=[.!?])\s+", para.strip())
+        sentences = split_sentences(para)
         chunk: list[str] = []
         count = 0
         for sentence in sentences:
@@ -466,6 +467,38 @@ def split_long_paragraphs(paras: list[str], max_words: int = 90) -> list[str]:
             else:
                 out.append(tail)
     return out
+
+
+def _build_shotlist_for(
+    para_texts: list[str],
+    panel_lists: list[list[str]],
+    ordered_ids: list[str],
+    block_of: list[int],
+    blocks: list[tuple[int, int]],
+    panels: list[Panel],
+    paths: dict[str, Path],
+    config: dict[str, Any],
+) -> None:
+    """Run the matcher over each time block and persist the shot list.
+
+    Candidates for a block are that block's panels — a claim can never cross a printed
+    time boundary, which is the one thing the previous mechanism got right and must keep.
+    """
+    from manhwa2vid.script.match import build_shotlist
+    from manhwa2vid.script.sentences import split_sentences
+
+    by_id = {p.id: p for p in panels}
+    beats_sentences: list[tuple[int, list[str]]] = []
+    block_of_sentence: list[int] = []
+    for i, text in enumerate(para_texts):
+        sents = split_sentences(text)
+        beats_sentences.append((i + 1, sents))
+        block_of_sentence.extend([block_of[i]] * len(sents))
+
+    blocks_panels = [
+        [by_id[pid] for pid in ordered_ids[lo:hi] if pid in by_id] for lo, hi in blocks
+    ]
+    build_shotlist(beats_sentences, blocks_panels, block_of_sentence, paths, config)
 
 
 def align_script(
@@ -520,6 +553,20 @@ def align_script(
     panel_lists = distribute_within_blocks(
         panel_lists, ordered_ids, block_of, blocks, min_panels
     )
+
+    # Content matching: which panels actually DEPICT each sentence. The arithmetic
+    # distribution above still decides each paragraph's territory (and remains the
+    # fallback), but within it the shot list decides what is on screen. Measured on the
+    # arithmetic-only videos: 86% (FP) and 93% (SL) of matchable sentences were showing
+    # a panel that does not depict them, because even apportionment desynchronises from
+    # narration that compresses.
+    if get_nested(config, "align", "match_enabled", default=True):
+        try:
+            _build_shotlist_for(
+                para_texts, panel_lists, ordered_ids, block_of, blocks, panels, paths, config
+            )
+        except Exception as exc:  # matching is an improvement, never a hard dependency
+            console.print(f"[yellow]Shot matching skipped ({exc})[/]")
 
     beats = [
         ScriptBeat(

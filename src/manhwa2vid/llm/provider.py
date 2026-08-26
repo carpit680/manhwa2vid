@@ -780,6 +780,18 @@ class MockLLMProvider(LLMProvider):
             )
         if "fact-checking a finished manhwa recap" in prompt:
             return json.dumps({"findings": []})
+        if "match narration sentences to the manhwa panels" in prompt:
+            # Deterministic stand-in: claim panels for every other sentence, walking the
+            # batch in order, so the offline path exercises claims, gaps (the
+            # hold-previous branch) and the monotonic filter all at once.
+            import re as _re
+
+            numbers = [int(n) for n in _re.findall(r"^\[(\d+)\]", prompt, _re.M)]
+            claims = []
+            for k, number in enumerate(numbers[::2]):
+                if k < len(ids):
+                    claims.append({"sentence": number, "panels": [ids[k]]})
+            return json.dumps({"claims": claims})
         if "Choose the better narration" in prompt:
             # Placed ABOVE the fact-check branch: a judge prompt that fell through to it
             # would get {"unsupported": [], "severity": "none"} and silently "pass".

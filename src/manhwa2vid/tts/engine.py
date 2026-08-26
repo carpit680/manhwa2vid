@@ -10,9 +10,11 @@ from typing import Any
 from rich.console import Console
 from rich.progress import Progress
 
+from manhwa2vid.config import get_nested
 from manhwa2vid.models import ProjectMeta, save_json
 from manhwa2vid.panels.filter import load_story_panels
 from manhwa2vid.script.generate import load_script_beats
+from manhwa2vid.script.sentences import split_sentences
 from manhwa2vid.tts.provider import get_tts_provider
 from manhwa2vid.video.timeline import _wav_duration, build_timeline
 
@@ -71,7 +73,33 @@ def run_tts_and_timeline(
         # video — the writer's key_panel_ids stop being honoured and nobody is told.
         console.print(f"[yellow]Panel salience unavailable ({exc}) — using key panels only[/]")
         salience = None
-    timeline = build_timeline(script.beats, panels, audio_dir, config, salience=salience)
+    # Join the align stage's sentence->panel claims with the sidecars' measured
+    # per-sentence seconds. Durations only exist here (sidecars are written at
+    # synthesis), which is why the shot list stores claims and the plan is built now.
+    shot_plan = None
+    if paths["script_shotlist_json"].exists():
+        from manhwa2vid.script.match import plan_shots
+        from manhwa2vid.video.timeline import _subdivide_segments, load_beat_segments
+
+        shotlist = json.loads(paths["script_shotlist_json"].read_text(encoding="utf-8"))
+        segments_by_beat = {
+            b.beat_id: _subdivide_segments(load_beat_segments(audio_dir, b.beat_id) or [])
+            for b in script.beats
+        }
+        floor = float(get_nested(config, "align", "min_shot_seconds", default=1.0))
+        shot_plan = plan_shots(shotlist, segments_by_beat, floor=floor)
+        if shot_plan:
+            shots = sum(len(v) for v in shot_plan.values())
+            console.print(f"[dim]Shot plan: {shots} shot(s) across {len(shot_plan)} beat(s)[/]")
+        else:
+            console.print(
+                "[yellow]Shot list did not line up with the audio sidecars — "
+                "falling back to airtime weighting[/]"
+            )
+
+    timeline = build_timeline(
+        script.beats, panels, audio_dir, config, salience=salience, shot_plan=shot_plan
+    )
     save_json(paths["timeline_json"], timeline)
     console.print(
         f"[green]TTS complete[/] — {len(script.beats)} beats, "
@@ -94,7 +122,7 @@ def _ensure_segments_sidecar(narration: str, wav_path: Path) -> None:
     sidecar = wav_path.with_suffix(".segments.json")
     if sidecar.exists():
         return
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", narration.strip()) if s.strip()]
+    sentences = split_sentences(narration)
     if not sentences:
         return
     try:

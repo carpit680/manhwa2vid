@@ -130,6 +130,20 @@ align:
   # Report-only floor. Narration decides coverage; a very low number usually means the
   # alignment map collapsed rather than that the writing was selective.
   min_panel_fraction: 0.4
+  # --- shot matching: which panel DEPICTS each sentence ---------------------------
+  # Without this, panels are handed to paragraphs by airtime alone and the picture
+  # desynchronises from narration that compresses. Measured on the arithmetic-only
+  # videos: 86% (Frozen Player) and 93% (Solo Leveling) of matchable sentences were
+  # showing a panel that does not depict them.
+  match_enabled: true
+  match_model: gemini-3-flash-preview
+  # Panels per matching call. The scene pass windows at 12 for the same reason: id
+  # binding drifts with many interleaved images (measured +3 shift at 59).
+  match_window_panels: 16
+  # Shots shorter than this merge into the previous one. Measured from Mamoru's own
+  # video (reference/mamoru_shot_profile.md): median shot 2.87s, and 22% of his shots
+  # run under 1.5s — so a 1.5s floor was clipping a fifth of his range.
+  min_shot_seconds: 1.0
 
 script:
   # freeform | classic

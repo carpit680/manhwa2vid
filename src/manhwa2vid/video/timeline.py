@@ -179,7 +179,7 @@ def budget_panels_for_beat(
     return chosen
 
 
-_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+from manhwa2vid.script.sentences import SENTENCE_SPLIT_RE as _SENTENCE_SPLIT
 
 
 def _subdivide_segments(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -390,6 +390,7 @@ def build_timeline(
     audio_dir: Path,
     config: dict[str, Any],
     salience: dict[str, float] | None = None,
+    shot_plan: dict[int, list[tuple[str, float]]] | None = None,
 ) -> Timeline:
     min_sec = float(get_nested(config, "video", "min_panel_seconds", default=2.0))
     max_sec = float(get_nested(config, "video", "max_panel_seconds", default=8.0))
@@ -411,6 +412,36 @@ def build_timeline(
 
         panel_ids = _resolve_panels_for_beat(beat, panel_map, all_ids)
         if not panel_ids:
+            continue
+
+        # A shot list, when the matcher produced one, decides BOTH what is on screen and
+        # for how long: each sentence's measured seconds go to the panels that actually
+        # depict it. Without it, panels are apportioned by airtime alone — which measured
+        # 86% (FP) / 93% (SL) wrong-panel rate, because even apportionment desynchronises
+        # from narration that compresses.
+        planned = (shot_plan or {}).get(beat.beat_id)
+        if planned:
+            planned = [(pid, sec) for pid, sec in planned if pid in panel_map]
+        if planned:
+            panel_ids = [pid for pid, _sec in planned]
+            weights = [sec for _pid, sec in planned]
+            segs = split_beat_durations(
+                duration, len(panel_ids), min_sec=min_sec, max_sec=max_sec, weights=weights
+            )
+            for pid, seg in zip(panel_ids, segs):
+                panel = panel_map[pid]
+                entries.append(
+                    TimelineEntry(
+                        panel_id=pid,
+                        panel_path=panel.image_path,
+                        start=cursor,
+                        end=cursor + seg,
+                        duration=seg,
+                        beat_id=beat.beat_id,
+                        subtitle_text=beat.narration,
+                    )
+                )
+                cursor += seg
             continue
 
         if salience is not None:

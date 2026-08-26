@@ -345,6 +345,11 @@ def project_paths(project_dir: Path) -> dict[str, Path]:
         #: paragraph index -> page range, the aligner's raw output (kept for debugging
         #: a bad binding without re-running the call).
         "script_alignment_json": project_dir / "script.alignment.json",
+        #: Sentence -> panel claims from the content matcher. Durations are NOT
+        #: here: they come from the TTS sidecars, which do not exist until
+        #: synthesis, so the shot list stores WHAT each sentence shows and the
+        #: timeline decides for how long.
+        "script_shotlist_json": project_dir / "script.shotlist.json",
         "script_synopsis_json": project_dir / "script.synopsis.json",
         "script_outline_json": project_dir / "script.outline.json",
         "script_draft": project_dir / "script.draft.md",
