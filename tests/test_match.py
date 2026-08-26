@@ -144,3 +144,114 @@ def test_shot_plan_entries_carry_their_audio_file(tmp_path):
     assert timeline.entries, "the shot plan must produce entries"
     assert all(e.audio_file for e in timeline.entries), "every entry needs its audio file"
     assert {e.audio_file for e in timeline.entries} == {"audio/beat_001.wav"}
+
+
+# --- bounded fill + accent cuts (2026-08-26 revision) --------------------------------
+
+def test_unmatched_run_walks_the_panels_between_anchors():
+    """SL matched only 49% of sentences; holding made half the picture stand still.
+    An unmatched run now walks the unclaimed panels BETWEEN its anchors, in reading
+    order — bounded, so it can never jump to an unrelated image."""
+    order = ["p1", "p2", "p3", "p4", "p5"]
+    plan = plan_shots(
+        _sl(["p1"], [], [], ["p5"]),
+        {1: [{"seconds": 3.0}, {"seconds": 2.0}, {"seconds": 2.0}, {"seconds": 3.0}]},
+        floor=1.0,
+        panel_order=order,
+    )
+    shown = [pid for pid, _ in plan[1]]
+    assert shown == ["p1", "p2", "p3", "p4", "p5"], shown
+    assert abs(sum(sec for _, sec in plan[1]) - 10.0) < 1e-6, "A/V total preserved"
+
+
+def test_fill_without_gap_panels_still_holds():
+    """No panels between the anchors -> the old hold behaviour stands."""
+    plan = plan_shots(
+        _sl(["p1"], [], ["p2"]),
+        {1: [{"seconds": 3.0}, {"seconds": 2.0}, {"seconds": 3.0}]},
+        floor=1.0,
+        panel_order=["p1", "p2"],
+    )
+    assert plan[1] == [("p1", 5.0), ("p2", 3.0)]
+
+
+def test_fill_needs_both_anchors():
+    """A trailing unmatched run has no right bound — it holds rather than wandering
+    into panels the narration may never reach."""
+    plan = plan_shots(
+        _sl(["p1"], [], []),
+        {1: [{"seconds": 3.0}, {"seconds": 2.0}, {"seconds": 2.0}]},
+        floor=1.0,
+        panel_order=["p1", "p2", "p3"],
+    )
+    assert plan[1] == [("p1", 7.0)]
+
+
+def test_fill_subsamples_a_wide_gap_in_order():
+    """More gap panels than the run's airtime can carry at the floor: subsample evenly,
+    order preserved, each shot at least the floor."""
+    order = [f"p{i}" for i in range(1, 13)]
+    plan = plan_shots(
+        _sl(["p1"], [], ["p12"]),
+        {1: [{"seconds": 2.0}, {"seconds": 3.0}, {"seconds": 2.0}]},
+        floor=1.0,
+        panel_order=order,
+    )
+    shown = [pid for pid, _ in plan[1]]
+    assert shown[0] == "p1" and shown[-1] == "p12"
+    middle = shown[1:-1]
+    assert 1 <= len(middle) <= 3, f"airtime caps the fill: {middle}"
+    positions = [order.index(p) for p in shown]
+    assert positions == sorted(positions), "reading order preserved"
+
+
+def test_fill_skips_panels_claimed_elsewhere():
+    """A panel matched to a LATER sentence is not stolen by the fill."""
+    order = ["p1", "p2", "p3", "p4"]
+    plan = plan_shots(
+        _sl(["p1"], [], ["p3"], ["p4"]),
+        {1: [{"seconds": 2.0}, {"seconds": 2.0}, {"seconds": 2.0}, {"seconds": 2.0}]},
+        floor=1.0,
+        panel_order=order,
+    )
+    shown = [pid for pid, _ in plan[1]]
+    assert shown == ["p1", "p2", "p3", "p4"]
+
+
+def test_accent_cut_survives_below_the_floor():
+    """A multi-panel action sentence keeps its intra-sentence cuts below the 1.0s
+    floor — deleting them is why the videos had ZERO shots under 1.5s against the
+    reference's 22%."""
+    plan = plan_shots(
+        _sl(["p1", "p2", "p3"]),
+        {1: [{"seconds": 2.4}]},
+        floor=1.0,
+        accent_floor=0.4,
+    )
+    assert [pid for pid, _ in plan[1]] == ["p1", "p2", "p3"]
+    assert all(abs(sec - 0.8) < 1e-6 for _, sec in plan[1])
+
+
+def test_accent_below_accent_floor_still_merges():
+    plan = plan_shots(
+        _sl(["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"]),
+        {1: [{"seconds": 2.4}]},
+        floor=1.0,
+        accent_floor=0.4,
+    )
+    assert all(sec >= 0.4 for _, sec in plan[1]), plan[1]
+    assert abs(sum(sec for _, sec in plan[1]) - 2.4) < 1e-6
+
+
+def test_fill_crosses_beat_boundaries():
+    """Anchors in DIFFERENT beats still bound a fill run."""
+    shotlist = {"sentences": [
+        {"number": 1, "beat_id": 1, "text": "a", "panels": ["p1"]},
+        {"number": 2, "beat_id": 1, "text": "b", "panels": []},
+        {"number": 3, "beat_id": 2, "text": "c", "panels": []},
+        {"number": 4, "beat_id": 2, "text": "d", "panels": ["p4"]},
+    ]}
+    segs = {1: [{"seconds": 2.0}, {"seconds": 2.0}], 2: [{"seconds": 2.0}, {"seconds": 2.0}]}
+    plan = plan_shots(shotlist, segs, floor=1.0, panel_order=["p1", "p2", "p3", "p4"])
+    shown = [pid for beat in (1, 2) for pid, _ in plan[beat]]
+    assert shown == ["p1", "p2", "p3", "p4"], shown

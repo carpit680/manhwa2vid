@@ -425,8 +425,15 @@ def build_timeline(
         if planned:
             panel_ids = [pid for pid, _sec in planned]
             weights = [sec for _pid, sec in planned]
+            # The plan's seconds ARE the intended dwell: plan_shots already enforced its
+            # own floors (min_shot_seconds / accent_shot_seconds), and re-clamping here
+            # with min/max_panel_seconds silently undid them — the lift pass stretched
+            # 0.4s accent cuts back toward 1.0s and the cap redistributed deliberate
+            # holds, drifting every later cut off its sentence. Pass through; only the
+            # exact-sum A/V lock applies. Long dwells are the camera's job now (it
+            # re-frames past video.max_dwell_seconds) and the dwell QA gate still warns.
             segs = split_beat_durations(
-                duration, len(panel_ids), min_sec=min_sec, max_sec=max_sec, weights=weights
+                duration, len(panel_ids), min_sec=0.0, max_sec=float("inf"), weights=weights
             )
             for pid, seg in zip(panel_ids, segs):
                 panel = panel_map[pid]

@@ -87,7 +87,23 @@ def run_tts_and_timeline(
             for b in script.beats
         }
         floor = float(get_nested(config, "align", "min_shot_seconds", default=1.0))
-        shot_plan = plan_shots(shotlist, segments_by_beat, floor=floor)
+        accent_floor = float(get_nested(config, "align", "accent_shot_seconds", default=0.4))
+        # Bounded-fill candidates: story panels in reading order, minus visually-empty
+        # ones — fill must never resurrect the blank panels the align stage excluded.
+        from manhwa2vid.panels.split import is_visually_empty_file
+
+        fill_order = [
+            p.id
+            for p in panels
+            if not is_visually_empty_file(paths["root"] / p.image_path)
+        ]
+        shot_plan = plan_shots(
+            shotlist,
+            segments_by_beat,
+            floor=floor,
+            panel_order=fill_order,
+            accent_floor=accent_floor,
+        )
         if shot_plan:
             shots = sum(len(v) for v in shot_plan.values())
             console.print(f"[dim]Shot plan: {shots} shot(s) across {len(shot_plan)} beat(s)[/]")

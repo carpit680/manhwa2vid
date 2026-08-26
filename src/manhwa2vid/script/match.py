@@ -197,19 +197,55 @@ def build_shotlist(
     return shotlist
 
 
+def _fill_run_panels(
+    run_len: int,
+    gap: list[str],
+    seconds_per_sentence: list[float],
+    floor: float,
+) -> list[list[str]]:
+    """Distribute the between-anchor panels across a run of unmatched sentences.
+
+    Panels stay in reading order and split contiguously; a sentence is capped at the
+    number of shots its airtime can carry at `floor` seconds each, and when the gap
+    holds more panels than the run can carry, the gap is subsampled evenly so the walk
+    still ARRIVES at the next anchor instead of stranding short of it.
+    """
+    out: list[list[str]] = []
+    for i in range(run_len):
+        lo = round(len(gap) * i / run_len)
+        hi = round(len(gap) * (i + 1) / run_len)
+        piece = gap[lo:hi]
+        budget = max(1, int(seconds_per_sentence[i] // max(floor, 0.1)))
+        if len(piece) > budget:
+            step = len(piece) / budget
+            piece = [piece[int(k * step)] for k in range(budget)]
+        out.append(piece)
+    return out
+
+
 def plan_shots(
     shotlist: dict[str, Any],
     segments_by_beat: dict[int, list[dict[str, Any]]],
     *,
     floor: float = 1.0,
+    panel_order: list[str] | None = None,
+    accent_floor: float = 0.4,
 ) -> dict[int, list[tuple[str, float]]] | None:
     """Join claims with measured sentence seconds into per-beat (panel, seconds) shots.
 
-    Pure code, runs at timeline time when sidecars exist. Rules (user decisions):
-    - a sentence's seconds split evenly across its claimed panels;
-    - an unclaimed sentence HOLDS the current shot (its seconds extend it);
-    - leading unclaimed sentences attach to the first claimed shot;
-    - shots under `floor` merge into the previous shot;
+    Pure code, runs at timeline time when sidecars exist. Rules (user decisions,
+    2026-08-26 revision):
+    - a sentence's seconds split evenly across its claimed panels; an intra-sentence
+      multi-panel split is an ACCENT — it survives below `floor` (down to
+      `accent_floor`), restoring the short-shot class the reference channel uses for
+      22% of its cuts and this pipeline produced 0-6% of;
+    - an unclaimed sentence **walks the unclaimed panels between its surrounding
+      matched anchors** (bounded fill — reading order, so it can never jump to an
+      unrelated image). SL matched only 49% of sentences, so pure holding made half
+      the picture stand still and played a 6-sentence action climax over two stills;
+    - with no panels between anchors — or no anchor on one side — it HOLDS the current
+      shot as before; leading unclaimed sentences attach to the first claimed shot;
+    - non-accent shots under `floor` merge into the previous shot;
     - a hold crossing a beat boundary re-opens the same panel in the next beat
       (cross-beat panel reuse is render-safe by construction).
 
@@ -217,61 +253,114 @@ def plan_shots(
     caller then falls back to the weight path rather than guessing.
     """
     sentences = shotlist.get("sentences") or []
-    plan: dict[int, list[tuple[str, float]]] = {}
-    current_panel: str | None = None
-    pending_lead = 0.0
-
     by_beat: dict[int, list[dict[str, Any]]] = {}
     for sent in sentences:
         by_beat.setdefault(int(sent["beat_id"]), []).append(sent)
 
+    # Identity check + global (sentence, beat, seconds, claimed panels) sequence.
+    flat: list[dict[str, Any]] = []
     for beat_id, beat_sents in by_beat.items():
         segs = segments_by_beat.get(beat_id)
         if not segs or len(segs) != len(beat_sents):
             return None  # identity broken — do not guess
-        shots: list[tuple[str, float]] = []
         for sent, seg in zip(beat_sents, segs):
-            seconds = max(float(seg.get("seconds", 0.0)), 0.0)
-            panels = [p for p in sent.get("panels") or []]
-            if not panels:
-                if shots:
-                    pid, acc = shots[-1]
-                    shots[-1] = (pid, acc + seconds)
-                elif current_panel is not None:
-                    shots.append((current_panel, seconds))
-                else:
-                    pending_lead += seconds
+            flat.append(
+                {
+                    "beat_id": beat_id,
+                    "seconds": max(float(seg.get("seconds", 0.0)), 0.0),
+                    "panels": list(sent.get("panels") or []),
+                }
+            )
+
+    # Bounded fill: rewrite each unclaimed RUN's panels from the reading-order gap
+    # between its surrounding anchors.
+    if panel_order:
+        pos = {pid: i for i, pid in enumerate(panel_order)}
+        claimed = {pid for item in flat for pid in item["panels"]}
+        i = 0
+        while i < len(flat):
+            if flat[i]["panels"]:
+                i += 1
                 continue
-            share = seconds / len(panels)
-            for pid in panels:
-                if pending_lead:
-                    share_first = share + pending_lead
-                    pending_lead = 0.0
-                    shots.append((pid, share_first))
-                else:
-                    shots.append((pid, share))
-                current_panel = pid
+            j = i
+            while j < len(flat) and not flat[j]["panels"]:
+                j += 1
+            prev_anchor = next(
+                (p for k in range(i - 1, -1, -1) for p in reversed(flat[k]["panels"]) if p in pos),
+                None,
+            )
+            next_anchor = next(
+                (p for k in range(j, len(flat)) for p in flat[k]["panels"] if p in pos),
+                None,
+            )
+            if prev_anchor is not None and next_anchor is not None:
+                lo, hi = pos[prev_anchor], pos[next_anchor]
+                gap = [
+                    pid
+                    for pid in panel_order[lo + 1 : hi]
+                    if pid not in claimed
+                ]
+                if gap:
+                    assigned = _fill_run_panels(
+                        j - i, gap, [flat[k]["seconds"] for k in range(i, j)], floor
+                    )
+                    for offset, panels in enumerate(assigned):
+                        flat[i + offset]["panels"] = panels
+            i = j
+
+    # Sentences -> raw shots: (panel, seconds, accent).
+    plan: dict[int, list[tuple[str, float]]] = {}
+    current_panel: str | None = None
+    pending_lead = 0.0
+    shots_by_beat: dict[int, list[list[Any]]] = {}
+    for item in flat:
+        beat_id = item["beat_id"]
+        shots = shots_by_beat.setdefault(beat_id, [])
+        seconds = item["seconds"]
+        panels = item["panels"]
+        if not panels:
+            if shots:
+                shots[-1][1] += seconds
+            elif current_panel is not None:
+                shots.append([current_panel, seconds, False])
+            else:
+                pending_lead += seconds
+            continue
+        share = seconds / len(panels)
+        accent = len(panels) > 1
+        for pid in panels:
+            if pending_lead:
+                shots.append([pid, share + pending_lead, accent])
+                pending_lead = 0.0
+            else:
+                shots.append([pid, share, accent])
+            current_panel = pid
+
+    for beat_id, shots in shots_by_beat.items():
         # Coalesce, preserving total seconds exactly. Two passes, each trivially
-        # checkable: fold consecutive runs of the same panel, then absorb any shot
-        # still under the floor into its neighbour.
+        # checkable: fold consecutive runs of the same panel, then absorb any
+        # non-accent shot still under the floor into its neighbour. Accent shots keep
+        # their cut down to `accent_floor` — deleting them is how the pipeline ended
+        # up with zero shots under 1.5s against the reference's 22%.
         folded: list[list[Any]] = []
-        for pid, sec in shots:
+        for pid, sec, accent in shots:
             if folded and folded[-1][0] == pid:
                 folded[-1][1] += sec
+                folded[-1][2] = folded[-1][2] or accent
             else:
-                folded.append([pid, sec])
+                folded.append([pid, sec, accent])
 
         merged: list[list[Any]] = []
-        for pid, sec in folded:
-            if sec < floor and merged:
+        for pid, sec, accent in folded:
+            limit = accent_floor if accent else floor
+            if sec < limit and merged:
                 merged[-1][1] += sec          # too short: extend the previous shot
             else:
-                merged.append([pid, sec])
-        if len(merged) > 1 and merged[0][1] < floor:
+                merged.append([pid, sec, accent])
+        if len(merged) > 1 and merged[0][1] < (accent_floor if merged[0][2] else floor):
             merged[1][1] += merged[0][1]      # a short FIRST shot has no previous
             merged = merged[1:]
-        merged = [(pid, sec) for pid, sec in merged]
 
         if merged:
-            plan[beat_id] = merged
+            plan[beat_id] = [(pid, sec) for pid, sec, _accent in merged]
     return plan or None
