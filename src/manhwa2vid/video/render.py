@@ -62,12 +62,14 @@ def _render_panel_clip(
     title: str,
     show_badge: bool,
     upscale_map: dict[str, Path] | None = None,
+    num_frames: int | None = None,
 ) -> Path:
     panel_path = project_root / entry.panel_path
     upscaled = upscale_map.get(panel_path.name) if upscale_map else None
     if upscaled is not None:
         panel_path = upscaled
-    num_frames = max(int(entry.duration * fps), 1)
+    if num_frames is None:
+        num_frames = max(int(entry.duration * fps), 1)
     # Named by TIMELINE POSITION, not panel id. A panel may legitimately appear more
     # than once — a cold open replays a late moment, and a callback re-shows it — and
     # keying the clip on panel_id alone meant the second render OVERWROTE the first
@@ -105,8 +107,6 @@ def _render_panel_clip(
             "libx264",
             "-pix_fmt",
             "yuv420p",
-            "-t",
-            str(entry.duration),
             str(clip_path),
         ]
     )
@@ -380,6 +380,12 @@ def render_video(
         frames_dir.mkdir()
         clips: list[Path] = []
 
+        # Frame accounting is CUMULATIVE: int(duration*fps) per entry truncates up to
+        # one frame each, and across 252 shots that quietly shortened the video ~4s
+        # while the narration stayed full length — a progressive A/V desync that grew
+        # toward the end of every render (measured 2.0s short on a 128-shot cut).
+        acc_time = 0.0
+        acc_frames = 0
         with Progress() as progress:
             task = progress.add_task("Rendering panels", total=len(timeline.entries))
             for i, entry in enumerate(timeline.entries):
@@ -392,6 +398,10 @@ def render_video(
                         image_path=entry.panel_path,
                     )
                 show_badge = i == 0
+                acc_time += entry.duration
+                target_frames = round(acc_time * fps)
+                num_frames = max(target_frames - acc_frames, 1)
+                acc_frames += num_frames
                 clip = _render_panel_clip(
                     entry,
                     panel,
@@ -406,6 +416,7 @@ def render_video(
                     meta.title,
                     show_badge,
                     upscale_map,
+                    num_frames=num_frames,
                 )
                 clips.append(clip)
                 progress.advance(task)

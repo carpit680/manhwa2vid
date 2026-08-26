@@ -72,3 +72,20 @@ def test_preview_cache_hit_refused_when_timeline_is_newer(tmp_path) -> None:
     # fresh preview -> valid hit
     os.utime(preview, (3000, 3000))
     assert preview.stat().st_mtime >= timeline.stat().st_mtime
+
+
+def test_cumulative_frame_accounting_matches_audio_length() -> None:
+    """int(duration*fps) per entry truncated up to a frame each — 252 shots quietly
+    shortened a render ~4s against its narration, a progressive A/V desync."""
+    fps = 30
+    durations = [0.345] * 300  # every entry carries 0.35 of a frame at 30fps
+    acc_time = 0.0
+    acc_frames = 0
+    for d in durations:
+        acc_time += d
+        target = round(acc_time * fps)
+        acc_frames += max(target - acc_frames, 1)
+    total = sum(durations)
+    assert abs(acc_frames / fps - total) < 1.0 / fps, "cumulative accounting stays exact"
+    truncated = sum(max(int(d * fps), 1) for d in durations)
+    assert total - truncated / fps > 2.0, "the old rule really did lose seconds"
