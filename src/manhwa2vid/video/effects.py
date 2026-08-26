@@ -7,6 +7,8 @@ import random
 from pathlib import Path
 from typing import Any
 
+import cv2
+import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from manhwa2vid.config import get_nested
@@ -191,6 +193,205 @@ def render_ken_burns_frames(
     return frames
 
 
+# --- fill-frame camera ---------------------------------------------------------------
+#
+# The camera lives INSIDE the panel: every shot is a 16:9 window over the art, chosen by
+# salience, panned in reading order. Decision measured and taken with the user
+# (2026-08-26 audit): fitting whole panels left 51-52% of runtime-weighted screen area
+# as blurred bars — SL spends 89% of its runtime on panels taller than the frame.
+
+
+def _bubble_boxes(gray: np.ndarray) -> list[tuple[int, int, int, int]]:
+    """Solid near-white blobs — speech bubbles and captions.
+
+    Same detector the audit used to count bubble-dominant frames: brightness > 232,
+    closed, components that are big enough and mostly filled. Boxes are used two ways:
+    to down-weight bubbles in salience (art outranks text) and to keep a resting frame
+    from slicing a bubble at the frame edge (46% of audited frames had clipped text).
+    """
+    bright = (gray > 232).astype(np.uint8)
+    bright = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    count, _lbl, stats, _c = cv2.connectedComponentsWithStats(bright, 8)
+    h, w = gray.shape[:2]
+    boxes = []
+    for i in range(1, count):
+        x, y, bw, bh, area = (int(v) for v in stats[i])
+        if area < 0.01 * h * w:
+            continue
+        if area / max(bw * bh, 1) < 0.45:
+            continue
+        boxes.append((x, y, bw, bh))
+    return boxes
+
+
+def _salience(gray: np.ndarray, bubbles: list[tuple[int, int, int, int]], *, bubble_weight: float = 0.15) -> np.ndarray:
+    """Where the art is: local gradient energy, bubbles down-weighted.
+
+    Flat background scores zero by construction; a bubble is full of high-contrast text
+    edges, which is exactly why raw gradient energy loved them — hence the explicit
+    down-weight rather than a smarter operator.
+    """
+    g = gray.astype(np.float32)
+    energy = np.zeros_like(g)
+    energy[:, :-1] += np.abs(np.diff(g, axis=1))
+    energy[:-1, :] += np.abs(np.diff(g, axis=0))
+    energy = cv2.blur(energy, (15, 15))
+    for x, y, w, h in bubbles:
+        energy[y : y + h, x : x + w] *= bubble_weight
+    return energy
+
+
+def _window_geometry(pw: int, ph: int, frame_w: int, frame_h: int) -> tuple[int, int, str, int]:
+    """Largest frame-shaped window inside the panel: (win_w, win_h, free_axis, span)."""
+    ar = frame_w / frame_h
+    win_w = min(pw, int(round(ph * ar)))
+    win_h = min(ph, int(round(win_w / ar)))
+    win_w = min(pw, int(round(win_h * ar)))
+    if ph - win_h >= pw - win_w:
+        return win_w, win_h, "y", ph - win_h
+    return win_w, win_h, "x", pw - win_w
+
+
+def _offset_profile(sal: np.ndarray, axis: str, win_len: int) -> np.ndarray:
+    """Total salience captured by the window at each offset along the free axis."""
+    line = sal.sum(axis=1) if axis == "y" else sal.sum(axis=0)
+    span = len(line) - win_len
+    if span <= 0:
+        return np.array([line.sum()])
+    csum = np.concatenate([[0.0], np.cumsum(line)])
+    return csum[win_len:] - csum[:-win_len]
+
+
+def _snap_offset(
+    offset: int,
+    win_len: int,
+    bubbles: list[tuple[int, int, int, int]],
+    axis: str,
+    max_offset: int,
+) -> int:
+    """Nudge a resting offset so no bubble is sliced by the window edge.
+
+    Tries small shifts either side; a bubble must end up fully inside or fully outside.
+    If no clean position exists within the search range the original offset stands —
+    a clipped bubble beats losing the salient art entirely.
+    """
+    def clips(o: int) -> bool:
+        lo, hi = o, o + win_len
+        for bx, by, bw, bh in bubbles:
+            b0 = by if axis == "y" else bx
+            b1 = b0 + (bh if axis == "y" else bw)
+            if b0 < lo < b1 or b0 < hi < b1:
+                return True
+        return False
+
+    if not clips(offset):
+        return offset
+    reach = max(4, int(win_len * 0.15))
+    for delta in range(1, reach):
+        for cand in (offset - delta, offset + delta):
+            if 0 <= cand <= max_offset and not clips(cand):
+                return cand
+    return offset
+
+
+def render_fill_frame_frames(
+    panel_path: Path,
+    width: int,
+    height: int,
+    num_frames: int,
+    config: dict[str, Any],
+    *,
+    seed: str = "",
+) -> list[Image.Image]:
+    """Salience-framed fill-frame camera: static, pan, or pan-with-reframe-cut.
+
+    - The window is the largest 16:9 rect inside the panel; the free axis is walked in
+      reading order (down, or left-to-right), speed-capped like the scroll path.
+    - Resting frames snap so bubbles are never edge-clipped.
+    - A dwell over `video.max_dwell_seconds` becomes TWO shots on the same panel — a
+      hard mid-cut to a later segment (or a closer window when there is nowhere left to
+      go). This replaces the audit's 14-18s frozen holds without touching the timeline:
+      frame count, and therefore A/V lock, is unchanged.
+    """
+    fps = int(get_nested(config, "video", "fps", default=30))
+    max_px_per_sec = float(get_nested(config, "video", "max_scroll_px_per_sec", default=600.0))
+    max_dwell = float(get_nested(config, "video", "max_dwell_seconds", default=7.0))
+    bubble_weight = float(get_nested(config, "video", "bubble_salience_weight", default=0.15))
+
+    panel = crop_to_content(Image.open(panel_path).convert("RGB"))
+    arr = np.asarray(panel)
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    bubbles = _bubble_boxes(gray)
+    sal = _salience(gray, bubbles, bubble_weight=bubble_weight)
+
+    win_w, win_h, axis, span = _window_geometry(panel.width, panel.height, width, height)
+    profile = _offset_profile(sal, axis, win_h if axis == "y" else win_w)
+    win_len = win_h if axis == "y" else win_w
+    max_offset = max(0, span)
+
+    duration = num_frames / max(fps, 1)
+    travel_cap = int(max_px_per_sec * duration)
+
+    # Choose the traversal segment(s). Reading order is forward-only on the free axis.
+    legs: list[tuple[int, int]] = []  # (start_offset, end_offset)
+    if span <= max(8, int(0.08 * win_len)):
+        best = int(np.argmax(profile))
+        best = _snap_offset(best, win_len, bubbles, axis, max_offset)
+        legs = [(best, best)]
+    else:
+        travel = min(span, travel_cap)
+        if travel < span:
+            # Cannot cover the whole panel at a readable speed: pick the segment of
+            # length travel+win_len that captures the most salience.
+            seg = np.concatenate([[0.0], np.cumsum(profile)])
+            n = len(profile) - travel
+            start = int(np.argmax(seg[travel:] - seg[:-travel])) if n > 0 else 0
+        else:
+            start = 0
+        start = _snap_offset(start, win_len, bubbles, axis, max_offset)
+        end = _snap_offset(min(start + travel, max_offset), win_len, bubbles, axis, max_offset)
+        legs = [(start, max(start, end))]
+
+    # Re-frame cut for long dwells: split into two forward legs, or push in closer.
+    zoom_in_leg = False
+    if duration > max_dwell and num_frames >= 2 * fps:
+        (start, end) = legs[0]
+        mid = (start + end) // 2
+        jump = mid + win_len // 2
+        if jump < end:
+            # Enough travel left after the midpoint for a real cut: jump half a window
+            # forward so the second shot opens on visibly new content.
+            legs = [(start, mid), (jump, end)]
+        else:
+            legs = [(start, end), (end, end)]
+            zoom_in_leg = True
+
+    z0, z1 = ken_burns_params(seed or str(panel_path))
+    frames: list[Image.Image] = []
+    per_leg = [num_frames // len(legs)] * len(legs)
+    per_leg[-1] += num_frames - sum(per_leg)
+    for leg_idx, ((o0, o1), leg_frames) in enumerate(zip(legs, per_leg)):
+        closer = zoom_in_leg and leg_idx == len(legs) - 1
+        for i in range(leg_frames):
+            t = i / max(leg_frames - 1, 1)
+            offset = o0 + (o1 - o0) * cosine_ease(t)
+            zoom = z0 + (z1 - z0) * t
+            if closer:
+                zoom = 1.30 + 0.05 * t  # push-in accent on the same window
+            cw, ch = win_w / zoom, win_h / zoom
+            if axis == "y":
+                cx = panel.width / 2.0
+                cy = offset + win_h / 2.0
+            else:
+                cx = offset + win_w / 2.0
+                cy = panel.height / 2.0
+            left = max(0.0, min(panel.width - cw, cx - cw / 2.0))
+            top = max(0.0, min(panel.height - ch, cy - ch / 2.0))
+            crop = panel.crop((int(left), int(top), int(left + cw), int(top + ch)))
+            frames.append(crop.resize((width, height), Image.Resampling.LANCZOS))
+    return frames
+
+
 def render_panel_motion_frames(
     panel_path: Path,
     panel: Panel,
@@ -202,7 +403,8 @@ def render_panel_motion_frames(
     seed_salt: int | None = None,
 ) -> list[Image.Image]:
     mode = choose_camera_mode(panel, config)
-    if mode == "scroll":
+    if mode == "scroll" and panel.split_method == "strip":
+        # A genuine continuous strip: the classic full-width crawl reads best.
         return render_vertical_scroll_frames(panel_path, width, height, num_frames, config)
 
     # `seed_salt` is the panel's position in the timeline, so a panel shown twice gets
@@ -210,10 +412,25 @@ def render_panel_motion_frames(
     # glitch. Omitted (None) keeps the original panel-id-only seed, so existing
     # single-appearance renders are unchanged.
     seed = panel.id if seed_salt is None else f"{panel.id}:{seed_salt}"
-    z0, z1 = ken_burns_params(seed)
-    base = letterbox_panel(panel_path, width, height)
-    return render_ken_burns_frames(
-        base, num_frames, z0, z1, config, width=width, height=height
+
+    # Fill-frame guard: a panel so small that filling the frame would over-magnify it
+    # falls back to the whole-panel letterbox (blur bars) rather than a soft smear.
+    max_fill_zoom = float(get_nested(config, "video", "max_fill_zoom", default=3.2))
+    try:
+        with Image.open(panel_path) as probe:
+            pw, ph = probe.size
+    except OSError:
+        pw, ph = panel.bbox.width, panel.bbox.height
+    win_w, _win_h, _axis, _span = _window_geometry(max(pw, 1), max(ph, 1), width, height)
+    if width / max(win_w, 1) > max_fill_zoom:
+        z0, z1 = ken_burns_params(seed)
+        base = letterbox_panel(panel_path, width, height)
+        return render_ken_burns_frames(
+            base, num_frames, z0, z1, config, width=width, height=height
+        )
+
+    return render_fill_frame_frames(
+        panel_path, width, height, num_frames, config, seed=seed
     )
 
 

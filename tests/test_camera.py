@@ -251,3 +251,113 @@ def test_multi_sentence_kokoro_chunks_are_subdivided():
     assert weights is not None, "a single multi-sentence chunk must still produce weights"
     assert len(set(round(w, 2) for w in weights)) > 1
     assert abs(sum(weights) - 10.0) < 1e-6
+
+
+# --- fill-frame camera (2026-08-26: whole-panel fitting wasted half the screen) -------
+
+def _art_panel(tmp_path: Path, w: int, h: int, name: str = "panel.png") -> Path:
+    import numpy as np
+    from PIL import Image as PILImage
+
+    rng = np.random.default_rng(7)
+    arr = rng.integers(60, 200, (h, w, 3), dtype=np.uint8)
+    p = tmp_path / name
+    PILImage.fromarray(arr).save(p)
+    return p
+
+
+def test_fill_frame_fills_the_frame_exactly(tmp_path: Path) -> None:
+    from manhwa2vid.video.effects import render_fill_frame_frames
+
+    p = _art_panel(tmp_path, 720, 1600)
+    frames = render_fill_frame_frames(p, 480, 270, 60, {}, seed="t")
+    assert len(frames) == 60
+    assert all(f.size == (480, 270) for f in frames)
+
+
+def test_fill_frame_tall_panel_pans_downward(tmp_path: Path) -> None:
+    """A tall panel's first and last frames show different content, and the pan runs
+    in reading order (top first)."""
+    import numpy as np
+    from PIL import Image as PILImage
+    from manhwa2vid.video.effects import render_fill_frame_frames
+
+    arr = np.zeros((1600, 720, 3), dtype=np.uint8)
+    arr[:800] = (200, 60, 60)    # top half red-ish
+    arr[800:] = (60, 60, 200)    # bottom half blue-ish
+    rng = np.random.default_rng(3)
+    arr = np.clip(arr.astype(int) + rng.integers(-40, 40, arr.shape), 0, 255).astype(np.uint8)
+    p = tmp_path / "tall.png"
+    PILImage.fromarray(arr).save(p)
+
+    frames = render_fill_frame_frames(p, 480, 270, 120, {}, seed="t")
+    first = np.asarray(frames[0]).astype(float)
+    last = np.asarray(frames[-1]).astype(float)
+    assert first[..., 0].mean() > first[..., 2].mean(), "starts at the TOP (red)"
+    assert last[..., 2].mean() > last[..., 0].mean(), "ends toward the BOTTOM (blue)"
+
+
+def test_fill_frame_long_dwell_gets_a_reframe_cut(tmp_path: Path) -> None:
+    """A dwell over video.max_dwell_seconds becomes two shots — a hard discontinuity —
+    instead of the audit's 14-18s frozen holds."""
+    import numpy as np
+    from PIL import Image as PILImage
+    from manhwa2vid.video.effects import render_fill_frame_frames
+
+    # Structured art (smooth bands), NOT noise: noise decorrelates adjacent frames so a
+    # pan step and a hard cut measure the same. Real art is locally smooth.
+    y = np.arange(2400)[:, None]
+    x = np.arange(720)[None, :]
+    arr = np.stack(
+        [
+            128 + 100 * np.sin(y / 90.0 + x / 240.0),
+            128 + 100 * np.sin(y / 55.0) + 0.0 * x,
+            128 + 100 * np.cos(y / 130.0 - x / 180.0),
+        ],
+        axis=-1,
+    ).clip(0, 255).astype(np.uint8)
+    p = tmp_path / "bands.png"
+    PILImage.fromarray(arr).save(p)
+    config = {"video": {"fps": 30, "max_dwell_seconds": 4.0}}
+    frames = render_fill_frame_frames(p, 480, 270, 300, config, seed="t")  # 10s
+    diffs = [
+        float(np.abs(np.asarray(a, dtype=float) - np.asarray(b, dtype=float)).mean())
+        for a, b in zip(frames, frames[1:])
+    ]
+    peak = max(diffs)
+    typical = sorted(diffs)[len(diffs) // 2]
+    assert peak > max(6.0, 4 * typical), "no visible re-frame cut found in a long dwell"
+
+
+def test_fill_frame_resting_frame_does_not_clip_a_bubble(tmp_path: Path) -> None:
+    import numpy as np
+    from PIL import Image as PILImage
+    from manhwa2vid.video.effects import _bubble_boxes, _snap_offset
+
+    # bubble occupying rows 500-700 of a 720x1600 panel
+    arr = np.random.default_rng(5).integers(60, 200, (1600, 720, 3), dtype=np.uint8)
+    arr[500:700, 100:500] = 250
+    gray = np.asarray(PILImage.fromarray(arr).convert("L"))
+    bubbles = _bubble_boxes(gray)
+    assert bubbles, "fixture bubble must be detected"
+    # a 405-tall window resting at offset 400 would slice the bubble at row 500+405=805? no:
+    # window [400, 805) contains rows 500-700 fully -> ok; offset 550 slices it.
+    snapped = _snap_offset(550, 405, bubbles, "y", 1195)
+    lo, hi = snapped, snapped + 405
+    bx, by, bw, bh = bubbles[0]
+    assert not (by < lo < by + bh or by < hi < by + bh), "bubble still edge-clipped"
+
+
+def test_tiny_panel_falls_back_to_letterbox(tmp_path: Path) -> None:
+    """A panel too small to fill the frame legibly letterboxes instead of smearing."""
+    from manhwa2vid.models import Panel, PanelBBox
+    from manhwa2vid.video.effects import render_panel_motion_frames
+
+    p = _art_panel(tmp_path, 200, 150, "tiny.png")
+    panel = Panel(
+        id="p0001_01", page_num=1,
+        bbox=PanelBBox(x=0, y=0, width=200, height=150),
+        image_path=str(p),
+    )
+    frames = render_panel_motion_frames(p, panel, 960, 540, 30, {})
+    assert len(frames) == 30 and frames[0].size == (960, 540)

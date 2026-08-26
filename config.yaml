@@ -360,6 +360,12 @@ video:
   # Hard ceiling on vertical scroll speed in output pixels/sec. Comfortable reading is
   # 200-400; above ~1000 a tall strip becomes an unreadable smear. 0 disables the cap.
   max_scroll_px_per_sec: 600
+  # Fill-frame camera (2026-08-26 decision): the camera is a 16:9 window INSIDE the
+  # panel, panned in reading order — whole-panel letterboxing wasted 51-52% of the
+  # screen as blur bars across both audited videos.
+  max_fill_zoom: 3.2        # frame_w / window_w beyond this -> letterbox fallback
+  max_dwell_seconds: 7.0    # longer shots get a mid re-frame cut on the same panel
+  bubble_salience_weight: 0.15  # gradient energy inside bubble boxes is scaled by this
   ken_burns_pan_amount: 0.02
   strip_scroll_aspect: 2.0
 
