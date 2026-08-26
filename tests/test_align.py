@@ -285,3 +285,33 @@ def test_time_block_clamp_never_strands_a_paragraph():
     out = clamp_to_time_blocks([ordered[0:4], ordered[0:2]], paras, ordered, ["p0001_05"])
     assert out[1], "a clamped paragraph must fall back to its own block, not vanish"
     assert all(p >= "p0001_05" for p in out[1])
+
+
+def test_clamped_paragraph_falls_back_to_the_end_it_overran():
+    """A beat narrating the fight's AFTERMATH, whose panels sat just past the boundary,
+    was sent back to the chapter's opening panels and replayed page one mid-scene.
+    Falling back to the block's head is only right when the paragraph undershot."""
+    from manhwa2vid.script.align import clamp_to_time_blocks
+
+    ordered = [f"p0005_{i:02d}" for i in range(1, 15)] + [f"p0006_{i:02d}" for i in range(1, 5)]
+    paras = [
+        "The queen stands tall.",
+        "The Frost Queen crumbles into nothing.",
+        "Seventy-six hours earlier, the team stands at the stairs.",
+    ]
+    out = clamp_to_time_blocks(
+        [ordered[0:12], ordered[14:17], ordered[15:18]], paras, ordered, ["p0005_14"]
+    )
+    assert out[1][0] in ("p0005_11", "p0005_12", "p0005_13"), out[1][:2]
+    assert not out[1][0].startswith("p0005_01"), "must not replay the opening"
+
+
+def test_jump_paragraph_opens_on_the_caption_panel():
+    """The chapter's own "76 HOURS AGO" panel should be the image that announces the
+    jump — otherwise it is the one panel nobody ever shows."""
+    from manhwa2vid.script.align import clamp_to_time_blocks
+
+    ordered = [f"p0005_{i:02d}" for i in range(1, 15)] + [f"p0006_{i:02d}" for i in range(1, 5)]
+    paras = ["The queen stands tall.", "Seventy-six hours earlier, the team stands."]
+    out = clamp_to_time_blocks([ordered[0:12], ordered[15:18]], paras, ordered, ["p0005_14"])
+    assert out[1][0] == "p0005_14"

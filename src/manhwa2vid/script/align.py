@@ -192,12 +192,31 @@ def clamp_to_time_blocks(
             current += 1
         block_of.append(current)
 
+    # A paragraph that announces a jump should open ON the caption that prints it —
+    # otherwise the chapter's own "76 HOURS AGO" panel is the one image nobody shows.
+    boundary_at = {ordered_ids.index(b): b for b in boundary_ids if b in ordered_ids}
+    first_para_of_block: dict[int, int] = {}
+    for i, block_idx in enumerate(block_of):
+        first_para_of_block.setdefault(block_idx, i)
+
     out: list[list[str]] = []
     for pids, block_idx in zip(panel_lists, block_of):
         lo, hi = blocks[block_idx]
         kept = [pid for pid in pids if lo <= index_of.get(pid, -1) < hi]
-        # Never strand a paragraph with nothing: fall back to the head of its block.
-        out.append(kept or ordered_ids[lo:hi][: max(1, len(pids))])
+        if not kept:
+            # Everything fell outside the block. Fall back to the END the paragraph
+            # overran, not to the block's head: a beat narrating the fight's aftermath
+            # whose panels sat past the boundary was sent back to the chapter's opening
+            # and replayed page one mid-scene.
+            want = max(1, len(pids))
+            positions = [index_of[pid] for pid in pids if pid in index_of]
+            overran_end = bool(positions) and min(positions) >= hi
+            block = ordered_ids[lo:hi]
+            kept = block[-want:] if overran_end else block[:want]
+        caption = boundary_at.get(lo)
+        if caption and first_para_of_block.get(block_idx) == len(out) and caption not in kept:
+            kept = [caption, *kept]
+        out.append(kept)
     return out
 
 
