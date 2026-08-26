@@ -275,26 +275,71 @@ def test_fill_frame_fills_the_frame_exactly(tmp_path: Path) -> None:
     assert all(f.size == (480, 270) for f in frames)
 
 
-def test_fill_frame_tall_panel_pans_downward(tmp_path: Path) -> None:
-    """A tall panel's first and last frames show different content, and the pan runs
-    in reading order (top first)."""
+def test_fill_frame_drifts_it_does_not_traverse(tmp_path: Path) -> None:
+    """The camera DRIFTS a capped amount; it never scrolls down a tall panel.
+
+    Measured on the reference channel's own edit: 0% of its shots travel more than 0.25
+    frame-heights (p90 0.201). The first fill-frame camera panned on 93% of shots, 47%
+    of them past 0.25 — the user's report was that the whole video read as scrolling.
+    """
     import numpy as np
     from PIL import Image as PILImage
     from manhwa2vid.video.effects import render_fill_frame_frames
 
-    arr = np.zeros((1600, 720, 3), dtype=np.uint8)
-    arr[:800] = (200, 60, 60)    # top half red-ish
-    arr[800:] = (60, 60, 200)    # bottom half blue-ish
-    rng = np.random.default_rng(3)
-    arr = np.clip(arr.astype(int) + rng.integers(-40, 40, arr.shape), 0, 255).astype(np.uint8)
-    p = tmp_path / "tall.png"
+    y = np.arange(3000)[:, None]
+    x = np.arange(720)[None, :]
+    arr = np.stack(
+        [
+            128 + 100 * np.sin(y / 90.0 + x / 240.0),
+            128 + 100 * np.sin(y / 55.0) + 0.0 * x,
+            128 + 100 * np.cos(y / 130.0 - x / 180.0),
+        ],
+        axis=-1,
+    ).clip(0, 255).astype(np.uint8)
+    p = tmp_path / "verytall.png"
     PILImage.fromarray(arr).save(p)
 
-    frames = render_fill_frame_frames(p, 480, 270, 120, {}, seed="t")
-    first = np.asarray(frames[0]).astype(float)
-    last = np.asarray(frames[-1]).astype(float)
-    assert first[..., 0].mean() > first[..., 2].mean(), "starts at the TOP (red)"
-    assert last[..., 2].mean() > last[..., 0].mean(), "ends toward the BOTTOM (blue)"
+    config = {"video": {"fps": 30, "max_pan_frame_fraction": 0.20, "max_dwell_seconds": 99}}
+    frames = render_fill_frame_frames(p, 480, 270, 150, config, seed="t")  # 5s
+    first = np.asarray(frames[0].convert("L")).astype(np.float32)
+    last = np.asarray(frames[-1].convert("L")).astype(np.float32)
+    import cv2
+
+    win = cv2.createHanningWindow((first.shape[1], first.shape[0]), cv2.CV_32F)
+    (_dx, dy), _ = cv2.phaseCorrelate(first, last, win)
+    travel = abs(dy) / first.shape[0]
+    assert travel <= 0.30, f"camera traversed {travel:.2f} frame-heights — that is scrolling"
+
+
+def test_short_shots_hold_still(tmp_path: Path) -> None:
+    """Fast AND moving is the jarring combination: below video.pan_min_seconds a shot
+    does not drift at all."""
+    import numpy as np
+    import cv2
+    from PIL import Image as PILImage
+    from manhwa2vid.video.effects import render_fill_frame_frames
+
+    # Structured bands, not noise: phase correlation needs a trackable peak (measured
+    # response 0.04 on pure noise — the reading is meaningless there).
+    y = np.arange(2400)[:, None]
+    x = np.arange(720)[None, :]
+    arr = np.stack(
+        [
+            128 + 100 * np.sin(y / 90.0 + x / 240.0),
+            128 + 100 * np.sin(y / 55.0) + 0.0 * x,
+            128 + 100 * np.cos(y / 130.0 - x / 180.0),
+        ],
+        axis=-1,
+    ).clip(0, 255).astype(np.uint8)
+    p = tmp_path / "tallbands.png"
+    PILImage.fromarray(arr).save(p)
+    config = {"video": {"fps": 30, "pan_min_seconds": 1.8, "max_dwell_seconds": 99}}
+    frames = render_fill_frame_frames(p, 480, 270, 24, config, seed="t")  # 0.8s
+    a = np.asarray(frames[0].convert("L")).astype(np.float32)
+    b = np.asarray(frames[-1].convert("L")).astype(np.float32)
+    win = cv2.createHanningWindow((a.shape[1], a.shape[0]), cv2.CV_32F)
+    (_dx, dy), _ = cv2.phaseCorrelate(a, b, win)
+    assert abs(dy) / a.shape[0] < 0.05, "a sub-2s shot must not pan"
 
 
 def test_fill_frame_long_dwell_gets_a_reframe_cut(tmp_path: Path) -> None:

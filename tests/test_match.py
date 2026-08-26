@@ -255,3 +255,27 @@ def test_fill_crosses_beat_boundaries():
     plan = plan_shots(shotlist, segs, floor=1.0, panel_order=["p1", "p2", "p3", "p4"])
     shown = [pid for beat in (1, 2) for pid, _ in plan[beat]]
     assert shown == ["p1", "p2", "p3", "p4"], shown
+
+
+def test_accent_bursts_are_capped():
+    """Accent cuts are punctuation, not texture. The reference runs at most 3
+    consecutive sub-1.2s shots (once in 10 minutes); our first cut ran bursts of 6,
+    five times over — the user reported it as jarring."""
+    plan = plan_shots(
+        _sl(*[["p%d" % i] for i in range(1, 11)]),
+        {1: [{"seconds": 0.9}] * 10},
+        floor=0.5,
+        accent_floor=0.4,
+    )
+    durs = [sec for _pid, sec in plan[1]]
+    runs = []
+    cur = 0
+    for d in durs:
+        if d < 1.2:
+            cur += 1
+        else:
+            runs.append(cur)
+            cur = 0
+    runs.append(cur)
+    assert max(runs) <= 3, f"burst of {max(runs)} short shots survived: {durs}"
+    assert abs(sum(durs) - 9.0) < 1e-6, "A/V total preserved through burst merging"

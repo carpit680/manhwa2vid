@@ -361,6 +361,27 @@ def plan_shots(
             merged[1][1] += merged[0][1]      # a short FIRST shot has no previous
             merged = merged[1:]
 
+        # Burst guard: accent cuts are punctuation, not a texture. The reference channel
+        # runs at most 3 consecutive sub-1.2s shots (one such run in 10 minutes); our
+        # first cut of this ran bursts of 6, five times over, which reads as strobing
+        # rather than emphasis. Past `max_burst` in a row, fold pairs together until the
+        # run is legal — seconds are preserved, so A/V lock is untouched.
+        burst_limit = 1.2
+        max_burst = 3
+        i = 0
+        while i < len(merged):
+            j = i
+            while j < len(merged) and merged[j][1] < burst_limit:
+                j += 1
+            run = j - i
+            while run > max_burst:
+                # merge the two shortest adjacent shots inside the run
+                k = min(range(i, i + run - 1), key=lambda x: merged[x][1] + merged[x + 1][1])
+                merged[k][1] += merged[k + 1][1]
+                merged.pop(k + 1)
+                run -= 1
+            i = max(j, i + 1)
+
         if merged:
             plan[beat_id] = [(pid, sec) for pid, sec, _accent in merged]
     return plan or None

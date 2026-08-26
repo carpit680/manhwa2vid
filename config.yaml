@@ -378,6 +378,11 @@ video:
   # panel, panned in reading order — whole-panel letterboxing wasted 51-52% of the
   # screen as blur bars across both audited videos.
   max_fill_zoom: 3.2        # frame_w / window_w beyond this -> letterbox fallback
+  # The camera DRIFTS, it does not traverse. Measured on the reference channel's own
+  # edit: 0% of its shots move more than 0.25 frame-heights, median 0.093, p90 0.201.
+  # Ours panned on 93% of shots (47% over 0.25) and read as one continuous scroll.
+  max_pan_frame_fraction: 0.20  # cap on per-shot travel, as a fraction of the window
+  pan_min_seconds: 1.8          # shorter shots hold still — fast AND moving is jarring
   max_dwell_seconds: 7.0    # longer shots get a mid re-frame cut on the same panel
   bubble_salience_weight: 0.15  # gradient energy inside bubble boxes is scaled by this
   ken_burns_pan_amount: 0.02

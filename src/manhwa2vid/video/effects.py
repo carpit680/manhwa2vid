@@ -28,13 +28,24 @@ def crop_to_content(panel: Image.Image, pad_frac: float = 0.04) -> Image.Image:
     so their art rendered at barely half the size the screen allowed. A 4% pad keeps
     the crop from feeling clinical.
 
+    Background-aware, and that is load-bearing: the first version defined content as
+    `v < 240`, i.e. "anything not white". On a DARK page every pixel satisfies that, so
+    the mask covered the whole image and nothing was ever cropped — 39 of Frozen
+    Player's shown panels kept their black top/bottom bands, and the camera then panned
+    through the emptiness. Same lesson `_find_gutter_rows` and `panels/regions.py`
+    already learned: the background is whatever the border says it is.
+
     Known limit, recorded where the decision is made: this cannot tell art ink from
     speech-bubble ink (no bubble geometry exists — OCR boxes are empty on both real
     projects), so a bubble-heavy panel stays bubble-heavy. Bubble avoidance needs a
     white-blob detector or OCR-with-boxes; separate work.
     """
-    gray = panel.convert("L")
-    mask = gray.point(lambda v: 255 if v < 240 else 0)
+    from manhwa2vid.panels.regions import background_level
+
+    arr = np.asarray(panel.convert("L"))
+    bg = background_level(arr)
+    mask_arr = (np.abs(arr.astype(np.int16) - int(bg)) > 18).astype(np.uint8) * 255
+    mask = Image.fromarray(mask_arr, mode="L")
     box = mask.getbbox()
     if box is None:
         return panel
@@ -330,38 +341,50 @@ def render_fill_frame_frames(
     max_offset = max(0, span)
 
     duration = num_frames / max(fps, 1)
-    travel_cap = int(max_px_per_sec * duration)
 
-    # Choose the traversal segment(s). Reading order is forward-only on the free axis.
+    # The camera DRIFTS; it does not traverse. Measured against the reference channel's
+    # own edit (per-shot phase correlation, 2026-08-26): it never moves more than 0.25
+    # frame-heights within a shot — 0% of its shots exceed that, median 0.093, p90
+    # 0.201 — and half its shots are effectively static, the motion being zoom. Our
+    # previous rule panned whenever the panel was taller than 16:9, which is nearly
+    # always: 93% of shots panned, 47% by more than 0.25 frame-heights (median 0.228),
+    # and the video read as one long scroll. Travel is now capped at a fraction of the
+    # WINDOW, so tall panels are covered by CUTTING to another window, never by sliding.
+    max_pan_frac = float(get_nested(config, "video", "max_pan_frame_fraction", default=0.20))
+    pan_min_seconds = float(get_nested(config, "video", "pan_min_seconds", default=1.8))
+    travel_cap = int(min(max_px_per_sec * duration, max_pan_frac * win_len))
+    if duration < pan_min_seconds:
+        travel_cap = 0  # a short shot that also moves is the jarring combination
+
+    # Anchor on the most salient window, then allow a small drift around it.
     legs: list[tuple[int, int]] = []  # (start_offset, end_offset)
-    if span <= max(8, int(0.08 * win_len)):
-        best = int(np.argmax(profile))
-        best = _snap_offset(best, win_len, bubbles, axis, max_offset)
-        legs = [(best, best)]
+    anchor = int(np.argmax(profile)) if len(profile) > 1 else 0
+    anchor = _snap_offset(anchor, win_len, bubbles, axis, max_offset)
+    if span <= max(8, int(0.08 * win_len)) or travel_cap <= 0:
+        legs = [(anchor, anchor)]
     else:
-        travel = min(span, travel_cap)
-        if travel < span:
-            # Cannot cover the whole panel at a readable speed: pick the segment of
-            # length travel+win_len that captures the most salience.
-            seg = np.concatenate([[0.0], np.cumsum(profile)])
-            n = len(profile) - travel
-            start = int(np.argmax(seg[travel:] - seg[:-travel])) if n > 0 else 0
-        else:
-            start = 0
-        start = _snap_offset(start, win_len, bubbles, axis, max_offset)
-        end = _snap_offset(min(start + travel, max_offset), win_len, bubbles, axis, max_offset)
+        # Drift forward from the anchor (reading order), staying inside the panel.
+        start = max(0, min(anchor, max_offset))
+        end = _snap_offset(min(start + travel_cap, max_offset), win_len, bubbles, axis, max_offset)
         legs = [(start, max(start, end))]
 
-    # Re-frame cut for long dwells: split into two forward legs, or push in closer.
+    # Re-frame CUT for long dwells. With drift capped, this is now how a tall panel's
+    # other content reaches the screen: jump to the best salient window at least one
+    # window away from the anchor — a hard cut, the way the reference channel covers a
+    # tall page. Only when no such window exists does the shot push in on itself.
     zoom_in_leg = False
     if duration > max_dwell and num_frames >= 2 * fps:
-        (start, end) = legs[0]
-        mid = (start + end) // 2
-        jump = mid + win_len // 2
-        if jump < end:
-            # Enough travel left after the midpoint for a real cut: jump half a window
-            # forward so the second shot opens on visibly new content.
-            legs = [(start, mid), (jump, end)]
+        start, end = legs[0]
+        far = [
+            off
+            for off in range(0, max_offset + 1, max(1, win_len // 4))
+            if abs(off - anchor) >= win_len * 0.75
+        ]
+        if far:
+            second = max(far, key=lambda off: profile[min(off, len(profile) - 1)])
+            second = _snap_offset(second, win_len, bubbles, axis, max_offset)
+            drift = min(travel_cap, max_offset - second)
+            legs = [(start, end), (second, second + max(0, drift))]
         else:
             legs = [(start, end), (end, end)]
             zoom_in_leg = True
