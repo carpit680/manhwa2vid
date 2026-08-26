@@ -378,3 +378,25 @@ def test_oversubscribed_block_degrades_evenly():
     )
     assert sum(len(o) for o in out) == 6
     assert max(len(o) for o in out) - min(len(o) for o in out) <= 1
+
+
+def test_no_paragraph_can_swallow_a_block():
+    """Solo Leveling: a 33-word beat was handed 170 panels because it sat last before a
+    time boundary, and the panel budget then threw 166 of them away — while a 69-word
+    beat two along got two panels and froze for 9.2 seconds."""
+    from manhwa2vid.script.align import distribute_within_blocks
+
+    ordered = [f"p{p:04d}_{i:02d}" for p in range(1, 21) for i in range(1, 11)]  # 200
+    mins = {1: 6, 2: 5, 3: 8, 4: 3, 5: 7, 6: 4, 7: 6, 8: 2}
+    lists = [ordered[i * 10 : (i + 1) * 10] for i in range(8)]
+    out = distribute_within_blocks(lists, ordered, [0] * 8, [(0, 200)], mins)
+
+    counts = [len(o) for o in out]
+    assert sum(counts) == 200 and len({q for o in out for q in o}) == 200
+    assert max(counts) <= 4 * min(counts), f"one paragraph swallowed the block: {counts}"
+    # Allocation tracks airtime: the 8-unit paragraph outranks the 3-unit one.
+    assert counts[2] > counts[3]
+    # Every run stays in reading order after leftovers are handed out.
+    idx = {pid: i for i, pid in enumerate(ordered)}
+    for run in out:
+        assert [idx[q] for q in run] == sorted(idx[q] for q in run)

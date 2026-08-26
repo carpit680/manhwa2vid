@@ -162,6 +162,10 @@ def locate_boundary_panels(
     return found
 
 
+#: How far above its fair share of a block one paragraph may go.
+_SHARE_CEILING = 2.0
+
+
 def distribute_within_blocks(
     panel_lists: list[list[str]],
     ordered_ids: list[str],
@@ -202,21 +206,45 @@ def distribute_within_blocks(
             # than starving whoever comes last.
             wants = {i: max(1, int(w * available / total_want)) for i, w in wants.items()}
 
+        # Fair share by airtime, and a ceiling on top of it. Without the ceiling the
+        # model's page range for one paragraph could swallow a whole block: measured on
+        # Solo Leveling, a 33-word beat was handed 170 panels because it happened to sit
+        # last before a time boundary, while a 69-word beat two along got two.
+        share = {i: available * wants[i] / max(total_want, 1) for i in members}
+        ceiling = {i: max(wants[i], int(share[i] * _SHARE_CEILING)) for i in members}
+
         cursor = lo
         for n, para_i in enumerate(members):
             reserve = sum(wants[i] for i in members[n + 1 :])
-            if n == len(members) - 1:
-                end = hi
-            else:
-                want = wants[para_i]
-                positions = [index_of[q] for q in panel_lists[para_i] if q in index_of]
-                target = max(positions) + 1 if positions else cursor + want
-                end = min(max(target, cursor + want), hi - reserve)
+            want = wants[para_i]
+            positions = [index_of[q] for q in panel_lists[para_i] if q in index_of]
+            target = max(positions) + 1 if positions else cursor + want
+            end = min(max(target, cursor + want), cursor + ceiling[para_i], hi - reserve)
             end = max(end, cursor + 1)
             out[para_i] = ordered_ids[cursor:end]
             cursor = min(end, hi)
-        if cursor < hi:
-            out[members[-1]] = out[members[-1]] + ordered_ids[cursor:hi]
+
+        # Leftovers are spread over the block's paragraphs by airtime, never dumped on
+        # whoever happens to be last — that dump is exactly how the 170-panel beat
+        # happened, and the budget then threw 166 of them away.
+        leftover = hi - cursor
+        if leftover > 0:
+            order = sorted(members, key=lambda i: -wants[i])
+            mass = sum(wants[i] for i in order) or 1
+            handed = 0
+            for k, para_i in enumerate(order):
+                if k == len(order) - 1:
+                    extra = leftover - handed
+                else:
+                    extra = int(leftover * wants[para_i] / mass)
+                handed += extra
+                if extra <= 0:
+                    continue
+                out[para_i] = out[para_i] + ordered_ids[cursor : cursor + extra]
+                cursor += extra
+            # Re-sort each run so panels stay in reading order within the paragraph.
+            for para_i in members:
+                out[para_i] = sorted(out[para_i], key=lambda q: index_of.get(q, 0))
     return [
         run or [ordered_ids[blocks[block_of[i]][0]]] for i, run in enumerate(out)
     ]
