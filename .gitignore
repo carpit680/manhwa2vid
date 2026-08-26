@@ -22,3 +22,7 @@ reference/*.wav
 reference/*.log
 reference/preview_page.html
 reference/voice_lab*/
+
+# BGM audio is fetched, not versioned (see assets/bgm/ATTRIBUTION.md)
+assets/bgm/*.mp3
+assets/bgm/*.wav

@@ -211,16 +211,62 @@ def _mix_audio(
     narration.unlink(missing_ok=True)
 
 
+def _measure_loudness(input_path: Path, target: float) -> dict[str, str] | None:
+    """First loudnorm pass: measure only. Returns the measured_* values for pass two."""
+    proc = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-nostdin",
+            "-i",
+            str(input_path),
+            "-af",
+            f"loudnorm=I={target}:TP=-1.5:LRA=11:print_format=json",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    text = proc.stderr
+    start = text.rfind("{")
+    if start == -1:
+        return None
+    try:
+        data = json.loads(text[start:])
+    except ValueError:
+        return None
+    keys = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
+    if not all(k in data for k in keys):
+        return None
+    return {k: str(data[k]) for k in keys}
+
+
 def _normalize_loudness(input_path: Path, output: Path, target: float) -> None:
+    # Two-pass loudnorm: single-pass runs in dynamic mode and overshoots true peak —
+    # both audited videos measured +0.30/+0.35 dBTP (clips on transcode) despite the
+    # alimiter, which limits SAMPLE peaks and is blind to inter-sample ones. Pass one
+    # measures; pass two applies linearly, which honors TP=-1.5.
+    measured = _measure_loudness(input_path, target)
+    if measured:
+        loudnorm = (
+            f"loudnorm=I={target}:TP=-1.5:LRA=11:linear=true"
+            f":measured_I={measured['input_i']}:measured_TP={measured['input_tp']}"
+            f":measured_LRA={measured['input_lra']}:measured_thresh={measured['input_thresh']}"
+            f":offset={measured['target_offset']}"
+        )
+    else:
+        loudnorm = f"loudnorm=I={target}:TP=-1.5:LRA=11"
     # loudnorm internally resamples to 192 kHz, so pin the rate afterwards or the output
     # lands at 96 kHz from 24 kHz sources. alimiter's `limit` takes a LINEAR value, not a
-    # dB string — 0.89 is about -1 dBFS of headroom.
+    # dB string — 0.89 is about -1 dBFS of headroom (kept as a last-resort backstop).
     _run_ffmpeg(
         [
             "-i",
             str(input_path),
             "-af",
-            f"loudnorm=I={target}:TP=-1.5:LRA=11,alimiter=limit=0.89,aresample=48000",
+            f"{loudnorm},alimiter=limit=0.89,aresample=48000",
             "-ar",
             "48000",
             "-c:v",

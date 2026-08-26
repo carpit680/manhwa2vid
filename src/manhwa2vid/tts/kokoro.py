@@ -56,14 +56,27 @@ class KokoroTTSProvider(TTSProvider):
         out_wav = out_path.with_suffix(".wav")
         out_wav.parent.mkdir(parents=True, exist_ok=True)
 
-        # Keep the (sentence text, audio) pairing — Kokoro splits on sentence
-        # boundaries internally, so per-sentence durations are produced for free at
-        # synthesis time. They were thrown away for the pipeline's whole life, which is
-        # why every panel in a beat dwelt for an identical slice of the beat's audio:
-        # the timeline had no idea WHEN in the beat each sentence was spoken.
-        segments: list[tuple[str, Any]] = [
-            (graphemes, audio) for graphemes, _phonemes, audio in pipeline(text, voice=voice, speed=speed)
-        ]
+        # ONE pipeline call PER SENTENCE, using the same splitter as the shot planner.
+        # Kokoro's own internal chunking groups sentences up to a token budget — the
+        # 2026-08-26 audit measured chunks holding up to 9 sentences, leaving 92-94% of
+        # per-sentence timings to be ESTIMATED by character count downstream (worth
+        # ~1.5s of cut drift inside a 22s chunk, over half a reference shot). Feeding
+        # one sentence per call makes every sidecar entry a measured duration, and
+        # sentence identity with the shot list holds by construction.
+        from manhwa2vid.script.sentences import split_sentences
+
+        sentences = split_sentences(text) or [text]
+        segments: list[tuple[str, Any]] = []
+        for sentence in sentences:
+            pieces = [audio for _g, _p, audio in pipeline(sentence, voice=voice, speed=speed)]
+            if not pieces:
+                continue
+            merged = (
+                np.asarray(pieces[0], dtype="float32")
+                if len(pieces) == 1
+                else np.concatenate([np.asarray(p, dtype="float32") for p in pieces])
+            )
+            segments.append((sentence, merged))
         chunks = [audio for _g, audio in segments]
         if not chunks:
             raise RuntimeError(f"Kokoro returned no audio for: {text[:60]!r}")
@@ -81,20 +94,6 @@ class KokoroTTSProvider(TTSProvider):
                 padded.append(np.asarray(chunk, dtype="float32"))
             audio = np.concatenate(padded)
 
-        # Sidecar: exact per-sentence timing, join gaps folded into the preceding
-        # segment so the seconds sum to the WAV's real duration.
-        import json as _json
-
-        sidecar = []
-        for i, (graphemes, chunk) in enumerate(segments):
-            seconds = len(np.asarray(chunk)) / SAMPLE_RATE
-            if i:
-                seconds += 0.06
-            sidecar.append({"text": str(graphemes).strip(), "seconds": round(seconds, 4)})
-        out_wav.with_suffix(".segments.json").write_text(
-            _json.dumps(sidecar, ensure_ascii=False, indent=1), encoding="utf-8"
-        )
-
         peak = float(abs(audio).max()) if audio.size else 0.0
         if peak > 0.89:
             audio = audio * (0.89 / peak)
@@ -104,3 +103,27 @@ class KokoroTTSProvider(TTSProvider):
         from manhwa2vid.tts.postprocess import apply_tts_postprocess
 
         apply_tts_postprocess(out_wav, config)
+
+        # Sidecar: exact per-sentence timing, join gaps folded into the preceding
+        # segment. Written AFTER postprocess and rescaled to the final WAV so the
+        # seconds still sum to the real duration even when tts.pace_multiplier
+        # time-stretches the audio (atempo is a uniform stretch, so proportional
+        # rescaling stays exact).
+        import json as _json
+        import wave as _wave
+
+        sidecar = []
+        for i, (graphemes, chunk) in enumerate(segments):
+            seconds = len(np.asarray(chunk)) / SAMPLE_RATE
+            if i:
+                seconds += 0.06
+            sidecar.append({"text": str(graphemes).strip(), "seconds": seconds})
+        with _wave.open(str(out_wav), "rb") as wf:
+            final_duration = wf.getnframes() / wf.getframerate()
+        pre_duration = sum(s["seconds"] for s in sidecar) or 1.0
+        scale = final_duration / pre_duration
+        for s in sidecar:
+            s["seconds"] = round(s["seconds"] * scale, 4)
+        out_wav.with_suffix(".segments.json").write_text(
+            _json.dumps(sidecar, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
