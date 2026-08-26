@@ -247,24 +247,51 @@ def clamp_to_time_blocks(
     edges = [0, *cuts, len(ordered_ids)]
     blocks = [(edges[i], edges[i + 1]) for i in range(len(edges) - 1)]
 
-    # Paragraph -> block. Block advances at each paragraph that ANNOUNCES a jump.
+    # Which paragraph crosses each printed skip?
+    #
+    # Neither signal alone works. Text alone (advance at every jump PHRASE) inverted
+    # Solo Leveling: it has 3 phrases but 1 printed marker, and the first phrase is
+    # incidental narration in paragraph 9 — 8 paragraphs ended up sharing the 271 panels
+    # before the boundary and 30 sharing the 69 after. Position alone breaks Frozen
+    # Player: the paragraph narrating the fight's end was aligned past the boundary, so
+    # trusting position puts fight narration over flashback art — the exact defect this
+    # whole mechanism exists to prevent.
+    #
+    # So: a paragraph that ANNOUNCES the jump crosses it, and among announcing
+    # paragraphs the one nearest the boundary wins. Only when none announces does
+    # position decide.
     index_of = {pid: i for i, pid in enumerate(ordered_ids)}
-    block_of: list[int] = []
-    current = 0
-    for text in para_texts:
-        if _TIME_JUMP_RE.search(text) and current + 1 < len(blocks):
-            current += 1
-        block_of.append(current)
+    starts = []
+    for pids in panel_lists:
+        positions = [index_of[q] for q in pids if q in index_of]
+        starts.append(min(positions) if positions else 0)
+    announces = [bool(_TIME_JUMP_RE.search(t)) for t in para_texts]
 
-    # A paragraph that announces a jump should open ON the caption that prints it —
+    crossings: list[int] = []
+    after = 0
+    for cut in cuts:
+        candidates = [i for i in range(after, len(para_texts)) if announces[i]]
+        if candidates:
+            crossing = min(candidates, key=lambda i: abs(starts[i] - cut))
+        else:
+            later = [i for i in range(after, len(para_texts)) if starts[i] >= cut]
+            crossing = later[0] if later else len(para_texts)
+        crossings.append(crossing)
+        after = crossing + 1
+
+    block_of: list[int] = []
+    for i in range(len(para_texts)):
+        block_of.append(sum(1 for c in crossings if c <= i))
+
+    clamp_to_time_blocks.last_blocks = blocks          # reused by the caller
+    clamp_to_time_blocks.last_block_of = block_of
+
+    # A paragraph that opens a block should lead with the caption that prints the jump —
     # otherwise the chapter's own "76 HOURS AGO" panel is the one image nobody shows.
     boundary_at = {ordered_ids.index(b): b for b in boundary_ids if b in ordered_ids}
     first_para_of_block: dict[int, int] = {}
     for i, block_idx in enumerate(block_of):
         first_para_of_block.setdefault(block_idx, i)
-
-    clamp_to_time_blocks.last_blocks = blocks          # reused by the caller
-    clamp_to_time_blocks.last_block_of = block_of
 
     out: list[list[str]] = []
     for pids, block_idx in zip(panel_lists, block_of):

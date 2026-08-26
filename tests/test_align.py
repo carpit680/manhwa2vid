@@ -400,3 +400,59 @@ def test_no_paragraph_can_swallow_a_block():
     idx = {pid: i for i, pid in enumerate(ordered)}
     for run in out:
         assert [idx[q] for q in run] == sorted(idx[q] for q in run)
+
+
+def test_blocks_are_assigned_by_position_not_by_jump_phrases():
+    """Jump PHRASES do not pair one-to-one with printed MARKERS.
+
+    Frozen Player had 2 markers and 2 announcing paragraphs, so counting phrases worked
+    by luck. Solo Leveling has 3 phrases and 1 printed marker, and the first phrase was
+    incidental narration in paragraph 9 — which put 8 paragraphs on the 271 panels
+    before the boundary and 30 on the 69 after, i.e. 2.3 panels each and a 14.9s freeze.
+    """
+    from manhwa2vid.script.align import clamp_to_time_blocks
+
+    ordered = [f"p{p:04d}_{i:02d}" for p in range(1, 16) for i in range(1, 11)]  # 150
+    # Ten paragraphs sit before the boundary; only the last two are past it. Several
+    # early ones contain incidental jump language.
+    paras = ["He moves on."] * 4 + ["Moments later, he stands."] + ["Then he waits."] * 5 + [
+        "Twenty-five years later, a museum.", "The hall is quiet."
+    ]
+    lists = [ordered[i * 12 : (i + 1) * 12] for i in range(10)] + [
+        ordered[120:135], ordered[135:150]
+    ]
+    clamp_to_time_blocks(lists, paras, ordered, [ordered[120]])
+    blocks = clamp_to_time_blocks.last_block_of
+    assert blocks.count(0) == 10 and blocks.count(1) == 2, blocks
+    assert blocks == sorted(blocks), "narration runs forward through blocks"
+
+
+def test_block_crossing_uses_text_and_position_together():
+    """Neither signal alone works, and each failed on a different real title.
+
+    Text alone (advance at every jump PHRASE) inverted Solo Leveling: 3 phrases, 1
+    printed marker, first phrase incidental in paragraph 9 — 8 paragraphs on 271 panels,
+    30 on 69. Position alone breaks Frozen Player: the paragraph narrating the fight's
+    end was aligned past the boundary, so trusting position puts fight narration over
+    flashback art, which is the defect this mechanism exists to prevent.
+    """
+    from manhwa2vid.script.align import clamp_to_time_blocks
+
+    # Frozen Player shape: para 2 narrates the fight but was aligned past the boundary.
+    fp = [f"p0005_{i:02d}" for i in range(1, 15)] + [f"p0006_{i:02d}" for i in range(1, 5)]
+    clamp_to_time_blocks(
+        [fp[0:12], fp[14:17], fp[15:18]],
+        ["The queen stands.", "The Frost Queen crumbles.", "Seventy-six hours earlier, they stand."],
+        fp, ["p0005_14"],
+    )
+    assert clamp_to_time_blocks.last_block_of == [0, 0, 1]
+
+    # Solo Leveling shape: an incidental phrase early, the real skip late.
+    sl = [f"p{p:04d}_{i:02d}" for p in range(1, 16) for i in range(1, 11)]
+    paras = ["x"] * 4 + ["Moments later, he waits."] + ["y"] * 5 + [
+        "Twenty-five years later, a museum.", "The hall is quiet."
+    ]
+    lists = [sl[i * 12 : (i + 1) * 12] for i in range(10)] + [sl[120:135], sl[135:150]]
+    clamp_to_time_blocks(lists, paras, sl, [sl[120]])
+    blocks = clamp_to_time_blocks.last_block_of
+    assert blocks.count(0) == 10 and blocks.count(1) == 2, blocks
