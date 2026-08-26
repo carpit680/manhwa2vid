@@ -361,3 +361,25 @@ def test_tiny_panel_falls_back_to_letterbox(tmp_path: Path) -> None:
     )
     frames = render_panel_motion_frames(p, panel, 960, 540, 30, {})
     assert len(frames) == 30 and frames[0].size == (960, 540)
+
+
+def test_badge_fades_and_endcard_reads() -> None:
+    """Badge alpha=0 is a no-op, 1.0 draws, and the end card carries the title —
+    both audited videos shipped with a 1-frame badge and no ending at all."""
+    import numpy as np
+    from PIL import Image as PILImage
+    from manhwa2vid.video.effects import add_chapter_badge, make_end_card
+
+    base = PILImage.new("RGB", (480, 270), (90, 60, 40))
+    untouched = add_chapter_badge(base, "1-5", "Title", alpha=0.0)
+    assert np.array_equal(np.asarray(untouched), np.asarray(base))
+    full = np.asarray(add_chapter_badge(base, "1-5", "Title", alpha=1.0))
+    half = np.asarray(add_chapter_badge(base, "1-5", "Title", alpha=0.5))
+    base_a = np.asarray(base)
+    assert np.abs(full.astype(int) - base_a.astype(int)).sum() > np.abs(
+        half.astype(int) - base_a.astype(int)
+    ).sum() > 0
+
+    card = np.asarray(make_end_card(480, 270, "Solo Leveling", "1-5").convert("L"))
+    assert card.mean() < 60, "card is dark"
+    assert (card > 180).sum() > 200, "title text present"

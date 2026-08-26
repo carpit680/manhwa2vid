@@ -434,18 +434,60 @@ def render_panel_motion_frames(
     )
 
 
-def add_chapter_badge(frame: Image.Image, chapters: str, title: str) -> Image.Image:
-    img = frame.copy()
-    draw = ImageDraw.Draw(img)
-    badge = f"Ch. {chapters}  •  {title}"
+def _badge_font(size: int) -> ImageFont.ImageFont:
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28)
+        return ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size
+        )
     except OSError:
-        font = ImageFont.load_default()
+        return ImageFont.load_default()
+
+
+def add_chapter_badge(
+    frame: Image.Image, chapters: str, title: str, alpha: float = 1.0
+) -> Image.Image:
+    """Title/chapter badge, alpha-blended so the render can FADE it.
+
+    The badge used to be stamped on exactly one frame (1/30 s) — effectively
+    invisible; the audit filed it under missing production furniture."""
+    alpha = max(0.0, min(1.0, alpha))
+    if alpha <= 0.0:
+        return frame
+    overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    badge = f"Ch. {chapters}  •  {title}"
+    font = _badge_font(28)
     padding = 16
     bbox = draw.textbbox((0, 0), badge, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     x, y = 40, 40
-    draw.rectangle([x - padding, y - padding, x + tw + padding, y + th + padding], fill=(0, 0, 0))
-    draw.text((x, y), badge, fill=(255, 255, 255), font=font)
-    return img
+    a = int(255 * alpha)
+    draw.rectangle(
+        [x - padding, y - padding, x + tw + padding, y + th + padding],
+        fill=(0, 0, 0, int(a * 0.75)),
+    )
+    draw.text((x, y), badge, fill=(255, 255, 255, a), font=font)
+    return Image.alpha_composite(frame.convert("RGBA"), overlay).convert("RGB")
+
+
+def make_end_card(width: int, height: int, title: str, chapters: str) -> Image.Image:
+    """Closing card: both audited videos simply STOPPED on a held panel (one of them a
+    'WHAT?!' bubble on black). A recap channel ends on its name and a reason to come
+    back, with the music still under it."""
+    card = Image.new("RGB", (width, height), (12, 14, 20))
+    draw = ImageDraw.Draw(card)
+    title_font = _badge_font(max(36, height // 12))
+    sub_font = _badge_font(max(20, height // 26))
+    cta_font = _badge_font(max(16, height // 32))
+
+    def centered(text: str, y: int, font: ImageFont.ImageFont, fill) -> int:
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        draw.text(((width - tw) // 2, y), text, fill=fill, font=font)
+        return y + th
+
+    y = int(height * 0.34)
+    y = centered(title, y, title_font, (240, 240, 245)) + int(height * 0.04)
+    y = centered(f"Chapters {chapters} — recap", y, sub_font, (170, 175, 190)) + int(height * 0.10)
+    centered("Next chapter: coming soon — subscribe", y, cta_font, (120, 130, 150))
+    return card
