@@ -280,3 +280,40 @@ def test_a_normal_wide_panel_is_not_a_sliver():
     _paint_art(img, 20, 340, 760, 800)
     bands = [(0, 300), (300, 900)]
     assert len(_merge_text_only_bands(img, bands, {})) == 2
+
+
+def test_content_free_catches_the_four_measured_classes():
+    """The user found all four in a finished render: blade slivers on a dark field, a
+    blown-up SFX glyph, speed lines, and flat colour bands. None are blank and none are
+    text, so no existing filter saw them."""
+    from manhwa2vid.panels.regions import is_content_free
+
+    # speed lines: every edge points the same way (measured entropy 0.28)
+    lines = _canvas(400, 700, 255)
+    lines[:, ::7] = 10
+    assert is_content_free(lines)
+
+    # a dark field with a couple of thin slivers (measured coverage 0.08)
+    sparse = _canvas(300, 800, 12)
+    _paint_art(sparse, 60, 120, 90, 22)
+    _paint_art(sparse, 400, 160, 70, 18)
+    assert is_content_free(sparse)
+
+    # a flat colour band
+    band = _canvas(200, 800, 250)
+    band[80:120] = (60, 90, 160)
+    assert is_content_free(band)
+
+    # ...and real art is NOT flagged (measured coverage 0.32-0.85, entropy 0.865+)
+    art = _canvas(700, 700, 255)
+    _paint_art(art, 40, 40, 620, 620)
+    assert not is_content_free(art)
+
+
+def test_content_free_keeps_sparse_but_real_art():
+    """The thresholds sit far below the weakest measured real art, not beside it."""
+    from manhwa2vid.panels.regions import is_content_free
+
+    img = _canvas(700, 700, 250)
+    _paint_art(img, 120, 120, 400, 400)   # coverage ~0.33, varied orientations
+    assert not is_content_free(img)

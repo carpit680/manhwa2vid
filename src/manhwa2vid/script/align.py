@@ -520,8 +520,33 @@ def align_script(
 
     from manhwa2vid.panels.split import panel_visual_stats_file
 
+    from manhwa2vid.panels.regions import is_content_free_file
+
     stats = {p.id: panel_visual_stats_file(paths["root"] / p.image_path) for p in panels}
     empty_ids = {pid for pid, (empty, _score) in stats.items() if empty}
+    # `is_visually_empty` only catches mostly-WHITE panels with margin. It cannot see a
+    # dark field holding two slivers of a blade, a blown-up sound-effect glyph, or speed
+    # lines — all of which the user found in a finished render. Excluding them HERE,
+    # before matching, is better than swapping later: the matcher then binds the sentence
+    # to a panel that actually shows something.
+    void_ids = {
+        p.id for p in panels
+        if p.id not in empty_ids and is_content_free_file(paths["root"] / p.image_path)
+    }
+    # A filter that can empty the candidate set is a liability, not a feature: on
+    # synthetic fixtures this one flagged EVERY panel and the align stage fell over with
+    # an IndexError. Measured on real titles it selects 11% (FP) and 5% (SL), so a
+    # ceiling far above that says "this detector does not understand this art style"
+    # and the run continues unfiltered rather than blind.
+    max_frac = float(get_nested(config, "align", "max_content_free_fraction", default=0.5))
+    if panels and len(void_ids | empty_ids) > max_frac * len(panels):
+        console.print(
+            f"[yellow]Align: content-free filter would drop "
+            f"{len(void_ids | empty_ids)}/{len(panels)} panels — skipping it[/]"
+        )
+    elif void_ids:
+        console.print(f"[dim]Align: {len(void_ids)} content-free panel(s) excluded[/]")
+        empty_ids |= void_ids
     scores = {pid: score for pid, (_empty, score) in stats.items()}
     if empty_ids:
         console.print(f"[dim]Align: {len(empty_ids)} visually empty panel(s) excluded[/]")

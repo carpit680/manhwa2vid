@@ -165,6 +165,10 @@ align:
   # video (reference/mamoru_shot_profile.md): median shot 2.87s, and 22% of his shots
   # run under 1.5s — so a 1.5s floor was clipping a fifth of his range.
   min_shot_seconds: 1.0
+  # Ceiling on the content-free filter: on synthetic fixtures it flagged EVERY panel
+  # and align fell over. Real titles measure 11% (FP) / 5% (SL), so exceeding this
+  # means the detector does not understand the art style — run unfiltered instead.
+  max_content_free_fraction: 0.5
   accent_shot_seconds: 0.4  # intra-sentence multi-panel cuts survive down to this;
                             # the reference channel runs 22% of its cuts under 1.5s
 

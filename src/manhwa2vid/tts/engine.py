@@ -97,7 +97,7 @@ def run_tts_and_timeline(
         # volunteers one.
         import cv2
 
-        from manhwa2vid.panels.regions import is_text_only_panel
+        from manhwa2vid.panels.regions import is_content_free, is_text_only_panel
         from manhwa2vid.panels.split import is_visually_empty_file
 
         text_only: set[str] = set()
@@ -108,7 +108,7 @@ def run_tts_and_timeline(
                 empty.add(p.id)
                 continue
             img = cv2.imread(str(path))
-            if img is not None and is_text_only_panel(img):
+            if img is not None and (is_text_only_panel(img) or is_content_free(img)):
                 text_only.add(p.id)
 
         # Reading order for both fill candidates and bubble substitution. Text-only

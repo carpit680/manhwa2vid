@@ -19,6 +19,8 @@ black on dark chapters — so nothing here assumes white, the same lesson
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import cv2
 import numpy as np
 
@@ -150,6 +152,51 @@ def is_text_only_panel(img: np.ndarray) -> bool:
     bright = float((gray > 232).mean())
     mid = float(((gray > 40) & (gray <= 232)).mean())
     return bright > 0.2 and mid < 0.15
+
+
+def is_content_free(img: np.ndarray) -> bool:
+    """A panel with nothing a viewer can read as story: not blank, not text — just void.
+
+    The classes this catches, all four found by the user in a finished render:
+      * a dark field with two or three thin slivers of a blade (coverage 0.08)
+      * a single blown-up sound-effect glyph (coverage 0.14, orientation entropy 0.70)
+      * speed lines / motion streaks (entropy 0.28 — every edge points the same way)
+      * flat colour bands left over from a split
+
+    Two measured signals separate them from real art with no overlap, checked across
+    every story panel in both projects (FP 24/210, SL 18/350 flagged, and reading all
+    of them found zero real art):
+      * CONTENT COVERAGE — art panels measured 0.32-0.85, these 0.06-0.19
+      * EDGE-ORIENTATION ENTROPY — art panels 0.865-0.985 because drawings point every
+        way; speed lines and single glyphs are orientation-poor.
+
+    Deliberately NOT a beauty test. It answers "is there anything here at all", which is
+    why the thresholds sit far below the weakest real art rather than near it.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    if gray.size == 0:
+        return True
+    coverage = float((np.abs(gray.astype(np.int16) - background_level(gray)) > 18).mean())
+    if coverage < 0.15:
+        return True
+
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    magnitude = np.hypot(gx, gy)
+    strong = magnitude > np.percentile(magnitude, 90)
+    if strong.sum() <= 50:
+        return True
+    angles = (np.arctan2(gy, gx) % np.pi)[strong]
+    hist, _edges = np.histogram(angles, bins=12, range=(0.0, np.pi))
+    probs = hist / hist.sum()
+    probs = probs[probs > 0]
+    entropy = float(-(probs * np.log2(probs)).sum()) / np.log2(12)
+    return entropy < 0.72
+
+
+def is_content_free_file(path: Path) -> bool:
+    img = cv2.imread(str(path))
+    return False if img is None else is_content_free(img)
 
 
 def absorb_bubble_regions(
