@@ -1603,3 +1603,100 @@ def test_dialogue_delivery_tiers_respect_the_configured_mode():
     # clean runs pass in every mode
     for mode in ("warn", "system", "strict"):
         assert dialogue_delivery_status(mode, {}, {}) is True
+
+
+# --- render QA (2026-08-26 audit: defects only visible on the FINAL surface) ----------
+
+def test_name_integrity_audit_false_positives_stay_dead():
+    """The two false positives the audited run shipped, pinned: a grade-prefix fragment
+    ('Rank Hunter' from 'E-Rank Hunter') and a noun-boundary merge artifact
+    ('Earth Jun-Ho' from 'the modern Earth Jun-Ho sees outside his window').
+    A gate that cries wolf trains the operator to ignore it."""
+    from manhwa2vid.script.story_first import unknown_names
+
+    allowed = {"Sung Jin-Woo", "Seo Jun-Ho"}
+    assert unknown_names(
+        "The guild sighs. Sung Jin-Woo is an E-Rank Hunter after all.", allowed
+    ) == []
+    assert unknown_names(
+        "The wild land ultimately created the affluent modern Earth Jun-Ho sees "
+        "outside his window. He blinks.",
+        allowed,
+    ) == []
+    # ...while a genuinely unknown proper noun still fires (the real gap it caught) —
+    # in subject position, not behind a locative preposition (places are exempt there).
+    assert unknown_names(
+        "They stare. The dungeon is Carthenon Temple, apparently.", allowed
+    ) == ["Carthenon Temple"]
+
+
+def test_render_bubble_and_deadspace_detectors_match_the_audit_rules():
+    import numpy as np
+    from manhwa2vid.video.qa_visual import _bubble_stats, _dead_width, _H, _W
+
+    art = np.random.default_rng(1).integers(40, 200, (_H, _W), dtype=np.uint8)
+    frac, clipped = _bubble_stats(art)
+    assert frac == 0.0 and not clipped
+
+    bubble = art.copy()
+    bubble[40:200, 100:380] = 250          # solid blob, well inside
+    frac, clipped = _bubble_stats(bubble)
+    assert frac > 0.20 and not clipped
+
+    edge = art.copy()
+    edge[0:80, 100:380] = 250              # blob touching the top edge
+    _frac, clipped = _bubble_stats(edge)
+    assert clipped
+
+    flat = np.zeros((_H, _W), dtype=np.uint8)
+    flat[:, _W // 2 :] = art[:, _W // 2 :]
+    assert _dead_width(flat) > 0.4         # left half is empty
+    assert _dead_width(art) < 0.2          # full-bleed art
+
+
+def test_render_refuses_over_upstream_failures(tmp_path):
+    from manhwa2vid.video.qa_visual import upstream_failures
+
+    (tmp_path / "qa.script.json").write_text(json.dumps({
+        "stage": "script",
+        "gates": [
+            {"name": "beats-wellformed", "status": "pass"},
+            {"name": "dialogue-delivery", "status": "fail"},
+        ],
+    }))
+    (tmp_path / "qa.scene.json").write_text(json.dumps({
+        "stage": "scene",
+        "gates": [{"name": "ocr-coverage", "status": "warn"}],
+    }))
+    # the render's own report never blocks the next render
+    (tmp_path / "qa.render.json").write_text(json.dumps({
+        "stage": "render",
+        "gates": [{"name": "dead-space", "status": "fail"}],
+    }))
+    assert upstream_failures(tmp_path) == ["script:dialogue-delivery"]
+
+
+def test_measure_video_reads_a_real_file(tmp_path):
+    """End-to-end on a tiny synthetic mp4: metrics exist and are sane."""
+    import subprocess
+    import numpy as np
+    from PIL import Image
+    from manhwa2vid.video.qa_visual import measure_video
+
+    frames_dir = tmp_path / "f"
+    frames_dir.mkdir()
+    rng = np.random.default_rng(2)
+    for i in range(12):
+        arr = rng.integers(40, 200, (270, 480, 3), dtype=np.uint8)
+        Image.fromarray(arr).save(frames_dir / f"{i:03d}.png")
+    video = tmp_path / "v.mp4"
+    subprocess.run(
+        ["ffmpeg", "-loglevel", "error", "-framerate", "6", "-i",
+         str(frames_dir / "%03d.png"), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+         str(video)],
+        check=True,
+    )
+    m = measure_video(video)
+    assert m["frames"] > 0
+    assert m["dead_width_mean"] < 0.2, "full-bleed noise has no dead columns"
+    assert m["bubble_over_20pct_frames_pct"] == 0.0

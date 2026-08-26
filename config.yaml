@@ -348,6 +348,8 @@ video:
   upscale:
     enabled: true
     scale: 2
+  render_qa: true  # measure the rendered file (opening shot, bubbles, dead space,
+                   # clipped text, true peak, shot rhythm) and gate on it
   min_panel_seconds: 1.0  # matches align.min_shot_seconds — Mamoru's measured p10 is
                           # 0.95s and 22% of his shots run under 1.5s, so a 1.5 floor
                           # flattened our distribution (median 4.78s vs his 2.87s)

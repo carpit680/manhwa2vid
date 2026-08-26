@@ -115,6 +115,25 @@ def run_stage(
     elif stage == PipelineStage.RENDER:
         if not paths["timeline_json"].exists():
             raise RuntimeError("Timeline missing. Run TTS stage first.")
+        # A red gate anywhere upstream must stop the render: both 2026-08-26 audited
+        # videos shipped while script-stage gates were FAILING — nothing connected a
+        # failed gate to the render that published it.
+        from manhwa2vid.video.qa_visual import upstream_failures
+
+        failed = upstream_failures(project_dir)
+        if failed and not force_past_qa:
+            from manhwa2vid.qa import QAGateFailure
+
+            raise QAGateFailure(
+                "Refusing to render over failed upstream QA gates: "
+                + ", ".join(failed)
+                + ". Fix them or re-run with --force-past-qa."
+            )
+        if failed:
+            console.print(
+                f"[red]Rendering over failed upstream gate(s) ({', '.join(failed)}) "
+                "— forced[/]"
+            )
         render_video(meta, paths, config, preview=preview, final=final, force=force)
         mark_stage(checkpoint, stage, paths)
     elif stage == PipelineStage.EXPORT:

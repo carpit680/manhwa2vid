@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -448,4 +449,19 @@ def render_video(
         shutil.copy2(output, paths["output"] / "preview.mp4")
 
     console.print(f"[green]Rendered[/] → {output}")
+
+    # QA on the FINAL SURFACE — the pixels and samples that actually ship. Env wins
+    # over config (like SCRIPT_ARCHITECTURE), so the pipeline tests — which drive real
+    # renders of SYNTHETIC panels through the repo config — can opt out without
+    # mutating the shared config.yaml.
+    env_qa = os.getenv("MANHWA2VID_RENDER_QA")
+    run_qa = (
+        env_qa not in ("0", "false", "off")
+        if env_qa is not None
+        else bool(get_nested(config, "video", "render_qa", default=False))
+    )
+    if run_qa:
+        from manhwa2vid.video.qa_visual import enforce_render_qa
+
+        enforce_render_qa(output, paths, config)
     return output

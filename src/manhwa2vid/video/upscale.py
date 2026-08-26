@@ -107,9 +107,17 @@ def upscale_panels(
     no weights, CUDA OOM) logs once and returns what exists; the render falls back to
     the originals for the rest.
     """
-    # Default OFF in code so offline tests and bare configs never touch the model;
-    # config.yaml turns it on for real projects.
-    if not bool(get_nested(config, "video", "upscale", "enabled", default=False)):
+    # Env wins over config (tests/conftest.py sets it off suite-wide); code default is
+    # OFF so bare configs never touch the model — config.yaml enables real projects.
+    import os
+
+    env = os.getenv("MANHWA2VID_UPSCALE")
+    enabled = (
+        env not in ("0", "false", "off")
+        if env is not None
+        else bool(get_nested(config, "video", "upscale", "enabled", default=False))
+    )
+    if not enabled:
         return {}
     scale = int(get_nested(config, "video", "upscale", "scale", default=2))
     out_dir = upscaled_panels_dir(project_root)
