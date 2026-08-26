@@ -1639,12 +1639,19 @@ def test_render_bubble_and_deadspace_detectors_match_the_audit_rules():
     assert frac == 0.0 and not clipped
 
     bubble = art.copy()
-    bubble[40:200, 100:380] = 250          # solid blob, well inside
+    bubble[40:200, 100:380] = 250          # solid blob, well inside...
+    bubble[110:120, 130:350] = 30          # ...with text strokes: that makes it a bubble
     frac, clipped = _bubble_stats(bubble)
     assert frac > 0.20 and not clipped
 
+    wall = art.copy()
+    wall[40:200, 100:380] = 250            # solid bright blob with NO text: background
+    frac, _clipped = _bubble_stats(wall)
+    assert frac == 0.0, "a white wall is not a bubble"
+
     edge = art.copy()
-    edge[0:80, 100:380] = 250              # blob touching the top edge
+    edge[0:80, 100:380] = 250              # text blob touching the top edge
+    edge[30:38, 130:350] = 30
     _frac, clipped = _bubble_stats(edge)
     assert clipped
 
