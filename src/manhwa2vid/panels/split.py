@@ -231,6 +231,53 @@ def _make_panel(
     )
 
 
+def _merge_text_only_bands(
+    img: np.ndarray, bboxes: list[tuple[int, int]], config: dict[str, Any]
+) -> list[tuple[int, int]]:
+    """Fold a band that is ONLY a speech bubble into the neighbouring art band.
+
+    Gutter splitting happily emits a full-width band containing nothing but a bubble on
+    the page background. Shown alone that is a wall of text on black — the user's
+    report was a 4-second one in Frozen Player, and it is the same defect class as the
+    collage bubbles `absorb_bubble_regions` already handles, just one level up. Merging
+    it into its neighbour puts the line back on the art it belongs to; the region pass
+    then re-absorbs it properly.
+
+    The band is merged into whichever neighbour has more ink, so a bubble between two
+    panels joins the busier one rather than always the one above.
+    """
+    if not bool(get_nested(config, "panels", "regions", "enabled", default=True)):
+        return bboxes
+    from manhwa2vid.panels.regions import is_text_only_panel
+
+    h, w = img.shape[:2]
+    bands = [list(b) for b in bboxes]
+    changed = True
+    while changed and len(bands) > 1:
+        changed = False
+        for i, (y0, ph) in enumerate(bands):
+            crop = img[y0 : y0 + ph, 0:w]
+            if crop.size == 0 or not is_text_only_panel(crop):
+                continue
+            candidates = [j for j in (i - 1, i + 1) if 0 <= j < len(bands)]
+            if not candidates:
+                continue
+            def ink(j: int) -> float:
+                cy0, cph = bands[j]
+                sub = img[cy0 : cy0 + cph, 0:w]
+                return float(panel_ink_stats(sub)[0]) if sub.size else 0.0
+
+            target = max(candidates, key=ink)
+            ty0, tph = bands[target]
+            ny0 = min(y0, ty0)
+            ny1 = max(y0 + ph, ty0 + tph)
+            bands[target] = [ny0, ny1 - ny0]
+            bands.pop(i)
+            changed = True
+            break
+    return [(b[0], b[1]) for b in bands]
+
+
 def _expand_region_bboxes(
     img: np.ndarray,
     bboxes: list[tuple[int, int]],
@@ -361,6 +408,7 @@ def _split_page_image(
         confidence = 0.3
 
     if method == "gutter":
+        bboxes = _merge_text_only_bands(img, bboxes, config)
         boxes = _expand_region_bboxes(img, bboxes, config)
     else:
         boxes = [(0, y0, w, ph, False) for y0, ph in bboxes]
@@ -407,6 +455,7 @@ def _split_image_hybrid(
     bboxes = _gutter_bboxes(img, config)
 
     if len(bboxes) >= 2:
+        bboxes = _merge_text_only_bands(img, bboxes, config)
         boxes = _expand_region_bboxes(img, bboxes, config)
         panels = [
             _make_panel(

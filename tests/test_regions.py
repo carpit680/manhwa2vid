@@ -213,3 +213,42 @@ def test_text_only_panel_detector():
     bright_room_with_art = _canvas(400, 700, 250)
     _paint_art(bright_room_with_art, 100, 50, 400, 300)
     assert not is_text_only_panel(bright_room_with_art)
+
+
+def test_text_only_band_merges_into_its_art_neighbour():
+    """A gutter band containing only a bubble must not become its own panel — shown
+    alone it is a wall of text on the page background (a measured 4-second one in
+    Frozen Player). It joins whichever neighbour carries more ink."""
+    from manhwa2vid.panels.split import _merge_text_only_bands
+
+    img = _canvas(1800, 720, 0)
+    _paint_art(img, 40, 40, 640, 500)        # band 1: art (rows 0-600)
+    _paint_bubble(img, 120, 700, 480, 200)   # band 2: bubble only (rows 600-1000)
+    _paint_art(img, 40, 1100, 640, 600)      # band 3: art (rows 1000-1800)
+    bands = [(0, 600), (600, 400), (1000, 800)]
+    merged = _merge_text_only_bands(img, bands, {})
+    assert len(merged) == 2, f"the bubble band should be gone: {merged}"
+    covered = [(y, y + h) for y, h in merged]
+    assert any(y <= 700 and end >= 900 for y, end in covered), "bubble rows still covered"
+
+
+def test_all_text_page_is_left_alone():
+    """Every band a bubble: nothing to merge into, so the page survives unchanged."""
+    from manhwa2vid.panels.split import _merge_text_only_bands
+
+    img = _canvas(1200, 720, 0)
+    _paint_bubble(img, 100, 100, 400, 200)
+    _paint_bubble(img, 150, 700, 400, 200)
+    bands = [(0, 600), (600, 600)]
+    assert len(_merge_text_only_bands(img, bands, {})) >= 1
+
+
+def test_merge_respects_the_disable_flag():
+    from manhwa2vid.panels.split import _merge_text_only_bands
+
+    img = _canvas(1200, 720, 0)
+    _paint_art(img, 40, 40, 640, 500)
+    _paint_bubble(img, 120, 700, 480, 200)
+    bands = [(0, 600), (600, 600)]
+    cfg = {"panels": {"regions": {"enabled": False}}}
+    assert _merge_text_only_bands(img, bands, cfg) == bands
