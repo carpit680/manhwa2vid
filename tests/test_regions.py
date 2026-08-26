@@ -191,3 +191,25 @@ def test_expand_region_bboxes_maps_band_offsets_to_page_coords():
     collage = [b for b in boxes if b[4]]
     assert len(collage) == 2
     assert all(y >= 500 for _x, y, _w, _h, _f in collage), "region y is in PAGE coords"
+
+
+def test_text_only_panel_detector():
+    """Bare bubbles / SFX-on-white are text-only; art panels are not — validated by eye
+    on the 63 FP panels the rule selects (all bubbles/SFX/blank, no art)."""
+    from manhwa2vid.panels.regions import is_text_only_panel
+
+    bubble = _canvas(400, 700, 0)
+    _paint_bubble(bubble, 150, 100, 400, 200)
+    assert is_text_only_panel(bubble)
+
+    sfx_on_white = _canvas(400, 700, 255)
+    sfx_on_white[100:300, 200:210] = 20        # a few calligraphy strokes
+    assert is_text_only_panel(sfx_on_white)
+
+    art = _canvas(400, 700, 0)
+    _paint_art(art, 50, 50, 600, 300)
+    assert not is_text_only_panel(art)
+
+    bright_room_with_art = _canvas(400, 700, 250)
+    _paint_art(bright_room_with_art, 100, 50, 400, 300)
+    assert not is_text_only_panel(bright_room_with_art)

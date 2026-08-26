@@ -89,14 +89,25 @@ def run_tts_and_timeline(
         floor = float(get_nested(config, "align", "min_shot_seconds", default=1.0))
         accent_floor = float(get_nested(config, "align", "accent_shot_seconds", default=0.4))
         # Bounded-fill candidates: story panels in reading order, minus visually-empty
-        # ones — fill must never resurrect the blank panels the align stage excluded.
+        # ones — fill must never resurrect the blank panels the align stage excluded —
+        # and minus bare-bubble panels (mostly solid bright blob): the first fill-frame
+        # render measured 40% of frames bubble-dominant against the reference's 13.7%,
+        # and fill walking through text-only panels was a main contributor. A panel the
+        # MATCHER claims still shows (quoting its line is legitimate); fill just never
+        # volunteers one.
+        import cv2
+
+        from manhwa2vid.panels.regions import is_text_only_panel
         from manhwa2vid.panels.split import is_visually_empty_file
 
-        fill_order = [
-            p.id
-            for p in panels
-            if not is_visually_empty_file(paths["root"] / p.image_path)
-        ]
+        def _fill_worthy(p) -> bool:
+            path = paths["root"] / p.image_path
+            if is_visually_empty_file(path):
+                return False
+            img = cv2.imread(str(path))
+            return img is None or not is_text_only_panel(img)
+
+        fill_order = [p.id for p in panels if _fill_worthy(p)]
         shot_plan = plan_shots(
             shotlist,
             segments_by_beat,

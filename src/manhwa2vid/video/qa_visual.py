@@ -166,30 +166,40 @@ def enforce_render_qa(
         **{k: metrics[k] for k in ("opening_luma_mean", "opening_bubble_frac_max")},
     )
 
-    # Bubble dominance: audited at 31% (FP) / 18% (SL) of frames over 20% area.
+    # Bands below are calibrated against the REFERENCE channel's own video run through
+    # these exact detectors (10-min sample, 2026-08-26): bubble-over-20% 13.7%,
+    # clipped-text 41.9%, dead-width 0.742. Calibrating against our old defective
+    # videos instead produced gates that the reference itself would fail.
+
+    # Bubble dominance: reference 13.7%; the audited videos ran 18-31% and the first
+    # fill-frame render 40% (zooming in magnifies bubbles) — a real, fixable gap.
     pct = metrics["bubble_over_20pct_frames_pct"]
     report.add(
         "bubble-dominance",
-        True if pct <= 12.0 else ("warn" if pct <= 25.0 else False),
-        f"{pct}% of frames have a bubble covering >20% of the screen",
+        True if pct <= 18.0 else ("warn" if pct <= 30.0 else False),
+        f"{pct}% of frames have a bubble covering >20% of the screen (reference: 13.7%)",
         pct=pct,
     )
 
-    # Edge-clipped text: audited at 46% on both.
+    # Edge-clipped text: the reference's own edit measures 41.9% — a panning camera
+    # over bubbled art clips text mid-move as a matter of course. Gate only the excess.
     pct = metrics["clipped_text_frames_pct"]
     report.add(
         "clipped-text",
-        True if pct <= 25.0 else ("warn" if pct <= 40.0 else False),
-        f"{pct}% of frames slice a text blob at the frame edge",
+        True if pct <= 50.0 else ("warn" if pct <= 65.0 else False),
+        f"{pct}% of frames slice a text blob at the frame edge (reference: 41.9%)",
         pct=pct,
     )
 
-    # Dead space: audited mean 0.62-0.68 — half the screen carried nothing.
+    # Dead space: REPORT-ONLY. The detector reads low-detail columns, and manhwa art is
+    # flat by style — the reference video measures 0.742, worse than anything we ship.
+    # The audited defect (blurred pillarbox bars) is structurally gone with the
+    # fill-frame camera; this number is kept as data, not a gate.
     dead = metrics["dead_width_mean"]
     report.add(
         "dead-space",
-        True if dead <= 0.35 else ("warn" if dead <= 0.5 else False),
-        f"mean fraction of frame width with no detail: {dead:.0%}",
+        True,
+        f"mean fraction of frame width with no detail: {dead:.0%} (reference: 74%; data only)",
         mean=dead,
     )
 

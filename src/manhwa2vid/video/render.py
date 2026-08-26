@@ -204,6 +204,8 @@ def _mix_audio(
                 "copy",
                 "-c:a",
                 "aac",
+                "-b:a",
+                "192k",
                 "-shortest",
                 str(output),
             ]
@@ -225,6 +227,8 @@ def _mix_audio(
                 "copy",
                 "-c:a",
                 "aac",
+                "-b:a",
+                "192k",
                 "-shortest",
                 str(output),
             ]
@@ -282,18 +286,24 @@ def _normalize_loudness(input_path: Path, output: Path, target: float) -> None:
     # loudnorm internally resamples to 192 kHz, so pin the rate afterwards or the output
     # lands at 96 kHz from 24 kHz sources. alimiter's `limit` takes a LINEAR value, not a
     # dB string — 0.89 is about -1 dBFS of headroom (kept as a last-resort backstop).
+    # level=false is LOAD-BEARING: alimiter's default (level=1) auto-normalizes its
+    # output back UP to 0 dBFS after limiting — which silently undid loudnorm's TP
+    # headroom on every render this pipeline ever produced (the audit's constant
+    # +0.30 dBTP on both videos, old and new, was exactly this).
     _run_ffmpeg(
         [
             "-i",
             str(input_path),
             "-af",
-            f"{loudnorm},alimiter=limit=0.89,aresample=48000",
+            f"{loudnorm},alimiter=limit=0.89:level=false,aresample=48000",
             "-ar",
             "48000",
             "-c:v",
             "copy",
             "-c:a",
             "aac",
+            "-b:a",
+            "192k",
             # Without this the moov atom lands after mdat (ffmpeg's default for a
             # streamed write), which several players — including the one used to hand
             # previews back for review — refuse to start until the whole file has

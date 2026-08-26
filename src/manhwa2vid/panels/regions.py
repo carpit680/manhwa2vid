@@ -137,6 +137,21 @@ def bubble_fraction(crop: np.ndarray) -> float:
     return float((gray > 232).mean())
 
 
+def is_text_only_panel(img: np.ndarray) -> bool:
+    """A panel with (almost) no art: bare bubbles, SFX strokes on white, blank slivers.
+
+    Signature measured across FP's 289 panels (2026-08-26): meaningful bright area but
+    under 15% mid-tone pixels — art always carries mid-tones, text/SFX panels don't.
+    Validated by eye on the 63 panels the rule selects: bubbles-on-black, sound-effect
+    calligraphy, near-blank transitions; zero real art panels among them. Used to keep
+    bounded fill from volunteering them (a matcher CLAIM still shows one — quoting its
+    line is legitimate)."""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    bright = float((gray > 232).mean())
+    mid = float(((gray > 40) & (gray <= 232)).mean())
+    return bright > 0.2 and mid < 0.15
+
+
 def absorb_bubble_regions(
     img: np.ndarray, regions: list[Box], *, bright_frac: float = 0.45
 ) -> list[Box]:
