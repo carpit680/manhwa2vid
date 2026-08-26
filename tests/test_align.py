@@ -242,3 +242,46 @@ def test_thin_range_borrows_adjacent_pages_for_airtime():
     assert "p0003_01" in out[0], "the original range must survive"
     # without a requirement, the thin range stays thin
     assert expand_to_panels(entries, 1, PANELS) == [["p0003_01"]]
+
+
+def test_time_blocks_stop_panels_crossing_a_printed_scene_break():
+    """The user's report: narration still on the Frost Queen fight while the panels had
+    already cut to the 76-hours-earlier flashback.
+
+    The manhwa prints "76 HOURS AGO, ANTARCTICA" and the read stage records its page —
+    but these pages are 10-14k-pixel scroll strips, so page 0005 holds the END of the
+    fight in panels 1-13 and the flashback caption in panel 14. Cutting on the PAGE
+    would strand thirteen fight panels: the boundary must be the panel.
+    """
+    from manhwa2vid.script.align import clamp_to_time_blocks
+
+    ordered = [f"p0005_{i:02d}" for i in range(1, 15)] + [f"p0006_{i:02d}" for i in range(1, 5)]
+    paras = [
+        "The queen of ice stands tall in her frozen throne room.",
+        "The Frost Queen crumbles into nothing.",
+        "Seventy-six hours earlier, the Nest Attack Team stands at the stairs.",
+    ]
+    # As mis-aligned: paragraph 1 reaches past the boundary into the flashback.
+    lists = [
+        ordered[0:14],      # para 1 — includes p0005_14, the flashback caption
+        ordered[8:14],      # para 2 — same overreach
+        ordered[13:18],     # para 3 — the flashback
+    ]
+    out = clamp_to_time_blocks(lists, paras, ordered, ["p0005_14"])
+    assert "p0005_14" not in out[0], "fight narration must not show the flashback caption"
+    assert "p0005_14" not in out[1]
+    assert out[2][0] == "p0005_14", "the flashback paragraph starts ON the caption"
+    assert "p0005_13" in out[0], "the fight's own panels must survive"
+    # No boundary -> untouched.
+    assert clamp_to_time_blocks(lists, paras, ordered, []) == lists
+
+
+def test_time_block_clamp_never_strands_a_paragraph():
+    from manhwa2vid.script.align import clamp_to_time_blocks
+
+    ordered = [f"p0001_{i:02d}" for i in range(1, 9)]
+    paras = ["Opening.", "Twenty-five years later, a museum."]
+    # para 2's panels all sit in block 0 — clamping would empty it.
+    out = clamp_to_time_blocks([ordered[0:4], ordered[0:2]], paras, ordered, ["p0001_05"])
+    assert out[1], "a clamped paragraph must fall back to its own block, not vanish"
+    assert all(p >= "p0001_05" for p in out[1])

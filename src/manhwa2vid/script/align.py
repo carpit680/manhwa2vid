@@ -84,6 +84,123 @@ def request_alignment(
     return list(data.get("map") or [])
 
 
+#: The narration's own way of saying it just jumped in time. These open a paragraph
+#: that legitimately begins a new time block.
+_TIME_JUMP_RE = re.compile(
+    r"\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|twenty[- ]?five|"
+    r"seventy[- ]?six|a\s+few|several)[\s-]+"
+    r"(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?|decades?)\s+"
+    r"(?:earlier|later|ago|before|after|prior)|"
+    r"\b(?:meanwhile|back in the|years later|moments later|earlier that)\b",
+    re.I,
+)
+
+_BOUNDARY_SYSTEM = """You are locating printed scene-break captions in manhwa panels.
+
+You are given a caption's text, then a series of labeled panels from one page.
+
+Return JSON only: {"panel": "p0005_14"} — the id of the panel that CONTAINS that
+caption, or {"panel": null} if none of them do. Report only what you can read."""
+
+
+def locate_boundary_panels(
+    paths: dict[str, Path],
+    panels: list[Panel],
+    config: dict[str, Any],
+) -> list[str]:
+    """Panel ids where a printed time skip begins.
+
+    The read stage records the PAGE a marker appears on, and that is too coarse to cut
+    on: these pages are 10-14k pixel scroll strips, and page 0005 of Frozen Player holds
+    the end of the Frost Queen fight in panels 1-13 and "76 HOURS AGO, ANTARCTICA" in
+    panel 14. Cutting the whole page into the flashback would strand thirteen fight
+    panels — worse than the bug it fixes. So the marker's page is narrowed to the marker's
+    PANEL with one cheap vision call per boundary page.
+    """
+    facts_path = paths.get("chapter_facts_json")
+    if not facts_path or not facts_path.exists():
+        return []
+    try:
+        markers = json.loads(facts_path.read_text(encoding="utf-8")).get("time_markers") or []
+    except Exception:
+        return []
+    if not markers:
+        return []
+
+    by_page: dict[str, list[Panel]] = {}
+    for panel in panels:
+        by_page.setdefault(_page_of(panel.id), []).append(panel)
+
+    from manhwa2vid.llm.provider import get_llm_provider
+
+    provider = get_llm_provider(get_nested(config, "align", "provider", default=None), config)
+    model = get_nested(config, "align", "model", default=None)
+    if model:
+        provider.vision_model = model
+    provider.temperature = 0.0
+
+    found: list[str] = []
+    for marker in markers:
+        page = _normalize_page(marker.get("page"))
+        text = str(marker.get("text") or "").strip()
+        page_panels = by_page.get(page) or []
+        if not text or not page_panels:
+            continue
+        if len(page_panels) == 1:
+            found.append(page_panels[0].id)
+            continue
+        try:
+            raw = provider.describe_labeled_panels(
+                [(f"[{p.id}]", paths["root"] / p.image_path) for p in page_panels],
+                f'{_BOUNDARY_SYSTEM}\n\nCAPTION TO FIND: "{text}"',
+            )
+            pid = (json.loads(raw) if isinstance(raw, str) else raw).get("panel")
+        except Exception:
+            pid = None
+        if pid and any(p.id == pid for p in page_panels):
+            found.append(str(pid))
+    return found
+
+
+def clamp_to_time_blocks(
+    panel_lists: list[list[str]],
+    para_texts: list[str],
+    ordered_ids: list[str],
+    boundary_ids: list[str],
+) -> list[list[str]]:
+    """Keep each paragraph's panels inside the time block its narration is in.
+
+    Without this the picture crossed a printed time skip a whole beat before the
+    narrator did: the Frost Queen fight was still being described while the panels had
+    already cut to "76 HOURS AGO". A viewer reads that as a broken video, and no
+    quality of narration survives it.
+    """
+    cuts = sorted(
+        {ordered_ids.index(b) for b in boundary_ids if b in ordered_ids}
+    )
+    if not cuts:
+        return panel_lists
+    edges = [0, *cuts, len(ordered_ids)]
+    blocks = [(edges[i], edges[i + 1]) for i in range(len(edges) - 1)]
+
+    # Paragraph -> block. Block advances at each paragraph that ANNOUNCES a jump.
+    index_of = {pid: i for i, pid in enumerate(ordered_ids)}
+    block_of: list[int] = []
+    current = 0
+    for text in para_texts:
+        if _TIME_JUMP_RE.search(text) and current + 1 < len(blocks):
+            current += 1
+        block_of.append(current)
+
+    out: list[list[str]] = []
+    for pids, block_idx in zip(panel_lists, block_of):
+        lo, hi = blocks[block_idx]
+        kept = [pid for pid in pids if lo <= index_of.get(pid, -1) < hi]
+        # Never strand a paragraph with nothing: fall back to the head of its block.
+        out.append(kept or ordered_ids[lo:hi][: max(1, len(pids))])
+    return out
+
+
 def _nearest_page(ordered_pages: list[str], page: str) -> str:
     if page in ordered_pages:
         return page
@@ -250,7 +367,10 @@ def align_script(
     panels = load_story_panels(paths)
 
     entries = request_alignment(para_texts, pages, config)
-    save_json(paths["script_alignment_json"], {"map": entries})
+    boundary_ids = locate_boundary_panels(paths, panels, config)
+    save_json(
+        paths["script_alignment_json"], {"map": entries, "time_boundaries": boundary_ids}
+    )
 
     from manhwa2vid.panels.split import panel_visual_stats_file
 
@@ -271,6 +391,12 @@ def align_script(
     panel_lists = expand_to_panels(
         entries, len(para_texts), panels, empty_ids=empty_ids, min_panels=min_panels
     )
+    if boundary_ids:
+        ordered_ids = [p.id for p in sorted(panels, key=lambda x: x.id)]
+        panel_lists = clamp_to_time_blocks(
+            panel_lists, para_texts, ordered_ids, boundary_ids
+        )
+        console.print(f"[dim]Align: time blocks cut at {boundary_ids}[/]")
 
     beats = [
         ScriptBeat(
