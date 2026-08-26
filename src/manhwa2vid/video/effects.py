@@ -415,6 +415,61 @@ def render_fill_frame_frames(
     return frames
 
 
+def render_letterbox_frames(
+    panel_path: Path,
+    width: int,
+    height: int,
+    num_frames: int,
+    config: dict[str, Any],
+    *,
+    seed: str = "",
+) -> list[Image.Image]:
+    """Show the panel WHOLE, centred, blurred copy filling the bars, gentle push-in.
+
+    This is the reference channel's default look and it is measured, not assumed: its
+    sharp centre band is 0.50 of frame width at the median and bars are present on 70%
+    of its frames (p10 0.34, p90 0.90). Filling the frame on every shot — which this
+    pipeline briefly did — sits at 0.84 median, further from the reference than the
+    reference is from us.
+
+    It also answers the scrolling complaint directly: a panel shown whole has nothing
+    left to pan across. The push-in is deliberately tiny (4%) so "whole" stays true.
+    """
+    push = float(get_nested(config, "video", "letterbox_push_in", default=0.04))
+    blur = int(get_nested(config, "video", "letterbox_blur_radius", default=20))
+    panel = crop_to_content(Image.open(panel_path).convert("RGB"))
+
+    background = panel.copy().resize((width, height), Image.Resampling.LANCZOS)
+    background = background.filter(ImageFilter.GaussianBlur(radius=blur))
+    fit = min(width / panel.width, height / panel.height)
+
+    rng = random.Random(seed or str(panel_path))
+    grow = rng.choice([True, False])
+
+    frames: list[Image.Image] = []
+    for i in range(num_frames):
+        t = cosine_ease(i / max(num_frames - 1, 1))
+        scale = fit * ((1.0 + push * t) if grow else (1.0 + push * (1.0 - t)))
+        new_w = max(1, int(round(panel.width * scale)))
+        new_h = max(1, int(round(panel.height * scale)))
+        canvas = background.copy()
+        resized = panel.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        # Centre, cropping only the sliver the push-in pushes past the frame.
+        left = (width - new_w) // 2
+        top = (height - new_h) // 2
+        if new_w > width or new_h > height:
+            cx0 = max(0, -left)
+            cy0 = max(0, -top)
+            resized = resized.crop(
+                (cx0, cy0, min(new_w, cx0 + width), min(new_h, cy0 + height))
+            )
+            left = max(left, 0)
+            top = max(top, 0)
+        canvas.paste(resized, (left, top))
+        frames.append(canvas)
+    return frames
+
+
 def render_panel_motion_frames(
     panel_path: Path,
     panel: Panel,
@@ -436,20 +491,32 @@ def render_panel_motion_frames(
     # single-appearance renders are unchanged.
     seed = panel.id if seed_salt is None else f"{panel.id}:{seed_salt}"
 
-    # Fill-frame guard: a panel so small that filling the frame would over-magnify it
-    # falls back to the whole-panel letterbox (blur bars) rather than a soft smear.
-    max_fill_zoom = float(get_nested(config, "video", "max_fill_zoom", default=3.2))
+    # Routing, measured against the reference channel rather than assumed. Its sharp
+    # centre band is 0.50 of frame width at the median with bars on 70% of frames, so
+    # SHOWING THE PANEL WHOLE IS THE DEFAULT — not a fallback. Filling the frame is
+    # reserved for panels that already fit it, where the crop costs nothing.
+    #
+    # This is also the honest answer to "too much scrolling": a whole panel has nothing
+    # left to pan across. Only panels too tall to read whole (a 16:9 fit would leave
+    # them under `letterbox_min_width_fraction` of the frame) go to the fill-frame
+    # camera, which covers them with capped drift and hard cuts.
     try:
-        with Image.open(panel_path) as probe:
-            pw, ph = probe.size
+        cropped = crop_to_content(Image.open(panel_path).convert("RGB"))
+        pw, ph = cropped.size
     except OSError:
-        pw, ph = panel.bbox.width, panel.bbox.height
-    win_w, _win_h, _axis, _span = _window_geometry(max(pw, 1), max(ph, 1), width, height)
-    if width / max(win_w, 1) > max_fill_zoom:
-        z0, z1 = ken_burns_params(seed)
-        base = letterbox_panel(panel_path, width, height)
-        return render_ken_burns_frames(
-            base, num_frames, z0, z1, config, width=width, height=height
+        pw, ph = max(panel.bbox.width, 1), max(panel.bbox.height, 1)
+
+    frame_aspect = height / width
+    aspect = ph / max(pw, 1)
+    min_width_frac = float(
+        get_nested(config, "video", "letterbox_min_width_fraction", default=0.32)
+    )
+    fits_frame = 0.85 * frame_aspect <= aspect <= 1.15 * frame_aspect
+    letterbox_width_frac = frame_aspect / aspect if aspect > 0 else 1.0
+
+    if not fits_frame and letterbox_width_frac >= min_width_frac:
+        return render_letterbox_frames(
+            panel_path, width, height, num_frames, config, seed=seed
         )
 
     return render_fill_frame_frames(

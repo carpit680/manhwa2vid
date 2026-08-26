@@ -381,7 +381,15 @@ video:
   # Fill-frame camera (2026-08-26 decision): the camera is a 16:9 window INSIDE the
   # panel, panned in reading order — whole-panel letterboxing wasted 51-52% of the
   # screen as blur bars across both audited videos.
-  max_fill_zoom: 3.2        # frame_w / window_w beyond this -> letterbox fallback
+  max_fill_zoom: 3.2        # (legacy) frame_w / window_w guard for the fill camera
+  # Showing the panel WHOLE with blurred bars is the DEFAULT, not a fallback: the
+  # reference channel's sharp centre band measures 0.50 of frame width at the median,
+  # with bars present on 70% of its frames (p10 0.34). Filling the frame on every shot
+  # measured 0.84 — further from the reference than the reference is. A whole panel
+  # also has nothing left to pan across, which is the real fix for "too much scrolling".
+  letterbox_min_width_fraction: 0.32  # below this the panel is too thin to read whole
+  letterbox_push_in: 0.04             # gentle breathing; "whole" must stay true
+  letterbox_blur_radius: 20
   # The camera DRIFTS, it does not traverse. Measured on the reference channel's own
   # edit: 0% of its shots move more than 0.25 frame-heights, median 0.093, p90 0.201.
   # Ours panned on 93% of shots (47% over 0.25) and read as one continuous scroll.

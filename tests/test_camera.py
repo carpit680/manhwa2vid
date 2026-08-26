@@ -428,3 +428,56 @@ def test_badge_fades_and_endcard_reads() -> None:
     card = np.asarray(make_end_card(480, 270, "Solo Leveling", "1-5").convert("L"))
     assert card.mean() < 60, "card is dark"
     assert (card > 180).sum() > 200, "title text present"
+
+
+def test_tall_panel_is_shown_whole_with_bars_not_cropped(tmp_path: Path) -> None:
+    """Whole-panel-with-blurred-bars is the DEFAULT, not a fallback.
+
+    Measured on the reference channel: its sharp centre band is 0.50 of frame width at
+    the median, bars present on 70% of frames. Filling the frame on every shot measured
+    0.84 — further from the reference than the reference is. It also answers the
+    scrolling complaint: a whole panel has nothing left to pan across.
+    """
+    import numpy as np
+    from manhwa2vid.models import Panel, PanelBBox
+    from manhwa2vid.video.effects import render_panel_motion_frames
+
+    p = _art_panel(tmp_path, 700, 900, "portrait.png")   # aspect 1.29 -> 0.44 of width
+    panel = Panel(id="p0001_01", page_num=1,
+                  bbox=PanelBBox(x=0, y=0, width=700, height=900), image_path=str(p))
+    frames = render_panel_motion_frames(p, panel, 480, 270, 30, {}, seed_salt=0)
+    f = np.asarray(frames[len(frames) // 2].convert("L")).astype(np.float32)
+    # the sharp band must be a CENTRE STRIPE, not the whole width
+    d2 = np.abs(np.diff(f, n=2, axis=1)).mean(axis=0)
+    live = np.flatnonzero(d2 > max(d2.max() * 0.25, 0.5))
+    frac = (live[-1] - live[0] + 1) / f.shape[1]
+    assert 0.25 <= frac <= 0.80, f"expected blurred bars, sharp band was {frac:.2f} of width"
+
+
+def test_frame_shaped_panel_still_fills_the_frame(tmp_path: Path) -> None:
+    """A panel that already fits 16:9 gains nothing from bars."""
+    import numpy as np
+    from manhwa2vid.models import Panel, PanelBBox
+    from manhwa2vid.video.effects import render_panel_motion_frames
+
+    p = _art_panel(tmp_path, 960, 540, "wide.png")
+    panel = Panel(id="p0001_02", page_num=1,
+                  bbox=PanelBBox(x=0, y=0, width=960, height=540), image_path=str(p))
+    frames = render_panel_motion_frames(p, panel, 480, 270, 30, {}, seed_salt=0)
+    f = np.asarray(frames[0].convert("L")).astype(np.float32)
+    d2 = np.abs(np.diff(f, n=2, axis=1)).mean(axis=0)
+    live = np.flatnonzero(d2 > max(d2.max() * 0.25, 0.5))
+    assert (live[-1] - live[0] + 1) / f.shape[1] > 0.85
+
+
+def test_extreme_strip_does_not_letterbox_into_a_ribbon(tmp_path: Path) -> None:
+    """A 4:1 strip shown whole would be 14% of frame width — unreadable. Those still
+    go to the fill camera, which covers them with cuts rather than a long scroll."""
+    from manhwa2vid.models import Panel, PanelBBox
+    from manhwa2vid.video.effects import render_panel_motion_frames
+
+    p = _art_panel(tmp_path, 700, 2800, "strip.png")
+    panel = Panel(id="p0001_03", page_num=1,
+                  bbox=PanelBBox(x=0, y=0, width=700, height=2800), image_path=str(p))
+    frames = render_panel_motion_frames(p, panel, 480, 270, 30, {}, seed_salt=0)
+    assert len(frames) == 30 and frames[0].size == (480, 270)
