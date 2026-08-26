@@ -350,3 +350,31 @@ def test_forward_runs_respect_time_blocks():
     )
     assert all(p in ordered[0:5] for p in out[0] + out[1])
     assert all(p in ordered[5:10] for p in out[2] + out[3])
+
+
+def test_greedy_paragraph_cannot_starve_its_block_neighbours():
+    """Reserving one panel per remaining paragraph was not enough: beat 1 swallowed its
+    whole time block and left beat 2 a single image held for 22.9 seconds."""
+    from manhwa2vid.script.align import distribute_within_blocks
+
+    ordered = [f"p0001_{i:02d}" for i in range(1, 21)]
+    # para 1's model range covers almost everything; para 2 needs 4 panels of airtime.
+    out = distribute_within_blocks(
+        [ordered[0:18], ordered[17:20]], ordered, [0, 0], [(0, 20)], {1: 6, 2: 4}
+    )
+    assert len(out[1]) >= 4, f"neighbour starved: {out[1]}"
+    assert len(out[0]) >= 6
+
+
+def test_oversubscribed_block_degrades_evenly():
+    """When a block cannot satisfy every minimum, scale them together rather than
+    letting the last paragraph take whatever is left."""
+    from manhwa2vid.script.align import distribute_within_blocks
+
+    ordered = [f"p0001_{i:02d}" for i in range(1, 7)]
+    out = distribute_within_blocks(
+        [ordered[0:3], ordered[2:5], ordered[4:6]], ordered, [0, 0, 0], [(0, 6)],
+        {1: 4, 2: 4, 3: 4},
+    )
+    assert sum(len(o) for o in out) == 6
+    assert max(len(o) for o in out) - min(len(o) for o in out) <= 1

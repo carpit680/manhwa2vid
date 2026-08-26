@@ -190,16 +190,28 @@ def distribute_within_blocks(
         members = [i for i, b in enumerate(block_of) if b == block_idx]
         if not members:
             continue
+        # Every paragraph in the block needs enough panels for its own airtime, so a
+        # greedy earlier one must not eat them. Reserving a single panel each was not
+        # enough: beat 1 swallowed its whole block and left beat 2 one image held for
+        # 22.9 seconds.
+        wants = {i: max(1, min_panels.get(i + 1, 1)) for i in members}
+        total_want = sum(wants.values())
+        available = hi - lo
+        if total_want > available and total_want:
+            # The block cannot satisfy every minimum — scale them down together rather
+            # than starving whoever comes last.
+            wants = {i: max(1, int(w * available / total_want)) for i, w in wants.items()}
+
         cursor = lo
         for n, para_i in enumerate(members):
-            remaining = len(members) - n - 1
+            reserve = sum(wants[i] for i in members[n + 1 :])
             if n == len(members) - 1:
                 end = hi
             else:
-                want = max(1, min_panels.get(para_i + 1, 1))
+                want = wants[para_i]
                 positions = [index_of[q] for q in panel_lists[para_i] if q in index_of]
                 target = max(positions) + 1 if positions else cursor + want
-                end = min(max(target, cursor + want), hi - remaining)
+                end = min(max(target, cursor + want), hi - reserve)
             end = max(end, cursor + 1)
             out[para_i] = ordered_ids[cursor:end]
             cursor = min(end, hi)
