@@ -162,10 +162,6 @@ def locate_boundary_panels(
     return found
 
 
-#: How far above its fair share of a block one paragraph may go.
-_SHARE_CEILING = 2.0
-
-
 def distribute_within_blocks(
     panel_lists: list[list[str]],
     ordered_ids: list[str],
@@ -173,78 +169,58 @@ def distribute_within_blocks(
     blocks: list[tuple[int, int]],
     min_panels: dict[int, int] | None = None,
 ) -> list[list[str]]:
-    """Give each paragraph its own forward run of panels — no overlap, no rewinding.
+    """Lay each block's panels out as contiguous runs, sized by each paragraph's airtime.
 
-    The alignment model returns a page RANGE per paragraph and neighbouring ranges
-    overlap, so taking every panel on those pages made consecutive beats replay each
-    other: measured on Frozen Player, 8 of 16 beats began BEFORE the previous beat
-    ended, one restarting a page the previous beat had just walked through. On screen
-    that is the video rewinding mid-sentence.
+    Decide all the LENGTHS first, then lay them end to end. That ordering is the whole
+    point: forward progress, no duplicates, no gaps and no leftovers are then true by
+    construction rather than by a rule that has to be got right.
 
-    The model's ranges still decide WHERE each paragraph sits — they become the target
-    end of its run. This only enforces what a recap always wants inside one time block:
-    move forward, cover the block once. Blocks themselves may jump backward in story
-    time; that is the flashback, and the block split already handles it.
+    Three earlier versions tried to steer this with the alignment model's per-paragraph
+    page ranges and each broke differently — a 33-word beat handed 170 panels because it
+    sat last in its block; a beat frozen 22.9s because a greedy neighbour ate its share;
+    then leftovers dealt from the block's tail to early paragraphs, which put 7 of Solo
+    Leveling's 38 beats back into stepping backward. The model's ranges are simply not
+    reliable enough at 38 paragraphs to divide a block by, and every attempt to correct
+    them added a rule that interacted badly with the last one.
+
+    So the map no longer sizes anything. It is still requested and saved to
+    script.alignment.json for inspection, and TIME BOUNDARIES (which come from captions
+    the chapter prints, not from the model) still decide where blocks begin — that is
+    what actually keeps the picture with the narration. Within a block, a recap moves
+    front to back, and how long it lingers is how long the narrator talks.
     """
+    del panel_lists  # sizes come from airtime; the model's ranges are advisory only
     min_panels = min_panels or {}
-    index_of = {pid: i for i, pid in enumerate(ordered_ids)}
-    out: list[list[str]] = [[] for _ in panel_lists]
+    out: list[list[str]] = [[] for _ in block_of]
 
     for block_idx, (lo, hi) in enumerate(blocks):
         members = [i for i, b in enumerate(block_of) if b == block_idx]
-        if not members:
-            continue
-        # Every paragraph in the block needs enough panels for its own airtime, so a
-        # greedy earlier one must not eat them. Reserving a single panel each was not
-        # enough: beat 1 swallowed its whole block and left beat 2 one image held for
-        # 22.9 seconds.
-        wants = {i: max(1, min_panels.get(i + 1, 1)) for i in members}
-        total_want = sum(wants.values())
         available = hi - lo
-        if total_want > available and total_want:
-            # The block cannot satisfy every minimum — scale them down together rather
-            # than starving whoever comes last.
-            wants = {i: max(1, int(w * available / total_want)) for i, w in wants.items()}
+        if not members or available <= 0:
+            continue
 
-        # Fair share by airtime, and a ceiling on top of it. Without the ceiling the
-        # model's page range for one paragraph could swallow a whole block: measured on
-        # Solo Leveling, a 33-word beat was handed 170 panels because it happened to sit
-        # last before a time boundary, while a 69-word beat two along got two.
-        share = {i: available * wants[i] / max(total_want, 1) for i in members}
-        ceiling = {i: max(wants[i], int(share[i] * _SHARE_CEILING)) for i in members}
+        wants = [max(1, min_panels.get(i + 1, 1)) for i in members]
+        total = sum(wants)
+        # Largest-remainder apportionment: proportional, integral, and sums EXACTLY to
+        # the panels available — so nothing is left over to deal out afterwards.
+        exact = [available * w / total for w in wants]
+        lengths = [max(1, int(x)) for x in exact]
+        while sum(lengths) > available and max(lengths) > 1:
+            lengths[lengths.index(max(lengths))] -= 1
+        remainder = available - sum(lengths)
+        for k in sorted(range(len(members)), key=lambda j: -(exact[j] - int(exact[j])))[
+            : max(0, remainder)
+        ]:
+            lengths[k] += 1
 
         cursor = lo
-        for n, para_i in enumerate(members):
-            reserve = sum(wants[i] for i in members[n + 1 :])
-            want = wants[para_i]
-            positions = [index_of[q] for q in panel_lists[para_i] if q in index_of]
-            target = max(positions) + 1 if positions else cursor + want
-            end = min(max(target, cursor + want), cursor + ceiling[para_i], hi - reserve)
-            end = max(end, cursor + 1)
+        for para_i, length in zip(members, lengths):
+            end = min(cursor + length, hi)
             out[para_i] = ordered_ids[cursor:end]
-            cursor = min(end, hi)
+            cursor = end
+        if cursor < hi and members:
+            out[members[-1]] = out[members[-1]] + ordered_ids[cursor:hi]
 
-        # Leftovers are spread over the block's paragraphs by airtime, never dumped on
-        # whoever happens to be last — that dump is exactly how the 170-panel beat
-        # happened, and the budget then threw 166 of them away.
-        leftover = hi - cursor
-        if leftover > 0:
-            order = sorted(members, key=lambda i: -wants[i])
-            mass = sum(wants[i] for i in order) or 1
-            handed = 0
-            for k, para_i in enumerate(order):
-                if k == len(order) - 1:
-                    extra = leftover - handed
-                else:
-                    extra = int(leftover * wants[para_i] / mass)
-                handed += extra
-                if extra <= 0:
-                    continue
-                out[para_i] = out[para_i] + ordered_ids[cursor : cursor + extra]
-                cursor += extra
-            # Re-sort each run so panels stay in reading order within the paragraph.
-            for para_i in members:
-                out[para_i] = sorted(out[para_i], key=lambda q: index_of.get(q, 0))
     return [
         run or [ordered_ids[blocks[block_of[i]][0]]] for i, run in enumerate(out)
     ]
