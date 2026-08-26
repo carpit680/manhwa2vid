@@ -20,6 +20,9 @@ panels:
     close_px: 5             # morphological close; 9+ re-bridges staggered insets
     min_area_frac: 0.004    # component smaller than this fraction of the band is noise
     bubble_bright_frac: 0.45  # region mostly >232 brightness = bare bubble, absorbed
+    sliver_max_aspect: 0.20   # band flatter than 5:1 is a split fragment or a system
+                              # banner — either way it belongs WITH its neighbour, not
+                              # alone (min_panel_height is absolute and misses these)
     max_regions: 6
     pad_frac: 0.03
   filter_non_story: true

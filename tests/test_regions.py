@@ -252,3 +252,31 @@ def test_merge_respects_the_disable_flag():
     bands = [(0, 600), (600, 600)]
     cfg = {"panels": {"regions": {"enabled": False}}}
     assert _merge_text_only_bands(img, bands, cfg) == bands
+
+
+def test_wide_sliver_band_merges_into_its_neighbour():
+    """A band flatter than 5:1 is a split fragment or a system-message banner. Measured:
+    an 800x108 crop of the bottom arc of a speech bubble held the screen for six
+    seconds. min_panel_height is an absolute floor (89px on an 800-wide page) so a
+    108px sliver clears it — the signal is the SHAPE."""
+    from manhwa2vid.panels.split import _merge_text_only_bands
+
+    img = _canvas(1400, 800, 0)
+    _paint_art(img, 40, 40, 720, 560)         # band 1: art (rows 0-620)
+    _paint_art(img, 0, 640, 800, 108)         # band 2: 7.4:1 sliver (rows 620-760)
+    _paint_art(img, 40, 800, 720, 560)        # band 3: art (rows 760-1400)
+    bands = [(0, 620), (620, 140), (760, 640)]
+    merged = _merge_text_only_bands(img, bands, {})
+    assert len(merged) == 2, f"the sliver should be gone: {merged}"
+    assert all(h / 800 >= 0.20 for _y, h in merged), "no sliver survives"
+
+
+def test_a_normal_wide_panel_is_not_a_sliver():
+    """A cinematic 3:1 establishing panel is a real panel and must survive."""
+    from manhwa2vid.panels.split import _merge_text_only_bands
+
+    img = _canvas(1200, 800, 0)
+    _paint_art(img, 20, 20, 760, 240)     # 800x280 band -> aspect 0.35, above the floor
+    _paint_art(img, 20, 340, 760, 800)
+    bands = [(0, 300), (300, 900)]
+    assert len(_merge_text_only_bands(img, bands, {})) == 2

@@ -245,19 +245,34 @@ def _merge_text_only_bands(
 
     The band is merged into whichever neighbour has more ink, so a bubble between two
     panels joins the busier one rather than always the one above.
+
+    Extreme WIDE SLIVERS are folded the same way. A band under `sliver_max_aspect`
+    (height/width) is either a split fragment — a 800x108 crop showing the bottom arc of
+    a speech bubble, measured, and held on screen for six seconds — or a system-message
+    banner. Neither wants to be its own shot: the fragment is noise, and the banner
+    reads far better sitting with the art it interrupts, which is how the reference
+    channel presents them. `min_panel_height` cannot catch these because it is an
+    absolute pixel floor (89px on an 800-wide page) and a 108px sliver clears it; the
+    signal is the SHAPE.
     """
     if not bool(get_nested(config, "panels", "regions", "enabled", default=True)):
         return bboxes
     from manhwa2vid.panels.regions import is_text_only_panel
 
     h, w = img.shape[:2]
+    sliver_max_aspect = float(
+        get_nested(config, "panels", "regions", "sliver_max_aspect", default=0.20)
+    )
     bands = [list(b) for b in bboxes]
     changed = True
     while changed and len(bands) > 1:
         changed = False
         for i, (y0, ph) in enumerate(bands):
             crop = img[y0 : y0 + ph, 0:w]
-            if crop.size == 0 or not is_text_only_panel(crop):
+            if crop.size == 0:
+                continue
+            is_sliver = (ph / max(w, 1)) < sliver_max_aspect
+            if not is_sliver and not is_text_only_panel(crop):
                 continue
             candidates = [j for j in (i - 1, i + 1) if 0 <= j < len(bands)]
             if not candidates:
