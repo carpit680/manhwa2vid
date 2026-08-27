@@ -7,7 +7,7 @@ from pathlib import Path
 from PIL import Image
 
 from manhwa2vid.models import Panel, PanelBBox
-from manhwa2vid.video.effects import choose_camera_mode, cosine_ease, render_vertical_scroll_frames
+from manhwa2vid.video.effects import cosine_ease, render_vertical_scroll_frames
 
 
 def _panel(**kwargs) -> Panel:
@@ -18,7 +18,6 @@ def _panel(**kwargs) -> Panel:
         "image_path": "panels/p0001_01.png",
         "split_method": "strip",
         "aspect_ratio": 4.17,
-        "camera_hint": "auto",
     }
     defaults.update(kwargs)
     return Panel(**defaults)
@@ -29,19 +28,10 @@ def test_cosine_ease_endpoints() -> None:
     assert cosine_ease(1.0) == 1.0
 
 
-def test_choose_camera_mode_strip() -> None:
-    panel = _panel(split_method="strip", aspect_ratio=4.0)
-    assert choose_camera_mode(panel, {"video": {"strip_scroll_aspect": 2.0}}) == "scroll"
 
 
-def test_choose_camera_mode_tall_aspect() -> None:
-    panel = _panel(split_method="gutter", aspect_ratio=2.5)
-    assert choose_camera_mode(panel, {"video": {"strip_scroll_aspect": 2.0}}) == "scroll"
 
 
-def test_choose_camera_mode_normal() -> None:
-    panel = _panel(split_method="gutter", aspect_ratio=1.2, camera_hint="auto")
-    assert choose_camera_mode(panel, {"video": {"strip_scroll_aspect": 2.0}}) == "ken_burns"
 
 
 def test_vertical_scroll_produces_frames(tmp_path: Path) -> None:
@@ -467,3 +457,33 @@ def test_extreme_strip_does_not_letterbox_into_a_ribbon(tmp_path: Path) -> None:
                   bbox=PanelBBox(x=0, y=0, width=700, height=2800), image_path=str(p))
     frames = render_panel_motion_frames(p, panel, 480, 270, 30, {}, seed_salt=0)
     assert len(frames) == 30 and frames[0].size == (480, 270)
+
+
+def test_only_true_strips_get_the_scrolling_camera(tmp_path: Path) -> None:
+    """Routing is `split_method == "strip"`, nothing else.
+
+    It used to go through choose_camera_mode(), which was inert: it returned "scroll"
+    whenever split_method was "strip" and the caller then AND-ed with that same
+    condition, so its aspect threshold and Panel.camera_hint could not change any
+    decision. This pins the rule that actually runs — a tall GUTTER panel must reach the
+    letterbox/fill camera, not the crawl.
+    """
+    import numpy as np
+    from manhwa2vid.models import Panel, PanelBBox
+    from manhwa2vid.video.effects import render_panel_motion_frames
+
+    tall = _art_panel(tmp_path, 700, 2800, "tall.png")
+
+    strip = Panel(id="p0001_01", page_num=1, split_method="strip",
+                  bbox=PanelBBox(x=0, y=0, width=700, height=2800), image_path=str(tall))
+    gutter = Panel(id="p0001_02", page_num=1, split_method="gutter",
+                   bbox=PanelBBox(x=0, y=0, width=700, height=2800), image_path=str(tall))
+
+    cfg = {"video": {"fps": 30, "motion_supersample": 1}}
+    a = render_panel_motion_frames(tall, strip, 480, 270, 30, cfg, seed_salt=0)
+    b = render_panel_motion_frames(tall, gutter, 480, 270, 30, cfg, seed_salt=0)
+    assert len(a) == len(b) == 30
+    # Same image, same seed: identical output would mean the split_method was ignored.
+    assert not np.array_equal(np.asarray(a[0]), np.asarray(b[0])), (
+        "strip and gutter panels took the same camera path"
+    )

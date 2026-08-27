@@ -64,39 +64,8 @@ def crop_to_content(panel: Image.Image, pad_frac: float = 0.04) -> Image.Image:
     )
 
 
-def letterbox_panel(panel_path: Path, width: int, height: int, blur_bg: bool = True) -> Image.Image:
-    panel = crop_to_content(Image.open(panel_path).convert("RGB"))
-    canvas = Image.new("RGB", (width, height), (0, 0, 0))
-
-    if blur_bg:
-        bg = panel.copy().resize((width, height), Image.Resampling.LANCZOS)
-        bg = bg.filter(ImageFilter.GaussianBlur(radius=20))
-        canvas.paste(bg, (0, 0))
-
-    scale = min(width / panel.width, height / panel.height)
-    new_w = int(panel.width * scale)
-    new_h = int(panel.height * scale)
-    resized = panel.resize((new_w, new_h), Image.Resampling.LANCZOS)
-    x = (width - new_w) // 2
-    y = (height - new_h) // 2
-    canvas.paste(resized, (x, y))
-    return canvas
 
 
-def choose_camera_mode(panel: Panel, config: dict[str, Any]) -> str:
-    hint = (panel.camera_hint or "auto").lower()
-    if hint in ("scroll", "ken_burns"):
-        return hint
-
-    threshold = float(get_nested(config, "video", "strip_scroll_aspect", default=2.0))
-    aspect = panel.aspect_ratio
-    if aspect is None and panel.bbox.width:
-        aspect = panel.bbox.height / panel.bbox.width
-    if panel.split_method == "strip":
-        return "scroll"
-    if aspect is not None and aspect >= threshold:
-        return "scroll"
-    return "ken_burns"
 
 
 def ken_burns_params(seed: str) -> tuple[float, float]:
@@ -152,56 +121,6 @@ def render_vertical_scroll_frames(
     return frames
 
 
-def render_ken_burns_frames(
-    base: Image.Image,
-    num_frames: int,
-    zoom_start: float,
-    zoom_end: float,
-    config: dict[str, Any],
-    *,
-    width: int,
-    height: int,
-) -> list[Image.Image]:
-    supersample = int(get_nested(config, "video", "motion_supersample", default=2))
-    pan_amount = float(get_nested(config, "video", "ken_burns_pan_amount", default=0.02))
-
-    out_w = width * supersample
-    out_h = height * supersample
-    base_ss = base.resize((out_w, out_h), Image.Resampling.LANCZOS)
-
-    rng = random.Random(str(zoom_start) + str(zoom_end))
-    pan_axis = rng.choice(["x", "y", "none"])
-    direction = rng.choice([-1.0, 1.0])
-
-    frames: list[Image.Image] = []
-    for i in range(num_frames):
-        t = i / max(num_frames - 1, 1)
-        ease = cosine_ease(t)
-        zoom = zoom_start + (zoom_end - zoom_start) * ease
-
-        crop_w = out_w / zoom
-        crop_h = out_h / zoom
-        cx = out_w / 2.0
-        cy = out_h / 2.0
-
-        if pan_axis == "x" and pan_amount > 0:
-            cx += direction * out_w * pan_amount * ease
-        elif pan_axis == "y" and pan_amount > 0:
-            cy += direction * out_h * pan_amount * ease
-
-        left = int(round(cx - crop_w / 2.0))
-        top = int(round(cy - crop_h / 2.0))
-        right = int(round(left + crop_w))
-        bottom = int(round(top + crop_h))
-
-        left = max(0, min(out_w - 1, left))
-        top = max(0, min(out_h - 1, top))
-        right = max(left + 1, min(out_w, right))
-        bottom = max(top + 1, min(out_h, bottom))
-
-        cropped = base_ss.crop((left, top, right, bottom))
-        frames.append(cropped.resize((width, height), Image.Resampling.LANCZOS))
-    return frames
 
 
 # --- fill-frame camera ---------------------------------------------------------------
@@ -215,10 +134,21 @@ def render_ken_burns_frames(
 def _bubble_boxes(gray: np.ndarray) -> list[tuple[int, int, int, int]]:
     """Solid near-white blobs — speech bubbles and captions.
 
-    Same detector the audit used to count bubble-dominant frames: brightness > 232,
-    closed, components that are big enough and mostly filled. Boxes are used two ways:
-    to down-weight bubbles in salience (art outranks text) and to keep a resting frame
-    from slicing a bubble at the frame edge (46% of audited frames had clipped text).
+    Brightness > 232, closed, components big enough and mostly filled. Boxes are used
+    two ways: to down-weight bubbles in salience (art outranks text) and to keep a
+    resting frame from slicing a bubble at the frame edge (46% of audited frames had
+    clipped text).
+
+    KNOWN DIVERGENCE, deliberately left alone. `video/qa_visual.py::_bubble_stats` runs
+    the same test PLUS a dark-pixel check inside the blob, because a white wall or bright
+    sky is also a solid bright blob and scored as a 40%-of-frame "bubble" there. This
+    copy has no such check, so it over-detects the same way — which makes the camera
+    down-weight some real art and snap away from some non-existent bubbles.
+
+    Adding the check here is a correctness fix, not a refactor: measured on Frozen
+    Player, it changes the bubble set on 40 of 100 shown panels, which moves camera
+    windows and therefore changes the video. It needs a render and a look, not a
+    tidy-up commit.
     """
     bright = (gray > 232).astype(np.uint8)
     bright = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
@@ -480,9 +410,14 @@ def render_panel_motion_frames(
     *,
     seed_salt: int | None = None,
 ) -> list[Image.Image]:
-    mode = choose_camera_mode(panel, config)
-    if mode == "scroll" and panel.split_method == "strip":
+    if panel.split_method == "strip":
         # A genuine continuous strip: the classic full-width crawl reads best.
+        #
+        # This used to route through choose_camera_mode(), which was inert: it returned
+        # "scroll" whenever split_method was "strip", and the caller then AND-ed with
+        # that same condition. Its aspect-ratio threshold and the Panel.camera_hint it
+        # consulted could not change any routing decision — split.py only ever wrote
+        # "scroll" or "auto", never the "ken_burns" the function could return.
         return render_vertical_scroll_frames(panel_path, width, height, num_frames, config)
 
     # `seed_salt` is the panel's position in the timeline, so a panel shown twice gets

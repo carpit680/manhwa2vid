@@ -240,7 +240,7 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
         len(b.narration.split()) for b in beats if b.beat_id in shipped_beat_ids
     )
     total_seconds = sum(e.duration for e in timeline.entries)
-    target_wpm = float(get_nested(config, "script", "target_wpm", default=235))
+    target_wpm = float(get_nested(config, "script", "target_wpm", default=220))
     tolerance = float(get_nested(config, "qa", "pace_tolerance", default=0.15))
     if total_words and total_seconds > 0 and target_wpm > 0:
         actual_wpm = total_words / (total_seconds / 60.0)

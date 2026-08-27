@@ -553,7 +553,7 @@ def align_script(
     # Airtime estimate per paragraph: words / (wpm/60). A paragraph must own at least
     # ceil(airtime / max_panel_seconds) panels or a single image freezes on screen for
     # its whole read (measured: one 17-second hold).
-    wpm = float(get_nested(config, "script", "target_wpm", default=200))
+    wpm = float(get_nested(config, "script", "target_wpm", default=220))
     max_sec = float(get_nested(config, "video", "max_panel_seconds", default=5.0))
     min_panels = {
         i + 1: max(1, int(-(-len(t.split()) / (wpm / 60.0) // max_sec)))

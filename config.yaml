@@ -10,10 +10,6 @@ panels:
   fallback_chunk_height: 800
   fallback_overlap: 80
   split_image_files: hybrid  # one_to_one | always_split | hybrid
-  strip_scroll_aspect: 2.0
-  # 2D collage splitting: gutter bands whose content is several disconnected regions
-  # (insets staggered in x/y on a flat background) are split per region. Values measured
-  # on SL p0002_02 (3 regions) / FP p0004_03 (2) / FP p0005_14 (continuous, untouched).
   regions:
     enabled: true
     tol: 18                 # brightness distance from page background = content
@@ -37,7 +33,6 @@ panels:
 
 ocr:
   enabled: true   # PaddleOCR (CPU) — ground truth for dialogue; VLM claims must overlap it
-  languages: ["ko", "en"]
   confidence_threshold: 0.5
 
 llm:
@@ -102,11 +97,6 @@ scene:
 characters:
   # Wiki scraping seeds junk profiles (Template:Infobox..., User:...) into the bible;
   # the glossary carries the sticky cast and scout/quest fill the rest.
-  wiki_lookup: false
-  lookahead_chapters: 3
-  scout_panels_per_chapter: 20
-  quest_max_iterations: 4
-  max_main: 1
   mc_labels: ["MC", "the protagonist", "our guy"]
   ban_words: ["character", "unnamed character", "a person", "the character", "two characters"]
 
@@ -185,100 +175,31 @@ script:
   # gemini-2.5-flash fallback (also now dead on this key — see llm.gemini above).
   provider: gemini
   model: gemini-3.5-flash
-  commentary_level: wry   # the reference has a dry read on events without ever saying
-                          # "I" — 8.2 evaluative asides per 1k words measured
-  # Values below are measured from the Mamoru Manhwa reference — see reference/style_profile.md
-  # 200 by preference, not measurement: the reference speaks 237 and Kokoro at 1.35
-  # delivered 256 on a full script, which read as rushed. This is the ONE number the
-  # panel budget is planned from (curate.words_per_shown_panel), so it moves together
-  # with tts.kokoro_speed — calibrated to 1.05, measured at exactly 200 WPM over five
-  # real beats. Letting them drift apart is the bug the narration-pace gate exists for.
-  # Closing ask written INTO the narration as a continuation of the last story line,
-  # the way the reference channel does it — a static subscribe card is a wall the
-  # viewer hits, a continued sentence keeps them listening. See script/outro.py.
   outro_cta: true
   target_wpm: 220       # was 200. Mamoru speaks 237; at 200 our sentences ran
                         # 4.71s each against his 3.23s, which is what made our
                         # shots longer than his despite cutting MORE per sentence
-  genz_level: light     # reference measures ~0 SLANG (0.07/1k) but 7.2/1k casual
-                        # epithets for the hero ("bro", "the guy") — those are register,
-                        # not slang, and reading 0.07 as "no personality" was the error
-                        # that made our narration read like a report
   max_narrator_asides: 4  # the 0.24 first-person per 1k measurement means the narrator
                           # never says "I" — NOT that he has no voice. He runs 8.2
                           # evaluative asides and 2.0 similes per 1k.
   # (casual_mc_epithet removed: it was read nowhere in src/, and genz_level already tunes
   # the same thing. The register itself is now asked for in recap.txt and MEASURED by
   # scorecard's casual_epithets_per_1k floor, which is what a knob should have been.)
-  beats_per_chapter: 14 # beat budget scales with chapters (from pages/sources.json);
-                        # golds and the reference channel all measure ~12-17/chapter
-  min_beats: 10
-  max_beats: 45         # hard cap on the derived budget
   max_beat_words: 60
   # Chapter word budget: narration is audio-locked, so word count IS runtime.
   # Measured references: Mamoru ~490/chapter, golds 525 and 677.
   words_per_chapter: 550
-  words_per_beat: 40        # every measured reference (both golds, the channel) sits at
-                            # 40-45; beats = words_per_chapter x chapters / this
-  curate_panels: true       # narrate only the salient panels, at the reference's measured
-                            # density (~10 words per shown panel = target_wpm x
-                            # video.target_panel_seconds / 60). A sparse chapter selects
-                            # everything; a dense one selects ~half, which is what the
-                            # reference channel does. Drops are recorded in
-                            # panels.curated.json and audited by panel-conservation.
-  # The narration response is an order of magnitude bigger than a vision window and was
-  # silently truncated at the shared 4096 vision cap for three runs, yielding zero beats.
-  narration_max_output_tokens: 16384
-  pairwise_judge: true   # comparative decision on fallback + rewrite (see script/judge.py)
-  grammar_check: true    # LanguageTool net over the final text (skips if unavailable)    # ceiling on any beat's word budget: panels x words_per_panel
-                        # is unbounded on panel-dense titles; every measured reference
-                        # sits near 40-45 words per beat
-  # Name-anchor cadence: a beat keeps ONE protagonist name anchor when this many
-  # beats have passed since the last one, or when the beat names another same-pronoun
-  # character (bare 'he' would be ambiguous out loud). The old hard cap (hook + 2
-  # names for the whole script) shipped a video where the MC was 'he' for fifteen
-  # straight beats — 21:1 pronouns-to-names vs the reference channel's ~6:1.
   mc_anchor_every_beats: 2
-  narration_chunk_size: 0   # 0 = whole script in ONE call (how the gold script was written);
-                            # >0 chunks it, which reintroduces cross-beat repetition
-  max_narration_images: 60  # panels attached to the whole-chapter narration call
-  # Optional manual override for the return-from-flashforward line. Normally left EMPTY:
-  # the whole-chapter read writes `return_to_present_line` per chapter and the polish
-  # locks that, so nothing here is tied to one series. Set only to force exact wording.
   transition_line: ""
   # Attach each chunk's actual panels to the narration call. The writer used to compose
   # from text cards while the alignment audit judged it against images — an image-blind
   # author checked by a sighted critic. Requires a multimodal script model.
-  sighted_narration: true
   words_per_panel_target: 14 # per-beat word ceiling = panels x this; enforced by lint rewrite
   # Narration runs HOT while the structured stages stay greedy. Lowering it made the
   # prose flat, and its variance stops being noise once something is choosing between
   # samples: one Frozen Player draft dropped the ice-break entirely and the next named it.
   # Reliability comes from selection and revision, not determinism.
-  narration_candidates: 3   # draft K whole-chapter candidates, let a viewer agent listen
-                            # to each and a judge pick. Writing the gold by hand was never
-                            # one forward pass — it was draft, re-read as a listener, fix.
-                            # Costs Kx narration tokens plus ~K viewer + 2(K-1) judge text
-                            # calls; that is the price of not being flat. 1 disables.
-  viewer_review: true
-  story_review: true        # storyboard reviewer: checks each candidate against the
-                            # chapter's real structure (time map, acts, and the scene
-                            # boundaries the ART prints). Replaces the pairwise script
-                            # judge, which split nearly every comparison because it saw
-                            # two narrations and no story.
-  story_review_rounds: 2    # corrective passes on the winner; survivors are gated AND
-                            # written to series/lessons.json so later runs start warned.
-  pairwise_script_judge: false
   narration_temperature: 0.9
-  min_plot_coverage: 0.25   # fraction of a beat's outline plot_beat vocabulary that must
-                            # survive into its narration; below this the beat is rewritten.
-                            # Audits OMISSION — the mirror of verify_alignment below.
-  verify_alignment: true    # adversarial VLM pass: flag narration claims unsupported by panels
-  verify_max_beats: 24      # sample cap for the alignment audit on long chapters
-  # Lines the artwork PRINTS on a beat's panels are promoted out of EVIDENCE (which the
-  # prompt calls optional detail) into MUST COVER. Frozen Player beat 11 owned the
-  # panels where the hero bursts out of the ice with "[YOU HAVE COMPLETELY ABSORBED THE
-  # FROST QUEEN'S NUCLEUS.]" printed on them and narrated a boy pointing at a statue.
   max_required_lines_per_beat: 4  # 4 x 10 words = 40, leaving ~20 of the 60-word ceiling
                                   # for spine and stakes. Asking for all 6 a beat may
                                   # carry fills the budget and produces list-recitation.
@@ -289,14 +210,11 @@ script:
   # a handful per chapter, always plot-critical, and the exact class that went missing.
   # The general check stays a warn — its 0.3 stemmed-overlap proxy moves for honest
   # reasons (a faithful paraphrase scores low), so blocking on it would tune the metric.
-  dialogue_delivery_gate: system
 
 qa:
   # +-15% of a 220 target is +-33 WPM, wide enough that a run delivering 250 passed
   # cleanly. 8% still absorbs ordinary synthesis variance but catches a real miss.
   pace_tolerance: 0.08
-  max_fallback_fraction: 0.34 # grounded-fallback may rescue beats, not author the script
-  enforce: true             # failed gates block the next stage (--force-past-qa overrides)
 
 tts:
   provider: kokoro      # kokoro | chatterbox | openai | mock
@@ -342,12 +260,6 @@ tts:
   voice: onyx
   speed: 0.85
 
-story:
-  # The series brief-read: skim chapters once, before writing any of them. Sweet spot
-  # from manhwa structure (arcs ~10-15 ch; premise+trajectory set by end of arc two):
-  dense_chapters: 24     # foundation read: chapters 0..N
-  rolling_ahead: 12      # ~one arc of forward knowledge past the current project's range
-  pages_per_chapter: 12  # stride-sample per chapter; ONE vision call each
 
 video:
   width: 1920
@@ -375,23 +287,12 @@ video:
   # Timeline QA warns when a single panel dwells longer than this multiple of
   # max_panel_seconds — the signature of a beat whose narration outruns its panel count.
   dwell_warn_multiplier: 1.5
-  transition_seconds: 0.3
   bgm_volume: 0.18
-  visual_mode: panels
   motion_supersample: 2
-  scroll_easing: cosine
-  # Hard ceiling on vertical scroll speed in output pixels/sec. Comfortable reading is
-  # 200-400; above ~1000 a tall strip becomes an unreadable smear. 0 disables the cap.
   max_scroll_px_per_sec: 600
   # Fill-frame camera (2026-08-26 decision): the camera is a 16:9 window INSIDE the
   # panel, panned in reading order — whole-panel letterboxing wasted 51-52% of the
   # screen as blur bars across both audited videos.
-  max_fill_zoom: 3.2        # (legacy) frame_w / window_w guard for the fill camera
-  # Showing the panel WHOLE with blurred bars is the DEFAULT, not a fallback: the
-  # reference channel's sharp centre band measures 0.50 of frame width at the median,
-  # with bars present on 70% of its frames (p10 0.34). Filling the frame on every shot
-  # measured 0.84 — further from the reference than the reference is. A whole panel
-  # also has nothing left to pan across, which is the real fix for "too much scrolling".
   letterbox_min_width_fraction: 0.32  # below this the panel is too thin to read whole
   letterbox_push_in: 0.04             # gentle breathing; "whole" must stay true
   letterbox_blur_radius: 20
@@ -402,8 +303,6 @@ video:
   pan_min_seconds: 1.8          # shorter shots hold still — fast AND moving is jarring
   max_dwell_seconds: 7.0    # longer shots get a mid re-frame cut on the same panel
   bubble_salience_weight: 0.15  # gradient energy inside bubble boxes is scaled by this
-  ken_burns_pan_amount: 0.02
-  strip_scroll_aspect: 2.0
 
 export:
   preview_scale: 0.5

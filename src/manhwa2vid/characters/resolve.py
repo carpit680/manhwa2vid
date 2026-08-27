@@ -242,13 +242,6 @@ def resolve_character_ref(
     return best_id
 
 
-def resolve_or_create_id(name: str, descriptor: str, bible: SeriesBible, *, speaker: str = "") -> tuple[str, bool]:
-    """Return (char_id, is_new)."""
-    existing = resolve_character_ref(name, descriptor, bible, speaker=speaker)
-    if existing:
-        return existing, False
-    label = name.strip() or speaker.strip() or descriptor.strip() or "unknown"
-    return slugify_char_id(label), True
 
 
 def profiles_are_same_person(a: CharacterProfile, b: CharacterProfile) -> bool:

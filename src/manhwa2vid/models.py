@@ -19,12 +19,6 @@ class SourceType(str, Enum):
     IMAGES = "images"
 
 
-class VisualMode(str, Enum):
-    PANELS = "panels"
-    PANELS_TRANSFORMED = "panels_transformed"
-    NARRATION_ONLY = "narration_only"
-
-
 class ProjectMeta(BaseModel):
     slug: str
     title: str
@@ -34,7 +28,6 @@ class ProjectMeta(BaseModel):
     source_path: str = ""
     pdf_path: str = ""  # legacy alias for PDF projects
     images_are_panels: bool = False
-    visual_mode: VisualMode = VisualMode.PANELS
     commentary_level: str = "light"
     series_slug: str = ""
 
@@ -75,7 +68,6 @@ class Panel(BaseModel):
     confidence: float = 1.0
     split_method: str = "auto"
     aspect_ratio: float | None = None
-    camera_hint: str = "auto"  # auto | scroll | ken_burns
     # Pixel-content stats stamped at split time (None on pre-change cached panels.json;
     # backfilled lazily by apply_panel_filter). Used to exclude blank transition slivers.
     ink_ratio: float | None = None   # fraction of pixels with gray < 245
@@ -206,7 +198,6 @@ class ScriptBeat(BaseModel):
     beat_id: int
     panel_ids: list[str]
     narration: str
-    estimated_seconds: float | None = None
     character_ids: list[str] = Field(default_factory=list)
     # Panels this beat's narration DEPENDS on — the moment named, the emotion described,
     # the blow landed. Marked by the writer (which read the evidence), editable in the

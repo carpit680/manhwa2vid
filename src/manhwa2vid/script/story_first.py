@@ -23,6 +23,7 @@ from manhwa2vid.script.freeform import paragraphs, write_freeform_script
 from manhwa2vid.script.outro import append_outro
 from manhwa2vid.script.lint import lint_broken_sentences
 from manhwa2vid.script.read import glossary_names, read_chapter_facts
+from manhwa2vid.script.sentences import split_sentences
 
 console = Console()
 
@@ -91,7 +92,7 @@ def unknown_names(text: str, allowed: set[str]) -> list[str]:
         text or "",
     )
     text = _GRADE_PREFIX_RE.sub("", text)
-    for sentence in re.split(r"(?<=[.!?])\s+", text or ""):
+    for sentence in split_sentences(text):
         # Drop the sentence's FIRST WORD before scanning. Testing "does this candidate
         # start the sentence" does not work: the multi-word pattern is greedy, so
         # "Then Kang Min-Su interrupts" matched as the single candidate
