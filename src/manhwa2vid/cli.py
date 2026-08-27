@@ -202,7 +202,7 @@ def review_script_cmd(
     if not draft.exists():
         raise typer.BadParameter("No script.draft.md — run script stage first.")
     if lint:
-        from manhwa2vid.script.generate import load_script_beats
+        from manhwa2vid.script.beats import load_script_beats
 
         beats = load_script_beats(paths).beats
         report = lint_beats(beats, config)
@@ -237,7 +237,7 @@ def review_preview_cmd(
 def storyboard_cmd(project: Path = typer.Option(..., "--project")) -> None:
     """Regenerate debug/storyboard.html from the current script (prefers script.final.md)."""
     from manhwa2vid.review.storyboard import write_storyboard
-    from manhwa2vid.script.generate import _parse_markdown_beats, load_script_beats
+    from manhwa2vid.script.beats import _parse_markdown_beats, load_script_beats
 
     _, paths, _, _ = load_project(project.resolve())
     draft = load_script_beats(paths)

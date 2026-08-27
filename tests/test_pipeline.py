@@ -202,7 +202,7 @@ def test_freeform_pipeline_mock(sample_project: Path, monkeypatch) -> None:
     assert all(b["narration"].strip() for b in beats)
 
     # The draft round-trips through the markdown the human edits.
-    from manhwa2vid.script.generate import _parse_markdown_beats
+    from manhwa2vid.script.beats import _parse_markdown_beats
 
     reparsed = _parse_markdown_beats(paths["script_draft"])
     assert [b["beat_id"] for b in beats] == [b.beat_id for b in reparsed]

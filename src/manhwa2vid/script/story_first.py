@@ -129,7 +129,7 @@ def unknown_names(text: str, allowed: set[str]) -> list[str]:
 
 
 def _beats_markdown(draft: ScriptDraft) -> str:
-    from manhwa2vid.script.generate import _beats_to_markdown
+    from manhwa2vid.script.beats import _beats_to_markdown
 
     return _beats_to_markdown(draft)
 
@@ -142,7 +142,7 @@ def generate_story_first_script(
     force: bool = False,
 ) -> ScriptDraft:
     if paths["script_draft"].exists() and not force:
-        from manhwa2vid.script.generate import load_script_beats
+        from manhwa2vid.script.beats import load_script_beats
 
         console.print(f"[dim]Using existing script draft[/] → {paths['script_draft']}")
         return load_script_beats(paths)
@@ -212,16 +212,11 @@ def generate_story_first_script(
         residual=len(residual),
     )
 
-    from manhwa2vid.script.scorecard import score_script  # report-only
-
-    try:
-        from manhwa2vid.characters.bible import load_series_bible
-
-        bible = load_series_bible(meta.series_slug, meta.title)
-        style = score_script(beats, bible, {**config, "_n_chapters": _n_chapters(meta)})
-        save_json(paths["root"] / "qa.style.json", style)
-    except Exception as exc:  # measurement must never block a run
-        console.print(f"[dim]Style scorecard skipped ({exc})[/]")
+    # The style scorecard (qa.style.json) lived here. It was report-only — wrapped in a
+    # try/except that printed "skipped" and changed nothing — and it was the story-first
+    # path's ONLY use of the character bible, i.e. the last thing keeping the scout/quest
+    # machinery attached to script generation. Removed with that machinery; narration
+    # style is measured against the reference by hand when it matters.
 
     enforce(report, paths["root"], force=qa_forced(config))
     return draft

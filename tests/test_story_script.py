@@ -517,7 +517,7 @@ def test_key_panels_round_trip_through_draft_markdown():
     """The `| key:` extension of the load-bearing panels comment must survive the
     draft -> final -> beats round trip, and stray ids must not import."""
     from manhwa2vid.models import ScriptBeat, ScriptDraft
-    from manhwa2vid.script.generate import _beats_to_markdown, _parse_markdown_beats
+    from manhwa2vid.script.beats import _beats_to_markdown, _parse_markdown_beats
 
     draft = ScriptDraft(
         title="T", chapters="1", hook="h",
@@ -900,7 +900,7 @@ def test_markdown_beat_without_panel_comment_is_an_error_not_a_silent_wrong_vide
     9999 in `timeline._panel_sort_key`, making the "nearest" panel the chapter's LAST
     one — so a comment-less beat played the final image of the video.
     """
-    from manhwa2vid.script.generate import _parse_markdown_beats
+    from manhwa2vid.script.beats import _parse_markdown_beats
 
     path = tmp_path / "script.final.md"
     path.write_text(
@@ -919,7 +919,7 @@ def test_markdown_parse_survives_a_horizontal_rule_inside_narration(tmp_path):
     The trailer that follows the real `---` is terminated by its "Edit freely" line, so
     only that needs to stop parsing. Freeform prose may legitimately contain a rule.
     """
-    from manhwa2vid.script.generate import _parse_markdown_beats
+    from manhwa2vid.script.beats import _parse_markdown_beats
 
     path = tmp_path / "script.final.md"
     path.write_text(
@@ -936,7 +936,7 @@ def test_markdown_parse_survives_a_horizontal_rule_inside_narration(tmp_path):
 
 
 def test_markdown_beats_do_not_inherit_the_previous_beats_panels(tmp_path):
-    from manhwa2vid.script.generate import _parse_markdown_beats
+    from manhwa2vid.script.beats import _parse_markdown_beats
 
     path = tmp_path / "script.final.md"
     path.write_text(

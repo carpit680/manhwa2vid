@@ -13,7 +13,7 @@ from rich.progress import Progress
 from manhwa2vid.config import get_nested
 from manhwa2vid.models import ProjectMeta, save_json
 from manhwa2vid.panels.filter import load_story_panels
-from manhwa2vid.script.generate import load_script_beats
+from manhwa2vid.script.beats import load_script_beats
 from manhwa2vid.script.sentences import split_sentences
 from manhwa2vid.tts.provider import get_tts_provider
 from manhwa2vid.video.timeline import _wav_duration, build_timeline
@@ -35,7 +35,7 @@ def run_tts_and_timeline(
 
     script = load_script_beats(paths)
     if paths["script_final"].exists():
-        from manhwa2vid.script.generate import _parse_markdown_beats
+        from manhwa2vid.script.beats import _parse_markdown_beats
 
         beats = _parse_markdown_beats(paths["script_final"])
         script.beats = beats
