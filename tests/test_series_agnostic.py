@@ -125,22 +125,34 @@ _DEV_SERIES_NAMES = (
 
 
 def _prompt_texts() -> dict[str, str]:
-    """Every prompt string the pipeline ships, keyed by where it lives."""
-    from manhwa2vid.characters import bible as bible_mod
-    from manhwa2vid.characters import link as link_mod
-    from manhwa2vid.script import characters as chars_mod
-    from manhwa2vid.script import verify as verify_mod
+    """Every prompt string the pipeline ships, found by SCANNING, not by naming modules.
 
+    The previous version listed four specific modules. That made it blind by
+    construction: when prompts moved from `script/prompts/*.txt` into inline constants
+    in read/freeform/audit/align/match/outro, the guard silently stopped covering any
+    of the prompts the pipeline actually sends. A generic AST walk over `src/` cannot
+    drift that way — a new prompt is covered the moment it is written.
+    """
+    import ast
+
+    src_root = Path(__file__).resolve().parents[1] / "src" / "manhwa2vid"
     texts: dict[str, str] = {}
-    prompt_dir = Path(__file__).resolve().parents[1] / "src" / "manhwa2vid" / "script" / "prompts"
-    for path in sorted(prompt_dir.glob("*.txt")):
-        texts[f"prompts/{path.name}"] = path.read_text(encoding="utf-8")
-    texts["link._LINK_PROMPT_TEMPLATE"] = link_mod._LINK_PROMPT_TEMPLATE
-    texts["verify._VERIFY_PROMPT"] = verify_mod._VERIFY_PROMPT
-    texts["script.characters._REGISTRY_PROMPT"] = "\n".join(
-        v for v in vars(chars_mod).values() if isinstance(v, str) and "Rules:" in v
-    )
-    texts["bible.naming_priority_rules"] = bible_mod.naming_priority_rules.__doc__ or ""
+    for path in sorted(src_root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            if not isinstance(node.value, ast.Constant) or not isinstance(node.value.value, str):
+                continue
+            value = node.value.value
+            # A prompt is a long module-level string; short constants are labels.
+            if len(value) < 120:
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    rel = path.relative_to(src_root)
+                    texts[f"{rel}::{target.id}"] = value
+    assert texts, "prompt scan found nothing — the walk is broken, not the prompts"
     return texts
 
 

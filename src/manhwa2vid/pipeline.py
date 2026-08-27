@@ -24,7 +24,6 @@ from manhwa2vid.characters.link import run_cast_linking
 from manhwa2vid.characters.scout import run_character_scout
 from manhwa2vid.ocr.extract import run_ocr_and_scenes
 from manhwa2vid.panels.split import split_panels
-from manhwa2vid.script.generate import generate_script
 from manhwa2vid.tts.engine import run_tts_and_timeline
 from manhwa2vid.video.render import render_video
 
@@ -59,7 +58,6 @@ def run_stage(
     preview: bool = False,
     final: bool = False,
     force_past_qa: bool = False,
-    keep_upstream: bool = False,
 ) -> None:
     meta, paths, config, checkpoint = load_project(project_dir)
     if force_past_qa:
@@ -87,21 +85,13 @@ def run_stage(
         run_cast_linking(meta, paths, config, force=force)
         mark_stage(checkpoint, stage, paths)
     elif stage == PipelineStage.SCRIPT:
-        # Two architectures during the transition. "freeform" is the story-first path
-        # (read -> write -> audit -> revise -> align); "classic" is the panel-locked
-        # pipeline it replaces. See experiments/oneshot-fp-ch1-2/comparison.md.
-        # Env wins over config, like every other provider selection in this codebase.
-        # It also keeps tests from having to mutate the shared config.yaml, which made
-        # the two pipeline tests race and fail on a different gate each run.
-        architecture = os.getenv("SCRIPT_ARCHITECTURE") or str(
-            get_nested(config, "script", "architecture", default="classic")
-        )
-        if architecture == "freeform":
-            from manhwa2vid.script.story_first import generate_story_first_script
+        # Story-first, and now the only path: read the pages -> write the narration as
+        # prose -> audit it against the pages -> revise once -> align paragraphs to
+        # panels -> match sentences to the panels that depict them. The panel-locked
+        # architecture it replaced is gone (see docs/history/).
+        from manhwa2vid.script.story_first import generate_story_first_script
 
-            generate_story_first_script(meta, paths, config, force=force)
-        else:
-            generate_script(meta, paths, config, force=force, keep_upstream=keep_upstream)
+        generate_story_first_script(meta, paths, config, force=force)
         mark_stage(checkpoint, stage, paths)
     elif stage == PipelineStage.TTS:
         if not paths["script_final"].exists() and not checkpoint.script_approved:

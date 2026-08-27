@@ -321,7 +321,6 @@ def project_paths(project_dir: Path) -> dict[str, Path]:
         "panels": project_dir / "panels",
         "panels_json": project_dir / "panels.json",
         "panels_story_json": project_dir / "panels.story.json",
-        "panels_curated_json": project_dir / "panels.curated.json",
         "excluded_panels_json": project_dir / "excluded_panels.json",
         "ocr_json": project_dir / "ocr.json",
         "scene_json": project_dir / "scene_cards.json",
@@ -350,8 +349,6 @@ def project_paths(project_dir: Path) -> dict[str, Path]:
         #: synthesis, so the shot list stores WHAT each sentence shows and the
         #: timeline decides for how long.
         "script_shotlist_json": project_dir / "script.shotlist.json",
-        "script_synopsis_json": project_dir / "script.synopsis.json",
-        "script_outline_json": project_dir / "script.outline.json",
         "script_draft": project_dir / "script.draft.md",
         "script_final": project_dir / "script.final.md",
         "script_json": project_dir / "script.json",

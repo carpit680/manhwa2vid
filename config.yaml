@@ -110,12 +110,12 @@ characters:
   mc_labels: ["MC", "the protagonist", "our guy"]
   ban_words: ["character", "unnamed character", "a person", "the character", "two characters"]
 
-# --- story-first (freeform) architecture -------------------------------------------
-# The 2x2 experiment (experiments/oneshot-fp-ch1-2/comparison.md) measured the
-# panel-locked writing pipeline against ONE freeform call reading the raw pages: the
-# freeform arm won on content fidelity at BOTH model tiers, and the pro writer inside
-# the old structure still produced panel captions and the outline's wrong time-jump.
-# script.architecture switches between them while the new path is validated.
+# --- story-first script generation --------------------------------------------------
+# read (what the pages literally show) -> write (one creative pass over the pages) ->
+# audit (grounding check) -> revise once -> align (paragraph -> panels) -> match
+# (sentence -> the panels that depict it). The panel-locked architecture this replaced
+# was measured against it and lost on content fidelity at both model tiers; it is gone
+# (docs/history/ keeps the comparison).
 
 read:
   # Perception for ACCOUNTABILITY only — the writer never sees this file. Extracts
@@ -173,8 +173,6 @@ align:
                             # the reference channel runs 22% of its cuts under 1.5s
 
 script:
-  # freeform | classic
-  architecture: freeform   # story-first is now the default path
   # The writer. Pro tier: arm B vs arm C showed identical CONTENT at both tiers and
   # reference-quality prose only at pro.
   freeform_model: gemini-3.1-pro-preview

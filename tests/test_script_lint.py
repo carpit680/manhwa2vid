@@ -1266,51 +1266,8 @@ def test_trim_keeps_a_payoff_line_the_dialogue_gate_demands():
     assert "nucleus" not in blind
 
 
-def test_grammar_pass_with_fake_tool():
-    """Single-replacement grammar findings auto-apply; multi-candidate ones route to the
-    rewrite as issues. No Java needed — the tool is injected."""
-    from manhwa2vid.script.grammar import grammar_pass
-
-    class Match:
-        def __init__(self, offset, length, reps, issue="grammar", msg="agreement"):
-            self.offset, self.error_length = offset, length
-            self.replacements, self.rule_issue_type = reps, issue
-            self.message, self.rule_id = msg, "X"
-
-    class FakeTool:
-        def check(self, text):
-            out = []
-            i = text.find("containing he")
-            if i >= 0:
-                out.append(Match(i + len("containing "), 2, ["him"]))
-            j = text.find("badstyle")
-            if j >= 0:
-                out.append(Match(j, 8, ["s1", "s2"]))
-            k = text.find("stylish")
-            if k >= 0:
-                out.append(Match(k, 7, ["x"], issue="style"))
-            return out
-
-    beats = [
-        ScriptBeat(beat_id=1, panel_ids=["p"], narration="the monument containing he is cracking"),
-        ScriptBeat(beat_id=2, panel_ids=["p"], narration="this is badstyle indeed"),
-        ScriptBeat(beat_id=3, panel_ids=["p"], narration="a stylish sentence"),
-    ]
-    out, issues = grammar_pass(beats, FakeTool())
-    assert out[0].narration == "the monument containing him is cracking"
-    assert 2 in issues and issues[2][0].startswith("grammar:")
-    assert 3 not in issues  # style category ignored wholesale
-    assert grammar_pass(beats, None) == (beats, {})
 
 
-def test_intro_role_truncates_state_dossiers():
-    from manhwa2vid.script.synopsis import _intro_role
-
-    assert _intro_role("A member of the original five heroes, currently frozen in ice.") == (
-        "A member of the original five heroes"
-    )
-    assert _intro_role("the party's rookie healer") == "the party's rookie healer"
-    assert _intro_role("") == ""
 
 
 def test_closer_reveal_strict_mode_for_system_message_endings():
@@ -2155,41 +2112,6 @@ def test_anchor_restore_never_replaces_a_plural_they():
     assert "Jun-Ho all agree" not in out[1].narration
 
 
-def test_casual_epithet_is_register_not_slang_or_aside():
-    """Three mechanisms used to fight over one word. config.yaml documents that the
-    reference runs ~8 casual epithets per 1k ("bro", "the guy") and that reading them as
-    slang was "the error that made our narration read like a report" — yet _ASIDE_RE
-    capped them at max_narrator_asides (triggering a rewrite to strip them) while
-    scorecard._SLANG put a ceiling on them. Meanwhile the voice bands FLOOR the very
-    thing they were suppressing."""
-    from manhwa2vid.models import SeriesBible
-    from manhwa2vid.script.lint import lint_aside_overuse
-    from manhwa2vid.script.scorecard import _CASUAL_EPITHETS, _SLANG, score_script
-
-    assert "bro" not in _SLANG, "a casual epithet is register, not slang"
-    assert "bro" in _CASUAL_EPITHETS
-
-    # Reference-rate epithet use no longer trips the aside cap...
-    beats = [
-        ScriptBeat(beat_id=1, panel_ids=["p1"], narration="Bro walks into the gate."),
-        ScriptBeat(beat_id=2, panel_ids=["p2"], narration="Bro barely closes his fist."),
-        ScriptBeat(beat_id=3, panel_ids=["p3"], narration="The guy signs the contract anyway."),
-    ]
-    assert lint_aside_overuse(beats, {"script": {"max_narrator_asides": 1}}) == {}
-
-    # ...but genuine first-person intrusion still does (the lint counts BEATS carrying
-    # an aside, so two are needed to exceed a cap of one).
-    intrusive = [
-        ScriptBeat(beat_id=1, panel_ids=["p1"], narration="I mean, he wins."),
-        ScriptBeat(beat_id=2, panel_ids=["p2"], narration="Honestly, ngl that was rough."),
-    ]
-    assert 2 in lint_aside_overuse(intrusive, {"script": {"max_narrator_asides": 1}})
-
-    # And the register is now MEASURED rather than merely permitted.
-    report = score_script(beats, SeriesBible(series_slug="s", title="S"), {})
-    gates = {g.name: g for g in report.gates}
-    assert gates["casual_epithets_per_1k"].data["value"] > 0
-    assert gates["slang_per_1k"].data["value"] == 0
 
 
 def test_visual_inventory_is_caught_on_the_shapes_that_actually_shipped():

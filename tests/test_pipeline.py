@@ -71,33 +71,6 @@ def test_ingest_and_panels(sample_project: Path) -> None:
     assert len(panels) >= 2
 
 
-def test_full_pipeline_mock(sample_project: Path, monkeypatch) -> None:
-    # Pin the architecture this test asserts. It had started exercising the freeform
-    # path whenever the config default was left flipped, and mutating the shared
-    # config.yaml to pin it made this test and the freeform one race.
-    monkeypatch.setenv("SCRIPT_ARCHITECTURE", "classic")
-    run_all_until_review(sample_project)
-
-    paths = project_paths(sample_project)
-    assert paths["script_draft"].exists()
-    assert paths["scene_json"].exists()
-    assert paths["cast_attribution_json"].exists()
-    assert paths["scene_enriched_json"].exists()
-
-    _, paths, _, checkpoint = load_project(sample_project)
-    approve_script(paths, checkpoint)
-
-    run_stage(sample_project, PipelineStage.TTS)
-    assert paths["timeline_json"].exists()
-
-    run_stage(sample_project, PipelineStage.RENDER, preview=True)
-    preview = paths["output"] / "preview.mp4"
-    assert preview.exists()
-    assert preview.stat().st_size > 1000
-
-    run_stage(sample_project, PipelineStage.EXPORT)
-    assert (paths["output"] / "metadata.yaml").exists()
-    assert (paths["output"] / "thumbnail.png").exists()
 
 
 def test_timeline_alignment(sample_project: Path) -> None:

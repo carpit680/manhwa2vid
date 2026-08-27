@@ -224,80 +224,16 @@ def test_descriptor_quarantine_for_named_character() -> None:
 
 # --- A3/D5: closer beat + hook dedup ------------------------------------------------------
 
-def test_closer_beat_is_marked_with_open_thread() -> None:
-    from manhwa2vid.models import ChapterSynopsis
-    from manhwa2vid.script.generate import _mark_closer_beat
-
-    outline = [
-        ScriptOutlineBeat(beat_id=1, panel_ids=["p1"], plot_beat="start"),
-        ScriptOutlineBeat(beat_id=2, panel_ids=["p2"], plot_beat="end"),
-    ]
-    synopsis = ChapterSynopsis(open_threads=["The double dungeon awaits."])
-    marked = _mark_closer_beat(outline, synopsis)
-    assert marked[-1].is_closer
-    assert "double dungeon" in marked[-1].plot_beat.lower()
 
 
-def test_hook_overlap_detects_duplicate_opening() -> None:
-    from manhwa2vid.script.generate import _token_overlap
-
-    hook = "Sung Jin-Woo, the weakest hunter, emerges injured after a brutal gate fight."
-    duplicate = "Sung Jin-Woo appears injured and says he's the weakest hunter after the gate fight."
-    fresh = "The guild clerk stamps his card and waves the next man forward."
-    assert _token_overlap(hook, duplicate) > 0.6
-    assert _token_overlap(hook, fresh) < 0.3
 
 
 # --- E2: scorecard bands ------------------------------------------------------------------
 
-def test_scorecard_flags_report_register_script() -> None:
-    from manhwa2vid.script.scorecard import score_script
-
-    bible = _bible_with_mc()
-    bad = [
-        ScriptBeat(
-            beat_id=1, panel_ids=["p1"],
-            narration="Two people express agreement. A man converses with someone about the situation.",
-        )
-    ]
-    report = score_script(bad, bible, {})
-    by_name = {g.name: g for g in report.gates}
-    assert by_name["register_verbs_total"].status in (WARN, FAIL)
-    assert by_name["anonymous_agents_per_1k"].status in (WARN, FAIL)
 
 
-def test_scorecard_passes_reference_style_narration() -> None:
-    from manhwa2vid.script.scorecard import score_script
-
-    bible = _bible_with_mc()
-    text = (
-        "Sung Jin-Woo limps out of the gate and tells the clerk he is fine. "
-        "He counts his pay, then he asks about the next raid. The clerk says the roster is full, "
-        "and he just nods. Outside, he checks the timer again and thinks about his mother's bills. "
-        "Sung Jin-Woo knows what happens if he stops now, so he signs up anyway."
-    )
-    beats = [ScriptBeat(beat_id=1, panel_ids=["p1"], narration=text)]
-    report = score_script(beats, bible, {})
-    by_name = {g.name: g for g in report.gates}
-    assert by_name["register_verbs_total"].status == PASS
-    assert by_name["art_words_total"].status == PASS
-    assert by_name["first_person_per_1k"].status == PASS
-    assert by_name["dialogue_verbs_per_1k"].status == PASS
 
 
-def test_self_consistency_warns_on_negation_contradiction() -> None:
-    from manhwa2vid.script.scorecard import score_script
-
-    bible = _bible_with_mc()
-    beats = [
-        ScriptBeat(
-            beat_id=1, panel_ids=["p1"],
-            narration="They hadn't brought a healer. She asks why they even bothered to bring a healer.",
-        )
-    ]
-    report = score_script(beats, bible, {})
-    gate = next(g for g in report.gates if g.name == "self-consistency")
-    assert gate.status == WARN
 
 
 # --- C4: grounding keywords from config ---------------------------------------------------
@@ -356,31 +292,8 @@ def test_scene_panel_ids_intersection_preserved_for_multi_batch() -> None:
 
 # --- Scorecard: words-per-panel band + outliers (9.8s static dwell bug) --------------------
 
-def test_words_per_panel_outlier_beat_flagged() -> None:
-    from manhwa2vid.script.scorecard import score_script
-
-    bible = _bible_with_mc()
-    beats = [
-        ScriptBeat(beat_id=1, panel_ids=["p1"],
-                   narration=" ".join(["word"] * 25)),  # 25 words on one panel
-        ScriptBeat(beat_id=2, panel_ids=["p2", "p3"],
-                   narration="Sung Jin-Woo walks in and he asks about the raid roster today."),
-    ]
-    report = score_script(beats, bible, {})
-    gate = next(g for g in report.gates if g.name == "words-per-panel-outliers")
-    assert gate.status == WARN
-    assert "beat 1" in gate.details
 
 
-def test_words_per_panel_band_present() -> None:
-    from manhwa2vid.script.scorecard import BANDS, score_script
-
-    assert "words_per_panel" in BANDS
-    bible = _bible_with_mc()
-    beats = [ScriptBeat(beat_id=1, panel_ids=["p1", "p2"],
-                        narration="Sung Jin-Woo tells the clerk he is fine and walks on quickly.")]
-    report = score_script(beats, bible, {})
-    assert any(g.name == "words_per_panel" for g in report.gates)
 
 
 # --- Automated-vs-manual gap fixes: scene merges, word budgets, name rotation --------------
