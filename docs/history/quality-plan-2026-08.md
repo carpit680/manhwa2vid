@@ -1,7 +1,7 @@
 # Script quality plan — closing the gap to the reference
 
 > **Superseded in part (2026-08-18).** Current architecture lives in
-> [`architecture.html`](architecture.html) — this file is kept as the record of what was
+> [`architecture.md`](../architecture.md) — this file is kept as the record of what was
 > diagnosed and why. One prescription here has since been **reversed**: Fix A1 called for
 > chunked narration with carried state, and chunking turned out to CAUSE the cross-beat
 > repetition it was meant to contain, because no single call ever saw the whole chapter.
@@ -178,7 +178,7 @@ re-runs all gates read-only. A failed gate blocks the next stage unless `--force
 given explicitly.
 
 **Fix E2 — style scorecard vs the reference.** Promote the ad-hoc measurements into
-`tools/script_report.py`, run automatically after the script stage: words/beat, sentence
+`tools/script_report.py` (never built), which would have run after the script stage: words/beat, sentence
 length, dialogue-verbs/1k, first-person/1k, slang/1k, anchor cadence, pronouns-per-anchor,
 anonymous-agent count, register-verb count, art-description count — each with a target band
 from `style_profile.md` and a PASS/WARN/FAIL. The scorecard is the definition of "close to the
