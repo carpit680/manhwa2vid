@@ -131,42 +131,25 @@ def render_vertical_scroll_frames(
 # as blurred bars — SL spends 89% of its runtime on panels taller than the frame.
 
 
-def _bubble_boxes(gray: np.ndarray) -> list[tuple[int, int, int, int]]:
-    """Solid near-white blobs — speech bubbles and captions.
+def _text_boxes(rgb: np.ndarray) -> list[tuple[int, int, int, int]]:
+    """Lettering, and the bubbles holding it. Used two ways by the camera: to down-weight
+    text in salience (art outranks type) and to keep a resting frame from slicing a
+    bubble at the frame edge.
 
-    Brightness > 232, closed, components big enough and mostly filled. Boxes are used
-    two ways: to down-weight bubbles in salience (art outranks text) and to keep a
-    resting frame from slicing a bubble at the frame edge (46% of audited frames had
-    clipped text).
+    This replaced a local brightness test (`> 232`, closed, mostly filled). That test
+    found "large pale region", not "bubble": it missed a jagged "WHAT?!" starburst
+    entirely — which, being full of high-contrast spikes, then ATTRACTED the window
+    instead of repelling it — while flagging white walls and hospital bedding as bubbles
+    and steering the camera off real art.
 
-    KNOWN DIVERGENCE, deliberately left alone. `video/qa_visual.py::_bubble_stats` runs
-    the same test PLUS a dark-pixel check inside the blob, because a white wall or bright
-    sky is also a solid bright blob and scored as a 40%-of-frame "bubble" there. This
-    copy has no such check, so it over-detects the same way — the camera down-weights
-    some real art and snaps away from some bubbles that are not there.
-
-    DO NOT "fix" this by copying that dark-pixel check over. It was audited on 2026-08-27
-    and does not work: on the FP render the worst offender (hospital bedding filling 76%
-    of the frame) passes the check either way, and a frame holding a real bubble scores
-    zero. Both copies of this detector find "large pale region", not "bubble". Making the
-    camera obey the stricter-looking one would move camera windows on 40 of 100 panels
-    for no verified gain. The real fix is a detector that requires bounded size,
-    convexity, and dark pixels forming small connected strokes (text) — at which point
-    both copies get replaced together, with a render and a look.
+    `panels.regions.text_regions` is the validated detector: geometric, polarity-blind,
+    zero false positives across all 607 panels of both titles. Measured on FP's 42
+    fill-frame panels before the swap, counting windows where lettering covers more than
+    30% of the screen: 16 before, 10 after.
     """
-    bright = (gray > 232).astype(np.uint8)
-    bright = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
-    count, _lbl, stats, _c = cv2.connectedComponentsWithStats(bright, 8)
-    h, w = gray.shape[:2]
-    boxes = []
-    for i in range(1, count):
-        x, y, bw, bh, area = (int(v) for v in stats[i])
-        if area < 0.01 * h * w:
-            continue
-        if area / max(bw * bh, 1) < 0.45:
-            continue
-        boxes.append((x, y, bw, bh))
-    return boxes
+    from manhwa2vid.panels.regions import text_regions
+
+    return text_regions(rgb)
 
 
 def _salience(gray: np.ndarray, bubbles: list[tuple[int, int, int, int]], *, bubble_weight: float = 0.15) -> np.ndarray:
@@ -266,7 +249,7 @@ def render_fill_frame_frames(
     panel = crop_to_content(Image.open(panel_path).convert("RGB"))
     arr = np.asarray(panel)
     gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-    bubbles = _bubble_boxes(gray)
+    bubbles = _text_boxes(arr)
     sal = _salience(gray, bubbles, bubble_weight=bubble_weight)
 
     win_w, win_h, axis, span = _window_geometry(panel.width, panel.height, width, height)

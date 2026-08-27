@@ -351,22 +351,46 @@ def test_fill_frame_long_dwell_gets_a_reframe_cut(tmp_path: Path) -> None:
 
 
 def test_fill_frame_resting_frame_does_not_clip_a_bubble(tmp_path: Path) -> None:
-    import numpy as np
-    from PIL import Image as PILImage
-    from manhwa2vid.video.effects import _bubble_boxes, _snap_offset
+    """A resting window must not slice a bubble at the frame edge.
 
-    # bubble occupying rows 500-700 of a 720x1600 panel
+    The fixture now contains real LETTERING, because the camera's bubble finder is no
+    longer a brightness test: a blank white rectangle is not a bubble, and the previous
+    fixture (a plain 250-valued block) was exactly the "large pale region" the old
+    detector confused with one.
+    """
+    import cv2
+    import numpy as np
+    from manhwa2vid.video.effects import _text_boxes, _snap_offset
+
+    # a bubble with type in it, occupying rows 500-700 of a 720x1600 panel
     arr = np.random.default_rng(5).integers(60, 200, (1600, 720, 3), dtype=np.uint8)
-    arr[500:700, 100:500] = 250
-    gray = np.asarray(PILImage.fromarray(arr).convert("L"))
-    bubbles = _bubble_boxes(gray)
+    cv2.ellipse(arr, (300, 600), (200, 100), 0, 0, 360, (250, 250, 250), -1)
+    for i in range(6):
+        cv2.putText(arr, "A", (170 + i * 45, 615), cv2.FONT_HERSHEY_SIMPLEX,
+                    1.1, (0, 0, 0), 3)
+
+    bubbles = _text_boxes(arr)
     assert bubbles, "fixture bubble must be detected"
-    # a 405-tall window resting at offset 400 would slice the bubble at row 500+405=805? no:
-    # window [400, 805) contains rows 500-700 fully -> ok; offset 550 slices it.
-    snapped = _snap_offset(550, 405, bubbles, "y", 1195)
+    by, bh = bubbles[0][1], bubbles[0][3]
+    snapped = _snap_offset(by + bh // 2, 405, bubbles, "y", 1195)
     lo, hi = snapped, snapped + 405
-    bx, by, bw, bh = bubbles[0]
     assert not (by < lo < by + bh or by < hi < by + bh), "bubble still edge-clipped"
+
+
+def test_a_blank_pale_block_is_not_treated_as_a_bubble(tmp_path: Path) -> None:
+    """The regression that motivated the swap: the old brightness test called any large
+    pale region a bubble, so the camera steered away from walls, snow and bedding."""
+    import numpy as np
+    from manhwa2vid.video.effects import _text_boxes
+
+    import cv2
+
+    # Smoothed, not per-pixel noise: drawn art has strokes and flats, and adaptive
+    # thresholding on white noise invents glyph-sized specks that no real panel has.
+    rng = np.random.default_rng(5).integers(60, 200, (1600, 720, 3), dtype=np.uint8)
+    arr = cv2.blur(rng, (25, 25))
+    arr[500:700, 100:500] = 250          # a plain bright block: a wall, not a bubble
+    assert _text_boxes(arr) == []
 
 
 def test_tiny_panel_falls_back_to_letterbox(tmp_path: Path) -> None:

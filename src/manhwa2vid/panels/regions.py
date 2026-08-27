@@ -186,6 +186,8 @@ def is_text_only_panel(img: np.ndarray) -> bool:
 
 TEXT_DOMINANT = 0.82
 _TEXT_NORM_W = 800  # source art is 720-800px wide; the glyph sizes below are in these units
+_GLYPH_MIN_H = 7
+_GLYPH_MAX_H = 70
 
 def _text_norm(gray: np.ndarray) -> np.ndarray:
     if gray.shape[1] == _TEXT_NORM_W:
@@ -216,7 +218,7 @@ def _glyph_boxes(gray: np.ndarray):
         n, lbl, stats, _c = cv2.connectedComponentsWithStats(binimg.astype(np.uint8), 8)
         for i in range(1, n):
             x, y, w, h, area = (int(v) for v in stats[i])
-            if not (7 <= h <= 70 and 2 <= w <= 90):
+            if not (_GLYPH_MIN_H <= h <= _GLYPH_MAX_H and 2 <= w <= 90):
                 continue
             if not (0.12 <= w / h <= 4.0):
                 continue
@@ -246,9 +248,17 @@ def _text_lines(boxes, shape):
         cy, h = b[1] + b[3] / 2, b[3]
         row = [i]
         for j in range(i + 1, len(boxes)):
+            c = boxes[j]
+            # Boxes are sorted by vertical centre and a row admits at most
+            # 0.45 * max(h) of drift, so once we are past that bound no LATER box can
+            # join either. Without the break this is O(n^2), and a 22000px-tall strip
+            # carries tens of thousands of glyph-sized components: the camera tests on
+            # extreme strips went from 0.4s to 30s each. The bound uses the largest
+            # glyph the finder accepts, so the grouping is byte-identical.
+            if (c[1] + c[3] / 2) - cy > 0.45 * _GLYPH_MAX_H:
+                break
             if used[j]:
                 continue
-            c = boxes[j]
             if abs((c[1] + c[3] / 2) - cy) > 0.45 * max(h, c[3]):
                 continue
             if abs(c[3] - h) > 0.75 * max(h, c[3]):
@@ -279,20 +289,23 @@ def _text_lines(boxes, shape):
     return lines
 
 
-def text_content_ratio(img: np.ndarray) -> float:
-    """Fraction of the panel's non-background content that is lettering or its container."""
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
-    gray = _text_norm(gray)
+def _text_and_content_masks(gray: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(lettering-with-its-container, everything-that-is-not-page-ground), same shape.
+
+    Split out of `text_content_ratio` so the CAMERA can use the same regions the panel
+    test uses. `effects` needs the boxes, not the fraction: a window chosen inside a tall
+    panel can be entirely bubble even when the panel as a whole is mostly art.
+    """
     bg = background_level(gray)
     content = np.abs(gray.astype(np.int16) - bg) > 18
-    total = int(content.sum())
-    if total < 200:
-        return 1.0  # nothing here at all
+    empty = np.zeros(gray.shape, bool)
+    if int(content.sum()) < 200:
+        return empty, content
 
     glyphs = _glyph_boxes(gray)
     lines = _text_lines(glyphs, gray.shape)
     if not lines:
-        return 0.0
+        return empty, content
 
     # Every glyph, not just the ones that grouped into a line. Flatness of a container is
     # measured with ALL lettering removed: a caption box holds more type than one grouped
@@ -302,6 +315,11 @@ def text_content_ratio(img: np.ndarray) -> float:
         ink[max(0, gy - 2):gy + gh + 2, max(0, gx - 2):gx + gw + 2] = True
 
     text = np.zeros_like(content)
+    # The container search below depends only on the sampled TONE, and a panel's lines
+    # nearly all sit on the same white. Recomputing connected components per LINE made
+    # the camera tests on tall strips take 30s each; caching by tone is a pure
+    # optimisation with no effect on the result.
+    comps: dict[int, tuple[np.ndarray, np.ndarray]] = {}
     # a bubble/caption is a connected region of near-uniform tone that HOLDS a text line
     flat = cv2.morphologyEx(
         ((np.abs(gray.astype(np.int16) - bg) > 18).astype(np.uint8)), cv2.MORPH_CLOSE,
@@ -338,8 +356,11 @@ def text_content_ratio(img: np.ndarray) -> float:
         if px.size < 50:
             continue  # the text sits directly on the page ground: no container to grow
         tone = int(np.bincount(px.astype(np.uint8), minlength=256).argmax())
-        same = (np.abs(gray.astype(np.int16) - tone) < 30).astype(np.uint8)
-        n, lbl, stats, _c = cv2.connectedComponentsWithStats(same, 8)
+        if tone not in comps:
+            same = (np.abs(gray.astype(np.int16) - tone) < 30).astype(np.uint8)
+            _n, _lbl, _stats, _c = cv2.connectedComponentsWithStats(same, 8)
+            comps[tone] = (_lbl, _stats)
+        lbl, stats = comps[tone]
         seeds = lbl[ring & (np.abs(gray.astype(np.int16) - tone) < 15)]
         seeds = seeds[seeds > 0]
         if not seeds.size:
@@ -407,7 +428,41 @@ def text_content_ratio(img: np.ndarray) -> float:
                 continue
             text |= filled.astype(bool)
 
+    return text, content
+
+
+def text_content_ratio(img: np.ndarray) -> float:
+    """Fraction of the panel's non-background content that is lettering or its container."""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    text, content = _text_and_content_masks(_text_norm(gray))
+    total = int(content.sum())
+    if total < 200:
+        return 1.0  # nothing here at all
     return float((text & content).sum() / total)
+
+
+def text_regions(img: np.ndarray) -> list[Box]:
+    """Boxes of the lettering (and the bubbles holding it), in the INPUT's coordinates.
+
+    The camera's own bubble finder is the tonal one this module documents as unusable,
+    and the cost was visible: a jagged "WHAT?!" starburst is not a solid bright blob, so
+    it was never down-weighted, and its very high gradient energy actively ATTRACTED the
+    window. Feeding these regions into salience instead points the camera at art.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    norm = _text_norm(gray)
+    text, _content = _text_and_content_masks(norm)
+    if not text.any():
+        return []
+    n, _lbl, stats, _c = cv2.connectedComponentsWithStats(text.astype(np.uint8), 8)
+    sx = gray.shape[1] / norm.shape[1]
+    sy = gray.shape[0] / norm.shape[0]
+    out: list[Box] = []
+    for i in range(1, n):
+        x, y, w, h, _area = (int(v) for v in stats[i])
+        out.append((int(x * sx), int(y * sy), max(1, int(w * sx)), max(1, int(h * sy))))
+    return out
+
 
 
 def is_text_dominant_panel(img: np.ndarray, threshold: float = TEXT_DOMINANT) -> bool:
