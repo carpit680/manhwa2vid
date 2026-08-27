@@ -192,6 +192,16 @@ failed gate raises `QAGateFailure` and blocks the next stage unless `--force-pas
   against the **reference channel's own edit of the same chapters** — calibrating against
   our old defective videos produced gates the reference itself would fail.
 
+  Two of those six are deliberately **report-only**, and for the same reason: their
+  detectors measure a property of manhwa art rather than a defect. `dead-space` reads
+  low-detail columns, and the reference video scores worse on it than anything we ship.
+  `bubble-dominance` finds large bright blobs; audited on 2026-08-27, 64% of the frames
+  it flagged carried a "bubble" over 40% of the frame — pale walls and bedding — while a
+  frame holding a real speech bubble scored zero. Both numbers are kept as data. **A
+  measurement that cannot separate the defect from the medium must not steer the
+  renderer**: tuning framing against either one moves the camera off artwork to satisfy
+  a broken ruler. Fix the detector or leave the band alone.
+
 `tests/test_qa_gates.py` holds one regression fixture per observed bug. Keep it that way:
 a new failure class gets a gate **and** a fixture.
 

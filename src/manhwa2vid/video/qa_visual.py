@@ -32,7 +32,9 @@ _REF_UNDER_1_5_PCT = 22.0
 # Same-content baseline (reference channel's OWN edit of the same opening chapters,
 # run through these exact detectors, 2026-08-26): bubble-over-20% 21.9%, clipped-text
 # 43.9%. Dialogue-heavy openings simply carry more bubbles — bands must not punish the
-# source material.
+# source material. NOTE: 21.9 is measured with the same imprecise bubble detector as our
+# own number, so it is inflated by pale artwork too — both sides of that comparison are
+# report-only. See the bubble-dominance note in `enforce_render_qa`.
 _REF_BUBBLE_PCT = 21.9
 _REF_CLIPPED_PCT = 43.9
 
@@ -183,18 +185,35 @@ def enforce_render_qa(
     )
 
     # Bands below are calibrated against the REFERENCE channel's own video run through
-    # these exact detectors (10-min sample, 2026-08-26): bubble-over-20% 13.7%,
-    # clipped-text 41.9%, dead-width 0.742. Calibrating against our old defective
-    # videos instead produced gates that the reference itself would fail.
+    # these exact detectors (10-min sample, 2026-08-26): clipped-text 43.9%, dead-width
+    # 0.742. Calibrating against our old defective videos instead produced gates that
+    # the reference itself would fail.
 
-    # Bubble dominance: reference 13.7%; the audited videos ran 18-31% and the first
-    # fill-frame render 40% (zooming in magnifies bubbles) — a real, fixable gap.
+    # Bubble dominance: REPORT-ONLY, because the detector does not measure bubbles well
+    # enough to gate on. Audited on the FP render (2026-08-27): of the 223 frames it
+    # flagged, 64% carry a "bubble" larger than 40% of the frame and 30% larger than 55%
+    # — sizes a speech bubble essentially never reaches. The worst two (0.76, 0.73) are
+    # hospital bedding and a white wall; a frame containing a real "??" bubble scores
+    # 0.00. The dark-pixel text test in `_bubble_stats` was added for exactly this and is
+    # not sufficient: pale art with any line work inside it passes, and measuring dark
+    # pixels inside the blob instead of its bbox leaves the 0.76 bedding unchanged
+    # (verified). So the number is substantially "how much flat pale area is on screen",
+    # which is a property of the art, not a defect — the same reasoning that makes
+    # `dead-space` report-only.
+    #
+    # It stays MEASURED because bubble-dominant frames are a genuine concern (the viewer
+    # is listening to narration, so a screen of text competes with it) and this is the
+    # data a real detector would be built and calibrated against. Gating on it would
+    # push the camera to avoid pale artwork — tuning the video against a broken ruler.
+    # A detector worth gating on needs bounded size, convexity, AND dark pixels forming
+    # small connected strokes (text) rather than any dark pixels at all.
     pct = metrics["bubble_over_20pct_frames_pct"]
     report.add(
         "bubble-dominance",
-        True if pct <= _REF_BUBBLE_PCT + 6 else ("warn" if pct <= _REF_BUBBLE_PCT + 23 else False),
-        f"{pct}% of frames have a bubble covering >20% of the screen "
-        f"(reference, same content: {_REF_BUBBLE_PCT}%)",
+        True,
+        f"{pct}% of frames have a large bright blob covering >20% of the screen "
+        f"(reference, same content: {_REF_BUBBLE_PCT}%) — report-only: the detector "
+        f"also counts pale artwork, see the note in qa_visual.py",
         pct=pct,
     )
 

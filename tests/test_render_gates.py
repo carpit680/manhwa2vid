@@ -70,13 +70,17 @@ def test_true_peak_above_the_ceiling_fails(monkeypatch, tmp_path):
     assert _run(monkeypatch, tmp_path, true_peak_dbtp=-1.5)["true-peak"] == "pass"
 
 
-def test_bubble_dominance_warns_then_fails(monkeypatch, tmp_path):
-    """Bands are anchored to the reference channel's own edit of the same chapters
-    (21.9%), not to our old defective videos."""
-    # Bands: pass to reference+6 (27.9), warn to reference+23 (44.9), fail beyond.
-    assert _run(monkeypatch, tmp_path, bubble_over_20pct_frames_pct=27.0)["bubble-dominance"] == "pass"
-    assert _run(monkeypatch, tmp_path, bubble_over_20pct_frames_pct=33.0)["bubble-dominance"] == "warn"
-    assert _run(monkeypatch, tmp_path, bubble_over_20pct_frames_pct=60.0)["bubble-dominance"] == "fail"
+def test_bubble_dominance_is_report_only(monkeypatch, tmp_path):
+    """The detector finds "large pale region", not "bubble".
+
+    Audited on the FP render (2026-08-27): of 223 flagged frames, 64% carried a "bubble"
+    over 40% of the frame — hospital bedding and white walls — while a frame holding a
+    real "??" bubble scored 0.00. Gating on it would tune the camera away from pale
+    artwork, so the number is kept as data. Pinned here so that a future band cannot be
+    reintroduced without also rebuilding the detector.
+    """
+    for pct in (27.0, 33.0, 60.0, 100.0):
+        assert _run(monkeypatch, tmp_path, bubble_over_20pct_frames_pct=pct)["bubble-dominance"] == "pass"
 
 
 def test_clipped_text_tolerates_the_reference_rate(monkeypatch, tmp_path):

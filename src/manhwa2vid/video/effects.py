@@ -142,13 +142,17 @@ def _bubble_boxes(gray: np.ndarray) -> list[tuple[int, int, int, int]]:
     KNOWN DIVERGENCE, deliberately left alone. `video/qa_visual.py::_bubble_stats` runs
     the same test PLUS a dark-pixel check inside the blob, because a white wall or bright
     sky is also a solid bright blob and scored as a 40%-of-frame "bubble" there. This
-    copy has no such check, so it over-detects the same way — which makes the camera
-    down-weight some real art and snap away from some non-existent bubbles.
+    copy has no such check, so it over-detects the same way — the camera down-weights
+    some real art and snaps away from some bubbles that are not there.
 
-    Adding the check here is a correctness fix, not a refactor: measured on Frozen
-    Player, it changes the bubble set on 40 of 100 shown panels, which moves camera
-    windows and therefore changes the video. It needs a render and a look, not a
-    tidy-up commit.
+    DO NOT "fix" this by copying that dark-pixel check over. It was audited on 2026-08-27
+    and does not work: on the FP render the worst offender (hospital bedding filling 76%
+    of the frame) passes the check either way, and a frame holding a real bubble scores
+    zero. Both copies of this detector find "large pale region", not "bubble". Making the
+    camera obey the stricter-looking one would move camera windows on 40 of 100 panels
+    for no verified gain. The real fix is a detector that requires bounded size,
+    convexity, and dark pixels forming small connected strokes (text) — at which point
+    both copies get replaced together, with a render and a look.
     """
     bright = (gray > 232).astype(np.uint8)
     bright = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
