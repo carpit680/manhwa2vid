@@ -77,3 +77,69 @@ pale area, not bubbles". That was drawn from the worst-scoring frames, which bia
 sample toward large pale walls. The contact sheet shows genuinely bubble-dominant frames
 are also common. Both statements about the *detector* stand — it is too imprecise to gate
 on — but the *problem* it points at is real and visible, which item 3 above covers.
+
+---
+
+# Follow-up, same day: the three fixes, and a render bug found on the way
+
+## The bug that invalidates the analysis above
+
+`upscale_panels` cached 2x images by **file presence alone**. Panel ids are POSITIONAL
+(`pNNNN_MM`), so re-running the panels stage reassigns them. Frozen Player was re-split on
+2026-08-26 19:53; its upscale cache is dated 12:14. **64 of 172 cached upscales held a
+completely different picture from the panel of the same name**, and every render since —
+including both analysed earlier in this report — composited the old image while the
+timeline named the new one. Solo Leveling was affected too (42 of 271).
+
+Nothing downstream could see it. The timeline, the QA gates, the durations and the
+runtime were all self-consistent, and all six render gates passed. It surfaced only when
+a frame was opened and compared against the panel the timeline claimed was on screen: the
+video showed a speech bubble at a timestamp whose panel is a figure in a coat.
+
+Fixed with two independent checks — the panel must not be newer than its cache, and the
+cache must be exactly `scale` times its source's size. Both titles self-heal on their next
+render (FP's redid 65). **Treat any conclusion about specific frames in earlier renders as
+unreliable.**
+
+## The detector
+
+`is_text_only_panel` asks a tonal question and cannot work on whole panels: it flags 0 of
+FP's 100 shown panels, because it needs a large BRIGHT region and half the offending
+frames are white type on black. No tonal rule can work — after cropping to content,
+verified text panels measure mid-tone 0.013-0.051 and verified art panels 0.037-0.052,
+fully overlapping. Line art on flat fill IS tonally identical to text on flat fill.
+
+`regions.text_content_ratio` asks a geometric question: find lettering by shape (glyph-
+sized ink in rows sharing one height and one stroke width), grow it to the bubble that
+holds it, report that as a fraction of NON-background pixels. Four guards each killed a
+specific false positive found by opening the panel — flat interior, bounded hull, convex
+blob, and a hull that adds no content beyond the blob.
+
+Validated on all 607 panels of both titles with every flagged panel opened by eye: at 0.82
+it flags 10, all genuine lettering, **zero false positives**. Lowest true text 0.853,
+highest true art 0.778; both pinned as numbers in tests.
+
+## Results on FP ch1-2
+
+| | before | after |
+|---|---|---|
+| shown panels that are lettering/void | 5 (**24.5s**) | 0 (**0.0s**) |
+| closing shot | "WHAT?!" starburst | artwork ("AH, SHIT.") |
+| distinct panels shown | 100 | 100 |
+| runtime | 381.58s | 381.58s |
+| edge-clipped text | 46.0% | **38.9%** |
+| median shot / <1.5s / cuts-min | 2.41s / 23.0% / 16.67 | unchanged |
+
+Six render gates pass, zero warnings.
+
+## What is still open
+
+**Bubble-dominant WINDOWS.** Panel-level exclusion cannot reach a camera window inside a
+tall art panel. "ARE YOU TELLING ME THE FROST QUEEN WASN'T THE END?!" is a crop of
+p0016_16, a tall strip that is mostly art. Two such frames remain in a 24-frame sample.
+The fix is to score candidate camera windows with `text_content_ratio` — filed as its own
+task. Note the panel-tuned 0.82 threshold under-reads on rendered frames, because the
+blurred pillarbox counts as content; recalibrate on frames before gating.
+
+**Six invisible cuts remain** where a beat has more narration than panels and there is no
+unclaimed panel to advance to. Reported by the new `no-invisible-cuts` gate.
