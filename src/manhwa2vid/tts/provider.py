@@ -45,7 +45,7 @@ class MockTTSProvider(TTSProvider):
 def _resolve_provider_name(config: dict[str, Any]) -> str:
     return (
         os.getenv("TTS_PROVIDER")
-        or get_nested(config, "tts", "provider", default="chatterbox")
+        or get_nested(config, "tts", "provider", default="kokoro")
     ).lower()
 
 

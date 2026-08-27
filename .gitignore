@@ -26,3 +26,8 @@ reference/voice_lab*/
 # BGM audio is fetched, not versioned (see assets/bgm/ATTRIBUTION.md)
 assets/bgm/*.mp3
 assets/bgm/*.wav
+
+# Local tool/agent configuration, not project code
+.claude/
+.agents/
+skills-lock.json
