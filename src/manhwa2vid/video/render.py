@@ -16,9 +16,8 @@ from rich.progress import Progress
 from manhwa2vid.config import find_repo_root, get_nested
 from manhwa2vid.models import Panel, PanelBBox, ProjectMeta, Timeline, TimelineEntry, save_json
 from manhwa2vid.panels.filter import load_story_panels
-from PIL import Image
 
-from manhwa2vid.video.effects import add_chapter_badge, make_end_card, render_panel_motion_frames
+from manhwa2vid.video.effects import render_panel_motion_frames
 
 console = Console()
 
@@ -58,9 +57,6 @@ def _render_panel_clip(
     height: int,
     fps: int,
     config: dict[str, Any],
-    chapters: str,
-    title: str,
-    show_badge: bool,
     upscale_map: dict[str, Path] | None = None,
     num_frames: int | None = None,
 ) -> Path:
@@ -83,17 +79,6 @@ def _render_panel_clip(
     motion_frames = render_panel_motion_frames(
         panel_path, panel, width, height, num_frames, config, seed_salt=entry_index
     )
-    if show_badge and motion_frames:
-        # Hold the badge ~3s, fading out over the last 40%. It was previously stamped
-        # on exactly ONE frame — 1/30 s, invisible.
-        badge_frames = min(len(motion_frames), int(3.0 * fps))
-        fade_from = int(badge_frames * 0.6)
-        for i in range(badge_frames):
-            alpha = 1.0
-            if i >= fade_from:
-                alpha = 1.0 - (i - fade_from) / max(badge_frames - fade_from, 1)
-            motion_frames[i] = add_chapter_badge(motion_frames[i], chapters, title, alpha=alpha)
-
     for i, frame in enumerate(motion_frames):
         frame.save(clip_dir / f"{i:05d}.png")
 
@@ -397,7 +382,6 @@ def render_video(
                         bbox=PanelBBox(x=0, y=0, width=1, height=1),
                         image_path=entry.panel_path,
                     )
-                show_badge = i == 0
                 acc_time += entry.duration
                 target_frames = round(acc_time * fps)
                 num_frames = max(target_frames - acc_frames, 1)
@@ -412,56 +396,17 @@ def render_video(
                     height,
                     fps,
                     config,
-                    meta.chapters,
-                    meta.title,
-                    show_badge,
                     upscale_map,
                     num_frames=num_frames,
                 )
                 clips.append(clip)
                 progress.advance(task)
 
-        # End card: both audited videos simply stopped on a held panel. 4.5s of card
-        # with the BGM still under it (narration is silence-padded to match).
-        end_card_seconds = float(get_nested(config, "video", "end_card_seconds", default=4.5))
-        if end_card_seconds > 0:
-            card = make_end_card(width, height, meta.title, meta.chapters)
-            card_dir = frames_dir / "endcard"
-            card_dir.mkdir()
-            card_frames = max(int(end_card_seconds * fps), 1)
-            fade_frames = min(int(0.5 * fps), card_frames)
-            black = card.point(lambda _v: 0)
-            for i in range(card_frames):
-                if i < fade_frames:
-                    frame = Image.blend(black, card, i / max(fade_frames - 1, 1))
-                else:
-                    frame = card
-                frame.save(card_dir / f"{i:05d}.png")
-            card_clip = frames_dir / "endcard.mp4"
-            _run_ffmpeg(
-                [
-                    "-framerate",
-                    str(fps),
-                    "-i",
-                    str(card_dir / "%05d.png"),
-                    "-c:v",
-                    "libx264",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-t",
-                    str(end_card_seconds),
-                    str(card_clip),
-                ]
-            )
-            shutil.rmtree(card_dir, ignore_errors=True)
-            clips.append(card_clip)
 
         silent = Path(tmp) / "silent.mp4"
         _concat_clips(clips, silent, fps)
         mixed = Path(tmp) / "mixed.mp4"
-        _mix_audio(
-            timeline, paths["root"], silent, mixed, config, pad_seconds=end_card_seconds
-        )
+        _mix_audio(timeline, paths["root"], silent, mixed, config, pad_seconds=0.0)
 
         target_lufs = float(get_nested(config, "export", "loudness_target", default=-14))
         _normalize_loudness(mixed, output, target_lufs)

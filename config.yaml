@@ -265,7 +265,6 @@ video:
   width: 1920
   height: 1080
   fps: 30
-  end_card_seconds: 4.5  # closing card with BGM under it; 0 disables
   # Real-ESRGAN anime 2x on shown panels (cached in <project>/panels_2x/). Source art
   # is 720-800px wide; fill-frame magnifies 2.4-2.7x at 1080p and Lanczos alone is soft.
   upscale:

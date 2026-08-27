@@ -384,26 +384,23 @@ def test_tiny_panel_falls_back_to_letterbox(tmp_path: Path) -> None:
     assert len(frames) == 30 and frames[0].size == (960, 540)
 
 
-def test_badge_fades_and_endcard_reads() -> None:
-    """Badge alpha=0 is a no-op, 1.0 draws, and the end card carries the title —
-    both audited videos shipped with a 1-frame badge and no ending at all."""
-    import numpy as np
-    from PIL import Image as PILImage
-    from manhwa2vid.video.effects import add_chapter_badge, make_end_card
+def test_no_title_badge_or_end_card_is_added() -> None:
+    """The video opens on artwork and ends on artwork — no furniture at either end.
 
-    base = PILImage.new("RGB", (480, 270), (90, 60, 40))
-    untouched = add_chapter_badge(base, "1-5", "Title", alpha=0.0)
-    assert np.array_equal(np.asarray(untouched), np.asarray(base))
-    full = np.asarray(add_chapter_badge(base, "1-5", "Title", alpha=1.0))
-    half = np.asarray(add_chapter_badge(base, "1-5", "Title", alpha=0.5))
-    base_a = np.asarray(base)
-    assert np.abs(full.astype(int) - base_a.astype(int)).sum() > np.abs(
-        half.astype(int) - base_a.astype(int)
-    ).sum() > 0
+    A 3s chapter badge and a 4.5s black end card were added as "production furniture"
+    after an audit found the videos starting and stopping bluntly. On review they read
+    as bolted-on: the closing ask now lives INSIDE the narration (`script/outro.py`), so
+    the card only repeated in text what the narrator had just said. Pinned as absence
+    because a removed feature is the easiest kind to reintroduce by habit.
+    """
+    import inspect
 
-    card = np.asarray(make_end_card(480, 270, "Solo Leveling", "1-5").convert("L"))
-    assert card.mean() < 60, "card is dark"
-    assert (card > 180).sum() > 200, "title text present"
+    from manhwa2vid.video import effects, render
+
+    assert not hasattr(effects, "add_chapter_badge")
+    assert not hasattr(effects, "make_end_card")
+    src = inspect.getsource(render)
+    assert "badge" not in src and "end_card" not in src, "render grew furniture again"
 
 
 def test_tall_panel_is_shown_whole_with_bars_not_cropped(tmp_path: Path) -> None:

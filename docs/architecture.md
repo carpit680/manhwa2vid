@@ -170,8 +170,13 @@ Three traps in the ffmpeg chain, all measured (see the audio-chain notes in `rep
 - `loudnorm` must be two-pass (measure, then apply linearly) or it overshoots true peak.
 
 BGM lives in `assets/bgm/` (CC-BY, credit required — see its `ATTRIBUTION.md`) and is
-mixed under the narration, continuing under the end card while the narration is
-silence-padded to match.
+mixed under the narration, ending with it.
+
+The video carries **no title badge and no end card**. Both existed briefly as production
+furniture and were cut on review: the closing ask is written into the narration itself
+(`script/outro.py`), so a card repeating it in text was redundant, and the opening badge
+covered artwork during the seconds a viewer decides with. Opening and closing frames are
+artwork. `tests/test_camera.py` pins their absence.
 
 ---
 
