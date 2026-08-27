@@ -188,7 +188,9 @@ class LLMProvider(ABC):
         ...
 
     @abstractmethod
-    def describe_panels(self, image_paths: list[Path], prompt: str) -> str:
+    def describe_panels(
+        self, image_paths: list[Path], prompt: str, *, max_width: int | None = None
+    ) -> str:
         ...
 
     def describe_labeled_panels(
@@ -202,8 +204,15 @@ class LLMProvider(ABC):
         count "this is image 37". Interleaving a label immediately before each image makes
         the binding positional in the message itself rather than a lookup it must
         maintain. Providers that cannot interleave fall back to the unlabeled path.
+
+        `max_width` is forwarded, not dropped. It used to be accepted and silently
+        discarded here, so any provider relying on this fallback (OpenAI does) encoded a
+        webtoon page under the longest-side cap instead — the exact 800x10060 page ->
+        40px sliver failure `llm/vision_utils.py` documents.
         """
-        return self.describe_panels([path for _label, path in labeled], prompt)
+        return self.describe_panels(
+            [path for _label, path in labeled], prompt, max_width=max_width
+        )
 
     def describe_labeled_panels_text(
         self, labeled: list[tuple[str, Path]], system: str, user: str,
@@ -242,10 +251,12 @@ class OpenAIProvider(LLMProvider):
         resp = self.client.chat.completions.create(**kwargs)
         return resp.choices[0].message.content or ""
 
-    def describe_panels(self, image_paths: list[Path], prompt: str) -> str:
+    def describe_panels(
+        self, image_paths: list[Path], prompt: str, *, max_width: int | None = None
+    ) -> str:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for path in image_paths:
-            media_type, data = encode_image_for_api(path)
+            media_type, data = encode_image_for_api(path, max_width=max_width)
             content.append(
                 {
                     "type": "image_url",
@@ -422,10 +433,12 @@ class OpenAICompatProvider(LLMProvider):
             )
         return self._vision_call(content)
 
-    def describe_panels(self, image_paths: list[Path], prompt: str) -> str:
+    def describe_panels(
+        self, image_paths: list[Path], prompt: str, *, max_width: int | None = None
+    ) -> str:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for path in image_paths:
-            media_type, data = encode_image_for_api(path)
+            media_type, data = encode_image_for_api(path, max_width=max_width)
             content.append(
                 {
                     "type": "image_url",
@@ -557,7 +570,9 @@ class OllamaProvider(LLMProvider):
             resp.raise_for_status()
             return resp.json()["message"]["content"]
 
-    def describe_panels(self, image_paths: list[Path], prompt: str) -> str:
+    def describe_panels(
+        self, image_paths: list[Path], prompt: str, *, max_width: int | None = None
+    ) -> str:
         images_b64 = [base64.b64encode(p.read_bytes()).decode("ascii") for p in image_paths]
         payload = {
             "model": self.vision_model,
@@ -737,7 +752,9 @@ class MockLLMProvider(LLMProvider):
             f"went. It is inside him."
         )
 
-    def describe_panels(self, image_paths: list[Path], prompt: str) -> str:
+    def describe_panels(
+        self, image_paths: list[Path], prompt: str, *, max_width: int | None = None
+    ) -> str:
         ids = []
         for p in image_paths:
             stem = p.stem
@@ -846,11 +863,18 @@ class MockLLMProvider(LLMProvider):
             )
         return json.dumps(self._mock_panel_dict(ids))
 
-    def describe_labeled_panels(self, labeled: list[tuple[str, Path]], prompt: str) -> str:
+    def describe_labeled_panels(
+        self, labeled: list[tuple[str, Path]], prompt: str, *, max_width: int | None = None
+    ) -> str:
         """Sighted narration sends BEAT/PANEL labels — answer in the narration shape.
 
         Without this the mock replies with a scene card and every beat comes back empty,
         so beat-conservation fails on a pipeline that is actually fine.
+
+        The `max_width` keyword is part of the base signature and MUST be accepted even
+        though a mock ignores it. Omitting it made the whole story-first path unrunnable
+        offline (read/align/audit all pass it), and the end-to-end test hid that for
+        weeks by resolving a real provider instead of this one.
         """
         beat_ids: list[int] = []
         for label, _path in labeled:
