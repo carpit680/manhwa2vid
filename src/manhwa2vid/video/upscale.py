@@ -96,6 +96,29 @@ def upscaled_panels_dir(project_root: Path) -> Path:
     return project_root / "panels_2x"
 
 
+def _cache_is_fresh(src: Path, cached: Path, scale: int) -> bool:
+    """Does this cached 2x image still correspond to the panel of that name?
+
+    Presence alone is NOT enough, and this cost four renders before it was noticed.
+    Panel ids are POSITIONAL (pNNNN_MM), so re-running the panels stage reassigns them:
+    after a 2026-08-26 re-split, 64 of Frozen Player's 172 cached upscales held a
+    completely different picture from the panel of the same name, and every render since
+    had been quietly compositing the old image while the timeline named the new one.
+    Nothing downstream could see it — the timeline, the gates and the durations were all
+    self-consistent, and only opening a frame and comparing it to its panel showed it.
+
+    Two independent checks, either of which would have caught that case: the panel must
+    not be newer than its cache, and the cache must be exactly `scale` times its size.
+    """
+    try:
+        if cached.stat().st_mtime < src.stat().st_mtime:
+            return False
+        with Image.open(src) as a, Image.open(cached) as b:
+            return b.size == (a.size[0] * scale, a.size[1] * scale)
+    except (OSError, ValueError):
+        return False
+
+
 def upscale_panels(
     panel_paths: list[Path],
     project_root: Path,
@@ -103,9 +126,10 @@ def upscale_panels(
 ) -> dict[str, Path]:
     """Ensure 2x versions exist for the given panels; return {original name -> 2x path}.
 
-    Cached by file presence — re-renders cost nothing. Any failure (missing spandrel,
-    no weights, CUDA OOM) logs once and returns what exists; the render falls back to
-    the originals for the rest.
+    Cached, but VALIDATED — see `_cache_is_fresh`; presence alone silently served a
+    different picture after a re-split. Any failure (missing spandrel, no weights, CUDA
+    OOM) logs once and returns what exists; the render falls back to the originals for
+    the rest.
     """
     # Env wins over config (tests/conftest.py sets it off suite-wide); code default is
     # OFF so bare configs never touch the model — config.yaml enables real projects.
@@ -125,12 +149,16 @@ def upscale_panels(
 
     mapping: dict[str, Path] = {}
     todo: list[Path] = []
+    stale = 0
     for p in panel_paths:
         out = out_dir / p.name
-        if out.exists():
+        if out.exists() and _cache_is_fresh(p, out, scale):
             mapping[p.name] = out
         else:
+            stale += out.exists()
             todo.append(p)
+    if stale:
+        console.print(f"[yellow]{stale} cached upscale(s) no longer match their panel — redoing[/]")
     if not todo:
         return mapping
 
