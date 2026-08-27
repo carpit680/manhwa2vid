@@ -333,6 +333,39 @@ def plan_shots(
                         flat[i + offset]["panels"] = panels
             i = j
 
+    # A beat that OPENS on the panel the previous beat CLOSED on schedules a cut the
+    # viewer cannot see. Holding across a beat boundary is the deliberate safe fallback
+    # for an unclaimed opening sentence — it beats cutting to something unrelated — but
+    # the two entries then read as one long hold, and nothing downstream can tell:
+    # the dwell limit and the burst guard both count PLANNED entries. Measured on FP
+    # ch1-2: 6 such runs, turning 106 planned shots into 100 seen ones and a 16.7s
+    # longest shot into 18.6s.
+    #
+    # Prefer the next unclaimed ART panel in reading order; keep the hold when there is
+    # none, because an unrelated image is still worse than a long one.
+    if panel_order:
+        pos = {pid: i for i, pid in enumerate(panel_order)}
+        claimed = {pid for item in flat for pid in item["panels"]}
+        for prev_item, item in zip(flat, flat[1:]):
+            if prev_item["beat_id"] == item["beat_id"]:
+                continue
+            if not prev_item["panels"] or not item["panels"]:
+                continue
+            last, first = prev_item["panels"][-1], item["panels"][0]
+            if last != first or last not in pos:
+                continue
+            nxt = next(
+                (
+                    pid
+                    for pid in panel_order[pos[last] + 1 :]
+                    if pid not in claimed and pid not in (text_only or ())
+                ),
+                None,
+            )
+            if nxt is not None:
+                item["panels"][0] = nxt
+                claimed.add(nxt)
+
     # Sentences -> raw shots: (panel, seconds, accent).
     plan: dict[int, list[tuple[str, float]]] = {}
     current_panel: str | None = None

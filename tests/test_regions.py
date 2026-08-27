@@ -317,3 +317,63 @@ def test_content_free_keeps_sparse_but_real_art():
     img = _canvas(700, 700, 250)
     _paint_art(img, 120, 120, 400, 400)   # coverage ~0.33, varied orientations
     assert not is_content_free(img)
+
+
+# --- lettering on whole panels --------------------------------------------------------
+
+def _panel(*rows: str, scale: int = 40) -> "np.ndarray":
+    """Tiny painted panel: '.'=black ground, '#'=white, 'a'=mid-tone art."""
+    import numpy as np
+
+    tone = {".": 0, "#": 255, "a": 128}
+    grid = np.array([[tone[c] for c in row] for row in rows], dtype=np.uint8)
+    return np.repeat(np.repeat(grid, scale, 0), scale, 1)[:, :, None].repeat(3, 2)
+
+
+def test_text_content_ratio_is_blind_to_ink_polarity():
+    """The failure this detector exists for: `is_text_only_panel` needs a large BRIGHT
+    region, so white type on a black field scored as art and 0 of Frozen Player's 100
+    shown panels were ever flagged."""
+    import cv2
+    import numpy as np
+
+    from manhwa2vid.panels.regions import is_text_only_panel, text_content_ratio
+
+    # white lettering on black, the polarity the tonal rule cannot see
+    img = np.zeros((240, 800, 3), np.uint8)
+    for i in range(8):
+        cv2.putText(img, "A", (60 + i * 80, 140), cv2.FONT_HERSHEY_SIMPLEX,
+                    1.4, (255, 255, 255), 3)
+    assert not is_text_only_panel(img), "precondition: the tonal rule misses this"
+    assert text_content_ratio(img) > 0.5, "the geometric one must not"
+
+
+def test_measured_extremes_bracket_the_threshold():
+    """Real panels, labelled by eye 2026-08-27 across all 607 panels of both titles.
+
+    Pinned as NUMBERS rather than a pass/fail so the margin itself is visible: the
+    lowest true-text panel measured 0.853 and the highest true-art panel 0.778, and
+    TEXT_DOMINANT sits between them. Moving the threshold into either class fails here
+    instead of silently changing every video.
+    """
+    from manhwa2vid.panels.regions import TEXT_DOMINANT
+
+    lowest_true_text = 0.853   # SL p0004_03, "NEVER." in a bubble on black
+    highest_true_art = 0.778   # SL p0045_01, an aerial crowd scene with lettering on it
+    assert highest_true_art < TEXT_DOMINANT < lowest_true_text
+
+
+def test_a_bubble_with_art_beside_it_is_not_text_dominant():
+    """The frames that must survive: a face WITH its speech bubble is a real shot."""
+    import cv2
+    import numpy as np
+
+    from manhwa2vid.panels.regions import is_text_dominant_panel
+
+    img = np.full((600, 800, 3), 128, np.uint8)          # a wall of mid-tone "art"
+    cv2.circle(img, (400, 380), 170, (90, 60, 40), -1)   # a drawn shape
+    cv2.ellipse(img, (400, 90), (220, 70), 0, 0, 360, (255, 255, 255), -1)
+    for i in range(6):
+        cv2.putText(img, "A", (250 + i * 55, 105), cv2.FONT_HERSHEY_SIMPLEX,
+                    1.1, (0, 0, 0), 3)
+    assert not is_text_dominant_panel(img)

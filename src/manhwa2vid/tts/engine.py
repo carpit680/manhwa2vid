@@ -87,7 +87,7 @@ def run_tts_and_timeline(
         # volunteers one.
         import cv2
 
-        from manhwa2vid.panels.regions import is_content_free, is_text_only_panel
+        from manhwa2vid.panels.regions import is_content_free, is_text_dominant_panel
         from manhwa2vid.panels.split import is_visually_empty_file
 
         text_only: set[str] = set()
@@ -98,7 +98,11 @@ def run_tts_and_timeline(
                 empty.add(p.id)
                 continue
             img = cv2.imread(str(path))
-            if img is not None and (is_text_only_panel(img) or is_content_free(img)):
+            # is_text_dominant_panel, NOT is_text_only_panel: the latter asks a tonal
+            # question and is used on split BANDS, where it works. On whole panels it
+            # flagged 0 of FP's 100 shown panels, because it needs a large BRIGHT region
+            # and half the offending frames are white type on black. See regions.py.
+            if img is not None and (is_text_dominant_panel(img) or is_content_free(img)):
                 text_only.add(p.id)
 
         # Reading order for both fill candidates and bubble substitution. Text-only
@@ -210,6 +214,40 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
         "; ".join(over[:4]) + " — narration too long for its panel count" if over else "",
         over=over,
     )
+
+    # Two entries in a row on the same panel are ONE shot to the viewer, whatever the
+    # plan says. Holding across a beat boundary is a legitimate fallback, so this warns
+    # rather than fails — but it must be visible, because the dwell limit above counts
+    # planned entries and cannot see that it is really reporting half a hold.
+    runs: list[str] = []
+    for prev, cur in zip(timeline.entries, timeline.entries[1:]):
+        if prev.panel_id == cur.panel_id:
+            runs.append(
+                f"{cur.panel_id} across beats {prev.beat_id}->{cur.beat_id} "
+                f"({prev.duration + cur.duration:.1f}s seen as one shot)"
+            )
+    report.add(
+        "no-invisible-cuts",
+        "warn" if runs else True,
+        "; ".join(runs[:4]) + " — consecutive entries on one panel" if runs else "",
+        runs=runs,
+    )
+
+    # The last thing on screen. Frozen Player ch1-2 closed on a "WHAT?!" starburst held
+    # 18.6s: the 2026-08-26 audit filed it as defect A2, the end card hid it rather than
+    # fixing it, and removing the card brought it straight back. A recap must not end on
+    # a wall of lettering while the narrator is asking for the subscribe.
+    closing = ""
+    if timeline.entries:
+        import cv2
+
+        from manhwa2vid.panels.regions import is_text_dominant_panel
+
+        last = timeline.entries[-1]
+        img = cv2.imread(str(paths["root"] / last.panel_path))
+        if img is not None and is_text_dominant_panel(img):
+            closing = f"the video ends on {last.panel_id}, which is lettering not art"
+    report.add("closing-shot-is-art", not closing, closing)
 
     report.add(
         "panel-budget",

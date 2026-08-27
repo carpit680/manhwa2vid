@@ -320,3 +320,43 @@ def test_all_text_only_leaves_the_claim_alone():
         text_only={"p1"},
     )
     assert plan[1] == [("p1", 3.0)]
+
+
+def test_a_beat_does_not_open_on_the_panel_the_last_one_closed_on():
+    """An invisible cut: two planned shots the viewer reads as one long hold.
+
+    Holding across a beat boundary is the deliberate fallback for an unclaimed opening
+    sentence, but nothing downstream can tell the difference — the dwell limit and the
+    burst guard both count PLANNED entries. Frozen Player ch1-2 shipped 6 of these,
+    making 106 planned shots into 100 seen ones and a 16.7s longest shot into 18.6s.
+    """
+    plan = plan_shots(
+        {"sentences": [
+            {"beat_id": 1, "panels": ["p1"]},
+            {"beat_id": 1, "panels": ["p2"]},
+            {"beat_id": 2, "panels": ["p2"]},   # opens on what beat 1 closed on
+            {"beat_id": 2, "panels": ["p4"]},
+        ]},
+        {1: [{"seconds": 3.0}, {"seconds": 3.0}], 2: [{"seconds": 3.0}, {"seconds": 3.0}]},
+        floor=1.0,
+        panel_order=["p1", "p2", "p3", "p4"],
+    )
+    assert plan is not None
+    assert plan[1][-1][0] == "p2"
+    assert plan[2][0][0] == "p3", "should advance to the next unclaimed panel, not repeat"
+
+
+def test_the_hold_survives_when_there_is_nothing_to_advance_to():
+    """An unrelated image is worse than a repeated one — keep the hold rather than
+    reaching for a panel that has nothing to do with the line."""
+    plan = plan_shots(
+        {"sentences": [
+            {"beat_id": 1, "panels": ["p2"]},
+            {"beat_id": 2, "panels": ["p2"]},
+        ]},
+        {1: [{"seconds": 3.0}], 2: [{"seconds": 3.0}]},
+        floor=1.0,
+        panel_order=["p1", "p2"],   # nothing unclaimed after p2
+    )
+    assert plan is not None
+    assert plan[2][0][0] == "p2"
