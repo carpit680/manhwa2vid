@@ -49,3 +49,13 @@ def test_a_bad_model_outro_is_rejected_for_the_fixed_one(monkeypatch):
     out = append_outro("Story ends here.", _meta(), {}, {})
     tail = out[len("Story ends here."):].strip()
     assert "guys" not in tail.lower() and "subscri" in tail.lower()
+
+
+def test_running_the_stage_twice_does_not_double_the_outro():
+    """The script stage is re-runnable and append_outro is called on the freeform text
+    each time. Appending a second ask would be a silent defect that only shows up in the
+    finished audio."""
+    text = "He wipes the dust from her frozen face."
+    once = append_outro(text, _meta(), {}, {})
+    twice = append_outro(once, _meta(), {}, {})
+    assert twice.lower().count("subscri") == 1, "a second outro was appended"

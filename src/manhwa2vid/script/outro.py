@@ -71,6 +71,13 @@ def append_outro(
         return text
     last_para = body.split("\n\n")[-1].strip()
 
+    # Idempotent: the script stage can run against a CACHED script.freeform.md that
+    # already ends in an outro (write_freeform_script returns the cached prose unless
+    # forced), and appending a second ask is a defect that only surfaces in the finished
+    # audio. The guard belongs here, not in whatever script happens to call this.
+    if "subscri" in last_para.lower():
+        return text
+
     outro = ""
     try:
         from manhwa2vid.llm.provider import get_llm_provider

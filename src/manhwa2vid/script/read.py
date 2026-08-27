@@ -138,7 +138,14 @@ def merge_cast_into_glossary(cast: list[dict[str, Any]], paths: dict[str, Path])
         name = str(entry.get("name") or "").strip()
         if not name:
             continue
-        aliases = [str(a).strip() for a in (entry.get("aliases") or []) if str(a).strip()]
+        # `str(a)` on a JSON null yields the literal "None", which is truthy — a null
+        # in the model's alias list became a character alias named "None", and the
+        # identity gate then treated "None" as a name it knows.
+        aliases = [
+            str(a).strip()
+            for a in (entry.get("aliases") or [])
+            if isinstance(a, str) and a.strip()
+        ]
         if name not in characters:
             characters[name] = aliases
             added_names += 1
