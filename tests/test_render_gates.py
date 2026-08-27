@@ -114,8 +114,8 @@ def _project(tmp_path: Path) -> Path:
         source_type=SourceType.IMAGES, source_path=str(tmp_path), pdf_path=str(tmp_path),
     ))
     paths["timeline_json"].write_text(json.dumps({"entries": [], "total_duration": 0}))
-    (tmp_path / "qa.script.json").write_text(json.dumps({
-        "stage": "script",
+    (tmp_path / "qa.script-story-first.json").write_text(json.dumps({
+        "stage": "script-story-first",
         "gates": [{"name": "dialogue-delivery", "status": "fail", "details": "", "data": {}}],
     }))
     return tmp_path

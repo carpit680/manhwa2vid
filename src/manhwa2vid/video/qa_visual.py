@@ -20,8 +20,11 @@ from typing import Any
 
 import cv2
 import numpy as np
+from rich.console import Console
 
 from manhwa2vid.qa import QAReport, enforce, qa_forced
+
+console = Console()
 
 _W, _H, _FPS = 480, 270, 2.0
 
@@ -269,13 +272,24 @@ def enforce_render_qa(
 
 
 def upstream_failures(project_dir: Path) -> list[str]:
-    """Names of FAILED gates in every existing qa.*.json — the render precondition.
+    """Names of FAILED gates from the stages that CURRENTLY run — the render precondition.
 
     Both audited videos rendered while script-stage gates were failing; nothing
-    connected a red gate to the render that shipped it."""
+    connected a red gate to the render that shipped it.
+
+    Scoped to `qa.CURRENT_QA_STAGES` rather than every qa.*.json on disk. A project
+    directory outlives the pipeline that filled it: reports from deleted stages stay
+    there forever, and a glob keeps gating on them. See the note on that constant."""
+    from manhwa2vid.qa import CURRENT_QA_STAGES
+
     failures: list[str] = []
+    orphans: list[str] = []
     for qa_file in sorted(project_dir.glob("qa.*.json")):
-        if qa_file.name == "qa.render.json":
+        stage = qa_file.stem.removeprefix("qa.")
+        if stage == "render":
+            continue
+        if stage not in CURRENT_QA_STAGES:
+            orphans.append(qa_file.name)
             continue
         try:
             data = json.loads(qa_file.read_text(encoding="utf-8"))
@@ -283,5 +297,10 @@ def upstream_failures(project_dir: Path) -> list[str]:
             continue
         for gate in data.get("gates") or []:
             if gate.get("status") == "fail":
-                failures.append(f"{qa_file.stem.removeprefix('qa.')}:{gate.get('name')}")
+                failures.append(f"{stage}:{gate.get('name')}")
+    if orphans:
+        console.print(
+            f"[dim]Ignoring {len(orphans)} QA report(s) from retired stages: "
+            f"{', '.join(orphans)} — safe to delete.[/]"
+        )
     return failures

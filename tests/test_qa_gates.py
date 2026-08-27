@@ -1106,8 +1106,8 @@ def test_render_bubble_and_deadspace_detectors_match_the_audit_rules():
 def test_render_refuses_over_upstream_failures(tmp_path):
     from manhwa2vid.video.qa_visual import upstream_failures
 
-    (tmp_path / "qa.script.json").write_text(json.dumps({
-        "stage": "script",
+    (tmp_path / "qa.script-story-first.json").write_text(json.dumps({
+        "stage": "script-story-first",
         "gates": [
             {"name": "beats-wellformed", "status": "pass"},
             {"name": "dialogue-delivery", "status": "fail"},
@@ -1122,7 +1122,7 @@ def test_render_refuses_over_upstream_failures(tmp_path):
         "stage": "render",
         "gates": [{"name": "dead-space", "status": "fail"}],
     }))
-    assert upstream_failures(tmp_path) == ["script:dialogue-delivery"]
+    assert upstream_failures(tmp_path) == ["script-story-first:dialogue-delivery"]
 
 
 def test_measure_video_reads_a_real_file(tmp_path):
@@ -1149,3 +1149,58 @@ def test_measure_video_reads_a_real_file(tmp_path):
     assert m["frames"] > 0
     assert m["dead_width_mean"] < 0.2, "full-bleed noise has no dead columns"
     assert m["bubble_over_20pct_frames_pct"] == 0.0
+
+
+# --- the render precondition must gate on the pipeline that exists ----------------------
+
+def test_current_qa_stages_matches_what_src_actually_writes():
+    """AST-scan src/ for QAReport(stage=...) and pin the set against CURRENT_QA_STAGES.
+
+    `upstream_failures` gates the render on this set. A new stage whose name is missing
+    would be silently un-gated — a red gate that never blocks anything, which is the
+    exact hole the render precondition was added to close.
+    """
+    import ast
+    from pathlib import Path
+
+    from manhwa2vid.qa import CURRENT_QA_STAGES
+
+    written = set()
+    for py in Path("src/manhwa2vid").rglob("*.py"):
+        tree = ast.parse(py.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "QAReport"):
+                continue
+            for kw in node.keywords:
+                if kw.arg == "stage" and isinstance(kw.value, ast.Constant):
+                    written.add(kw.value.value)
+    assert written == set(CURRENT_QA_STAGES), (
+        f"stages writing QA reports {sorted(written)} != "
+        f"CURRENT_QA_STAGES {sorted(CURRENT_QA_STAGES)}"
+    )
+
+
+def test_reports_from_retired_stages_do_not_block_the_render(tmp_path):
+    """A project directory outlives the pipeline that filled it.
+
+    Frozen Player's render was blocked for two days by a qa.script-final.json from the
+    deleted classic path, describing a 31-beat script when the current one has 17. The
+    operator's only way through was --force-past-qa, which is how a real red gate gets
+    waved past too.
+    """
+    import json
+
+    from manhwa2vid.video.qa_visual import upstream_failures
+
+    def write(name, gate_status):
+        (tmp_path / name).write_text(json.dumps(
+            {"stage": name.removeprefix("qa.").removesuffix(".json"),
+             "gates": [{"name": "g", "status": gate_status, "details": "", "data": {}}]}
+        ))
+
+    write("qa.script-final.json", "fail")   # retired classic stage
+    write("qa.cast.json", "fail")           # retired CAST stage
+    assert upstream_failures(tmp_path) == []
+
+    write("qa.timeline.json", "fail")       # a stage that still runs
+    assert upstream_failures(tmp_path) == ["timeline:g"]

@@ -31,6 +31,20 @@ class GateResult(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
+# The stages that write a qa.<stage>.json today. `upstream_failures` gates the render on
+# these and IGNORES anything else, because a project directory accumulates reports from
+# stages that no longer exist: the classic script path left qa.script.json,
+# qa.script-final.json, qa.script-coverage.json and qa.style.json behind, and the retired
+# CAST stage left qa.cast.json. Frozen Player's render was blocked for two days by a
+# 2026-08-25 qa.script-final.json describing a 31-beat script — the current one has 17.
+# Worse than the false alarm: it taught the operator to pass --force-past-qa reflexively,
+# which is exactly what the precondition exists to prevent.
+# `tests/test_qa_gates.py` AST-scans src/ and fails if a stage writes a name not listed.
+CURRENT_QA_STAGES = frozenset(
+    {"scene", "align", "script-story-first", "timeline", "render"}
+)
+
+
 class QAReport(BaseModel):
     stage: str
     gates: list[GateResult] = Field(default_factory=list)
