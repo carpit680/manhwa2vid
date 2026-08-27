@@ -143,3 +143,52 @@ blurred pillarbox counts as content; recalibrate on frames before gating.
 
 **Six invisible cuts remain** where a beat has more narration than panels and there is no
 unclaimed panel to advance to. Reported by the new `no-invisible-cuts` gate.
+
+---
+
+# Camera windows (task #80)
+
+Panel-level exclusion cannot reach a window chosen *inside* a tall art panel. The camera
+picked those windows with `effects._bubble_boxes`, a brightness test that found "large
+pale region", not "bubble" — it missed the jagged "WHAT?!" starburst entirely, which,
+being full of high-contrast spikes, then **attracted** the window instead of repelling
+it, while flagging white walls and steering the camera off real art. Replaced with the
+validated `regions.text_regions`.
+
+**Measured before changing anything**, over FP's 42 fill-frame panels, counting windows
+where lettering covers more than 30% of the screen: **21 with no down-weight, 10 at the
+old 0.15 weight, 14 at 0.40, 18 at 0.55.**
+
+## Two corrections the frames forced
+
+**Sound effects are not speech bubbles.** SFX is painted ON the art, exactly where the
+action is, so suppressing it walks the camera away from the subject. At weight 0.15 the
+opening reframed off Frozen Player's only character onto an empty door. Three ways to
+separate SFX from bubbles were tried and measured: containers-only (20 windows — most
+bubbles have no detectable container), a size filter (12–16), and a flat-ring test (21).
+None gave both. It is a genuine trade-off, and **0.40** is the middle: most of the gain,
+subject still framed.
+
+**The opening-shot gate was measuring the wrong thing.** It read the Frost Queen's pale
+hair as a 34%-of-frame "bubble" and FAILED an opening that had improved — lettering over
+the first four seconds fell 48% → 30%, and the second shot moved off its speech bubble
+onto her face. It now measures lettering with the validated detector at a 0.55 band; the
+blob number is still recorded but decides nothing.
+
+## Net effect on the video
+
+| measured with the validated detector | old camera | new camera |
+|---|---|---|
+| frames where lettering covers >30% of screen | 16.8% | **14.1%** |
+| frames where lettering is sliced at the frame edge | 47.6% | 49.0% |
+
+A modest net gain, not a transformation: the remaining text-heavy frames are windows on
+panels that are genuinely mostly bubble. The opening's subject is framed lower than
+before, though fully visible. Six render gates pass. **If the old opening framing is
+preferred, revert `video.bubble_salience_weight` to 1.0** — that keeps the detector for
+edge-slice avoidance and the panel test while leaving salience untouched.
+
+Two performance fixes were needed and are verified to leave the detector's output
+identical: cache the container search by tone, and break out of the row grouping once
+past its vertical bound (it was O(n²), and a 22000px strip carries tens of thousands of
+glyph-sized components — two camera tests went 0.4s → 30s, now 2s).
