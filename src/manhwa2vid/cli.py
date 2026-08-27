@@ -121,17 +121,6 @@ def run_panels(project: Path = typer.Option(..., "--project"), force: bool = Fal
     run_stage(project.resolve(), PipelineStage.PANELS, force=force)
 
 
-@run_app.command("story")
-def run_story(project: Path = typer.Option(..., "--project"), force: bool = False) -> None:
-    """Brief-read pass over the series: chapter gists for story-so-far / story-ahead."""
-    run_stage(project.resolve(), PipelineStage.STORY, force=force)
-
-
-@run_app.command("scout")
-def run_scout(project: Path = typer.Option(..., "--project"), force: bool = False) -> None:
-    run_stage(project.resolve(), PipelineStage.SCOUT, force=force)
-
-
 @run_app.command("ocr")
 def run_ocr(
     project: Path = typer.Option(..., "--project"),
@@ -140,14 +129,6 @@ def run_ocr(
 ) -> None:
     run_stage(project.resolve(), PipelineStage.OCR, force=force, force_past_qa=force_past_qa)
 
-
-@run_app.command("cast")
-def run_cast(
-    project: Path = typer.Option(..., "--project"),
-    force: bool = False,
-    force_past_qa: bool = typer.Option(False, "--force-past-qa", help="Continue despite failed QA gates"),
-) -> None:
-    run_stage(project.resolve(), PipelineStage.CAST, force=force, force_past_qa=force_past_qa)
 
 
 @run_app.command("script")

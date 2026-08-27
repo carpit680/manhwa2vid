@@ -9,7 +9,6 @@ from typing import Any
 from rich.console import Console
 
 from manhwa2vid.characters.bible import load_series_bible, merge_profile, save_series_bible, slugify_char_id
-from manhwa2vid.characters.wiki import fetch_wiki_cast
 from manhwa2vid.config import get_nested
 from manhwa2vid.models import CharacterProfile, CharacterTier, ProjectMeta, SeriesBible
 
@@ -47,9 +46,9 @@ def seed_series_bible(
     for profile in profiles_from_glossary(glossary):
         merge_profile(bible, profile)
 
-    if get_nested(config, "characters", "wiki_lookup", default=False):
-        for profile in fetch_wiki_cast(meta.title, config):
-            merge_profile(bible, profile)
+    # Wiki seeding lived here behind characters.wiki_lookup. It was off by default
+    # because scraping seeded junk profiles (Template:Infobox..., User:...) into the
+    # bible; the glossary carries the sticky cast instead. Removed with the flag.
 
     save_series_bible(bible)
     console.print(f"[green]Series bible seeded:[/] {len(bible.characters)} character hints")

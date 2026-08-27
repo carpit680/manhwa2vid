@@ -933,7 +933,6 @@ def run_ocr_and_scenes(
             enforce(report, paths["root"], force=qa_forced(config))
         return ocr_results, scene_cards
 
-    paths["scene_normalized_json"].unlink(missing_ok=True)
     paths["scene_enriched_json"].unlink(missing_ok=True)
     paths["cast_attribution_json"].unlink(missing_ok=True)
     paths["panels_story_json"].unlink(missing_ok=True)
@@ -1019,7 +1018,6 @@ def run_ocr_and_scenes(
         demoted_ids_total = counters["demoted"]
         grounded_from_bubbles = counters["grounded_from_bubbles"]
         if story_map:
-            save_json(paths["scene_story_map_json"], story_map)
             console.print(f"[dim]Chapter read:[/] {story_map.get('summary','')[:120]}")
         save_json(paths["scene_json"], scene_cards)
         paths["scene_partial_json"].unlink(missing_ok=True)

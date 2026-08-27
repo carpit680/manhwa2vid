@@ -609,7 +609,7 @@ def split_panels(
         console.print(f"[dim]Using cached panels ({len(data)} panels)[/]")
         return [Panel.model_validate(p) for p in data]
 
-    for stale in ("panels_story_json", "excluded_panels_json", "scene_normalized_json", "scene_partial_json"):
+    for stale in ("panels_story_json", "excluded_panels_json", "scene_partial_json"):
         paths[stale].unlink(missing_ok=True)
 
     page_infos = _load_manifest(paths["pages"])

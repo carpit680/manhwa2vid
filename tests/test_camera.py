@@ -95,20 +95,6 @@ def test_select_panels_keeps_the_last_panel_when_asked():
     assert panels[-1] in out
 
 
-def test_panel_salience_prefers_dialogue_then_people():
-    from manhwa2vid.models import SceneCard
-    from manhwa2vid.video.timeline import panel_salience
-
-    cards = [
-        SceneCard(panel_ids=["p1"], source_text='A: "HI."', action=""),
-        SceneCard(panel_ids=["p2"], source_text="", action="scenery"),
-    ]
-    attribution = [
-        {"panel_id": "p1", "people": [{"ref": "a"}]},
-        {"panel_id": "p2", "people": []},
-    ]
-    s = panel_salience(cards, attribution)
-    assert s["p1"] > s["p2"]
 
 
 def test_budget_keeps_key_panels_when_salience_is_unavailable():

@@ -57,22 +57,12 @@ def run_tts_and_timeline(
     panels = load_story_panels(paths)
     # Importance signals for panel curation: dialogue and people, from artifacts that
     # already exist. Curation is skipped gracefully when cards are absent (old projects).
+    # Panel salience (dialogue + people, derived from cast_attribution.json) used to be
+    # loaded here as a curation signal. It was only ever consulted by build_timeline's
+    # NO-SHOT-PLAN fallback — and the story-first path always writes a shot list, so it
+    # never fired: both real projects had plans covering every beat. It died with the
+    # CAST stage that produced its input.
     salience = None
-    try:
-        from manhwa2vid.panels.filter import load_story_scene_cards
-        from manhwa2vid.video.timeline import panel_salience
-
-        cards = load_story_scene_cards(paths)
-        attribution = None
-        if paths["cast_attribution_json"].exists():
-            attribution = json.loads(paths["cast_attribution_json"].read_text(encoding="utf-8"))
-        salience = panel_salience(cards, attribution)
-    except Exception as exc:
-        # Say so. This was a bare `except: salience = None`, and a swallowed failure here
-        # silently downgrades panel curation to a blind positional stride for the whole
-        # video — the writer's key_panel_ids stop being honoured and nobody is told.
-        console.print(f"[yellow]Panel salience unavailable ({exc}) — using key panels only[/]")
-        salience = None
     # Join the align stage's sentence->panel claims with the sidecars' measured
     # per-sentence seconds. Durations only exist here (sidecars are written at
     # synthesis), which is why the shot list stores claims and the plan is built now.

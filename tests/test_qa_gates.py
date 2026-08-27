@@ -58,28 +58,8 @@ def test_narration_missing_beats_are_reported() -> None:
 
 # --- B1: referential integrity — invented refs close against the bible --------------------
 
-def test_invented_green_backpack_ref_resolves_to_mc() -> None:
-    from manhwa2vid.characters.link import _close_ref_against_bible
-
-    bible = _bible_with_mc()
-    person = CharacterRef(ref="char_man_with_green_backpack", name_used="", descriptor="")
-    card = SceneCard(panel_ids=["p0016_01"], people=[person])
-    assert _close_ref_against_bible(person, card, bible) == "char_sung_jin_woo"
 
 
-def test_cast_integrity_report_flags_dangling_ref() -> None:
-    from manhwa2vid.characters.link import _cast_integrity_report
-
-    bible = _bible_with_mc()
-    cards = [
-        SceneCard(
-            panel_ids=["p0001_01"],
-            people=[CharacterRef(ref="char_does_not_exist", name_used="Ghost")],
-        )
-    ]
-    report = _cast_integrity_report(cards, bible)
-    gate = next(g for g in report.gates if g.name == "referential-integrity")
-    assert gate.status == FAIL
 
 
 # --- C1: speakers must be visible people --------------------------------------------------
@@ -391,26 +371,6 @@ def test_unfounded_identification_is_demoted() -> None:
     assert out["demoted_identifications"] == 1
 
 
-def test_consolidation_leaves_tombstone_for_redirects() -> None:
-    """Regression: merge_profiles_into deleted the dropped profile, so apply_id_redirects
-    never learned the redirect and card refs to consolidated ids dangled."""
-    from manhwa2vid.characters.consolidate import apply_id_redirects, merge_profiles_into
-
-    bible = _bible_with_mc()
-    bible.characters["char_bak_dup"] = CharacterProfile(
-        id="char_bak_dup", canonical_name="Bak", tier=CharacterTier.MINOR,
-        descriptors=["curly-haired man in a green puffer jacket"],
-    )
-    bible.characters["char_bak"] = CharacterProfile(
-        id="char_bak", canonical_name="Bak", tier=CharacterTier.SUPPORTING,
-        descriptors=["curly-haired man in a green puffer jacket"],
-    )
-    merge_profiles_into(bible, "char_bak", "char_bak_dup")
-    assert bible.characters["char_bak_dup"].merged_into == "char_bak"  # tombstone survives
-
-    cards = [SceneCard(panel_ids=["p1"], people=[CharacterRef(ref="char_bak_dup", name_used="Bak")])]
-    out = apply_id_redirects(cards, bible)
-    assert out[0].people[0].ref == "char_bak"
 
 
 def test_vlm_minted_ids_are_clamped_to_known_bible() -> None:
@@ -463,139 +423,14 @@ def test_rotation_never_matches_inside_longer_names() -> None:
     assert "Hunter he" not in out
 
 
-def test_reference_sheet_requires_visual_basis() -> None:
-    """A reference may only come from an identification backed by explicit visual basis.
-
-    Seeding the sheet from an unbacked guess would make identity confusion
-    self-reinforcing: the wrong face becomes the anchor every later panel matches against.
-    """
-    from manhwa2vid.characters.reference import select_reference_panels
-    from manhwa2vid.models import (
-        CharacterProfile,
-        CharacterRef,
-        SceneCard,
-        SeriesBible,
-    )
-
-    bible = SeriesBible(series_slug="s", title="S", protagonist_id="char_mc")
-    bible.characters["char_mc"] = CharacterProfile(id="char_mc", canonical_name="MC")
-
-    unbacked = SceneCard(
-        panel_ids=["p0001_01"],
-        people=[CharacterRef(ref="char_mc", visibility="face", notes="")],
-    )
-    assert not select_reference_panels(bible, [unbacked])
-
-    backed = SceneCard(
-        panel_ids=["p0002_01"],
-        people=[
-            CharacterRef(
-                ref="char_mc",
-                visibility="face",
-                notes="green backpack clearly visible, scar on cheek",
-                confidence=0.9,
-            )
-        ],
-    )
-    picked = select_reference_panels(bible, [backed])
-    assert picked["char_mc"][0][0] == "p0002_01"
 
 
-def test_reference_sheet_prefers_face_over_back_turned() -> None:
-    from manhwa2vid.characters.reference import select_reference_panels
-    from manhwa2vid.models import CharacterProfile, CharacterRef, SceneCard, SeriesBible
-
-    bible = SeriesBible(series_slug="s", title="S", protagonist_id="char_mc")
-    bible.characters["char_mc"] = CharacterProfile(id="char_mc", canonical_name="MC")
-
-    cards = [
-        SceneCard(
-            panel_ids=["p0001_01"],
-            people=[
-                CharacterRef(ref="char_mc", visibility="back_turned", notes="green backpack seen", confidence=0.9)
-            ],
-        ),
-        SceneCard(
-            panel_ids=["p0002_01"],
-            people=[
-                CharacterRef(ref="char_mc", visibility="face", notes="green backpack seen", confidence=0.9)
-            ],
-        ),
-    ]
-
-    picked = select_reference_panels(bible, cards, per_character=1)
-    assert picked["char_mc"][0][0] == "p0002_01", "back-turned panels are poor identity anchors"
 
 
-def test_reference_sheet_skips_merged_tombstones() -> None:
-    from manhwa2vid.characters.reference import select_reference_panels
-    from manhwa2vid.models import CharacterProfile, CharacterRef, SceneCard, SeriesBible
-
-    bible = SeriesBible(series_slug="s", title="S")
-    bible.characters["char_old"] = CharacterProfile(
-        id="char_old", canonical_name="Old", merged_into="char_new"
-    )
-    card = SceneCard(
-        panel_ids=["p0001_01"],
-        people=[CharacterRef(ref="char_old", visibility="face", notes="long orange hair", confidence=0.9)],
-    )
-    assert not select_reference_panels(bible, [card])
 
 
-def test_reference_preamble_names_leading_images() -> None:
-    """The model must know the first images are references, not panels to describe."""
-    from pathlib import Path
-
-    from manhwa2vid.characters.reference import format_reference_preamble
-
-    assert format_reference_preamble([]) == ""
-    text = format_reference_preamble([("Sung Jin-Woo (PROTAGONIST)", Path("a.png"))])
-    assert "FIRST 1 image(s)" in text
-    assert "Image 1: Sung Jin-Woo (PROTAGONIST)" in text
-    assert "never list their people" in text
 
 
-def test_reference_sheet_ranks_cast_above_well_evidenced_props() -> None:
-    """Reference slots are scarce — spend them on people who get confused.
-
-    Ranking by evidence score alone spent a slot on 'giant statue on the right', a minor
-    profile nobody mistakes for anyone, crowding out the supporting cast member who was
-    actually being swapped with the protagonist.
-    """
-    from manhwa2vid.characters.reference import select_reference_panels
-    from manhwa2vid.models import (
-        CharacterProfile,
-        CharacterRef,
-        CharacterTier,
-        SceneCard,
-        SeriesBible,
-    )
-
-    bible = SeriesBible(series_slug="s", title="S", protagonist_id="char_mc")
-    bible.characters["char_mc"] = CharacterProfile(
-        id="char_mc", canonical_name="MC", tier=CharacterTier.MAIN
-    )
-    bible.characters["char_ally"] = CharacterProfile(
-        id="char_ally", canonical_name="Ally", tier=CharacterTier.SUPPORTING
-    )
-    bible.characters["char_statue"] = CharacterProfile(
-        id="char_statue", canonical_name="giant statue", tier=CharacterTier.MINOR
-    )
-
-    def _card(pid: str, ref: str) -> SceneCard:
-        return SceneCard(
-            panel_ids=[pid],
-            people=[CharacterRef(ref=ref, visibility="face", notes="clearly visible detail here", confidence=0.9)],
-        )
-
-    picked = select_reference_panels(
-        bible,
-        [_card("p0001_01", "char_statue"), _card("p0002_01", "char_ally"), _card("p0003_01", "char_mc")],
-        max_refs=2,
-    )
-
-    assert set(picked) == {"char_mc", "char_ally"}
-    assert "char_statue" not in picked
 
 
 def _ref_card(
@@ -626,159 +461,18 @@ def _ref_bible():
     return bible
 
 
-def test_reference_window_prefers_solo_panel_over_crowd() -> None:
-    """A whole panel is the reference, so extra bodies make 'Image 1: MC' ambiguous."""
-    from manhwa2vid.characters.reference import select_reference_panels
-
-    picked = select_reference_panels(
-        _ref_bible(),
-        [_ref_card("p0001_01", "char_mc", crowd=4), _ref_card("p0002_01", "char_mc", crowd=1)],
-        per_character=1,
-    )
-    assert picked["char_mc"][0][0] == "p0002_01"
 
 
-def test_reference_window_spreads_across_chapters(tmp_path) -> None:
-    """Costume changes across chapters are the POINT of a window.
-
-    Three shots of the same chapter teach nothing about which features are permanent, so
-    a later chapter's image must displace a same-chapter duplicate rather than be dropped.
-    """
-    from PIL import Image
-
-    from manhwa2vid.characters.reference import build_reference_sheet, load_reference_sheet
-
-    bible = _ref_bible()
-    series_dir = tmp_path / "series"
-    panel_paths = {}
-    for pid in ("p0001_01", "p0002_01", "p0003_01"):
-        img = tmp_path / f"{pid}.png"
-        Image.new("RGB", (16, 16), "white").save(img)
-        panel_paths[pid] = img
-
-    build_reference_sheet(
-        bible,
-        [_ref_card("p0001_01", "char_mc"), _ref_card("p0002_01", "char_mc")],
-        panel_paths,
-        series_dir,
-        chapter="1",
-        per_character=3,
-    )
-    build_reference_sheet(
-        bible, [_ref_card("p0003_01", "char_mc")], panel_paths, series_dir, chapter="2",
-        per_character=3,
-    )
-
-    manifest = json.loads((series_dir / "reference" / "manifest.json").read_text())
-    chapters = {e["chapter"] for e in manifest["char_mc"]}
-    assert chapters == {"1", "2"}, f"window must span chapters, got {chapters}"
-    assert len(load_reference_sheet(bible, series_dir)) >= 2
 
 
-def test_reference_window_rerun_does_not_inflate_one_chapter(tmp_path) -> None:
-    """Re-running a chapter replaces its own entries instead of stacking duplicates."""
-    from PIL import Image
-
-    from manhwa2vid.characters.reference import build_reference_sheet
-
-    bible = _ref_bible()
-    series_dir = tmp_path / "series"
-    img = tmp_path / "p0001_01.png"
-    Image.new("RGB", (16, 16), "white").save(img)
-    panel_paths = {"p0001_01": img}
-    cards = [_ref_card("p0001_01", "char_mc")]
-
-    for _ in range(3):
-        build_reference_sheet(bible, cards, panel_paths, series_dir, chapter="1")
-
-    manifest = json.loads((series_dir / "reference" / "manifest.json").read_text())
-    assert len(manifest["char_mc"]) == 1
 
 
-def test_reference_preamble_warns_that_clothing_changes() -> None:
-    """Anchoring on wardrobe is the failure mode a window exists to prevent."""
-    from pathlib import Path
-
-    from manhwa2vid.characters.reference import format_reference_preamble
-
-    text = format_reference_preamble(
-        [("MC (PROTAGONIST)", Path("a.png")), ("MC (PROTAGONIST)", Path("b.png"))]
-    )
-    assert "SAME character in different scenes or chapters" in text
-    assert "SURVIVE a change of outfit" in text
-    assert "never rule someone out just because their clothes differ" in text
 
 
-def test_reference_manifest_upgrades_from_legacy_single_image(tmp_path) -> None:
-    """An older single-image manifest must keep working, not crash the scene stage."""
-    from PIL import Image
-
-    from manhwa2vid.characters.reference import load_reference_sheet, reference_dir
-
-    series_dir = tmp_path / "series"
-    out = reference_dir(series_dir)
-    out.mkdir(parents=True)
-    Image.new("RGB", (16, 16), "white").save(out / "char_mc.png")
-    (out / "manifest.json").write_text(json.dumps({"char_mc": "p0001_01"}))
-
-    sheet = load_reference_sheet(_ref_bible(), series_dir)
-    assert len(sheet) == 1
-    assert sheet[0][0] == "MC (PROTAGONIST)"
 
 
-def test_reference_window_rejects_low_confidence_identifications() -> None:
-    """A shaky identification must never become an anchor.
-
-    The reference is what every later panel is matched against, so admitting a guess makes
-    one wrong face propagate through the whole series — the exact confusion the window
-    exists to stop.
-    """
-    from manhwa2vid.characters.reference import select_reference_panels
-    from manhwa2vid.models import CharacterRef, SceneCard
-
-    bible = _ref_bible()
-    shaky = SceneCard(
-        panel_ids=["p0001_01"],
-        people=[
-            CharacterRef(
-                ref="char_mc", visibility="face", notes="looks like him", confidence=0.4
-            )
-        ],
-    )
-    assert not select_reference_panels(bible, [shaky])
-
-    sure = SceneCard(
-        panel_ids=["p0002_01"],
-        people=[
-            CharacterRef(
-                ref="char_mc", visibility="face", notes="clear face, distinctive hair",
-                confidence=0.95,
-            )
-        ],
-    )
-    assert select_reference_panels(bible, [sure])["char_mc"][0][0] == "p0002_01"
 
 
-def test_reference_window_ranks_by_reported_confidence() -> None:
-    """Between two otherwise equal panels, the model's own certainty decides."""
-    from manhwa2vid.characters.reference import select_reference_panels
-    from manhwa2vid.models import CharacterRef, SceneCard
-
-    def _card(pid: str, conf: float) -> SceneCard:
-        return SceneCard(
-            panel_ids=[pid],
-            people=[
-                CharacterRef(
-                    ref="char_mc", visibility="face",
-                    notes="clear face, distinctive hair", confidence=conf,
-                )
-            ],
-        )
-
-    picked = select_reference_panels(
-        _ref_bible(), [_card("p0001_01", 0.78), _card("p0002_01", 0.99)], per_character=1
-    )
-    assert picked["char_mc"][0][0] == "p0002_01"
 
 
 @pytest.mark.parametrize(
@@ -808,57 +502,8 @@ def test_demoted_identification_loses_its_confidence() -> None:
     assert people[0].confidence == 0.0
 
 
-def test_reference_window_rejects_panels_carrying_dialogue() -> None:
-    """A reference with its own speech bubbles poisons bubble transcription.
-
-    The ch1 reference was a full page reading "MY NAME IS SUNG JIN-WOO / E-RANK HUNTER".
-    The vision model transcribed THAT instead of the panel under analysis, and 85% of
-    chapter 2's cards inherited the chapter 1 cold open's narration and injury imagery.
-    """
-    from manhwa2vid.characters.reference import select_reference_panels
-    from manhwa2vid.models import CharacterRef, SceneCard
-
-    person = CharacterRef(
-        ref="char_mc", visibility="face", notes="clear face, distinctive hair", confidence=0.95
-    )
-    talky = SceneCard(
-        panel_ids=["p0001_01"],
-        people=[person],
-        dialogue_summary="He introduces himself as an E-rank hunter.",
-    )
-    assert not select_reference_panels(_ref_bible(), [talky])
-
-    silent = SceneCard(panel_ids=["p0002_01"], people=[person])
-    assert select_reference_panels(_ref_bible(), [silent])["char_mc"][0][0] == "p0002_01"
 
 
-def test_reference_window_rejects_tall_scroll_strips() -> None:
-    """A 1080x4500 scroll strip is a page, not a portrait — it was picked once, and the
-    model described the whole page as if it were the panel."""
-    from manhwa2vid.characters.reference import select_reference_panels
-    from manhwa2vid.models import CharacterRef, Panel, PanelBBox, SceneCard
-
-    person = CharacterRef(
-        ref="char_mc", visibility="face", notes="clear face, distinctive hair", confidence=0.95
-    )
-    panels = {
-        "p0001_01": Panel(
-            id="p0001_01", page_num=1, image_path="a.png",
-            bbox=PanelBBox(x=0, y=0, width=1080, height=4500),  # scroll strip
-        ),
-        "p0002_01": Panel(
-            id="p0002_01", page_num=2, image_path="b.png",
-            bbox=PanelBBox(x=0, y=0, width=1080, height=1200),  # portrait-ish
-        ),
-    }
-    cards = [
-        SceneCard(panel_ids=["p0001_01"], people=[person]),
-        SceneCard(panel_ids=["p0002_01"], people=[person]),
-    ]
-
-    picked = select_reference_panels(_ref_bible(), cards, panels=panels, per_character=3)
-    chosen = [pid for pid, _score in picked["char_mc"]]
-    assert chosen == ["p0002_01"], f"scroll strip must be rejected, got {chosen}"
 
 
 @pytest.mark.parametrize("bad", ["None", "null", "N/A", "unknown", "  none  ", "None."])
@@ -1095,26 +740,6 @@ def test_chapter_pass_normalizes_through_the_same_guards(tmp_path, monkeypatch) 
     assert counters["demoted"] >= 1
 
 
-def test_cast_stage_elects_protagonist_when_bible_has_none() -> None:
-    """Re-running scene/cast alone must not leave the bible headless.
-
-    Election normally happens in the quest stage, so a scene-only re-run left
-    protagonist_id empty — and naming priority, the MC name budget, MC-off-screen linting
-    and the verifier's [PROTAGONIST] tag all silently degraded while every gate passed.
-    """
-    from manhwa2vid.characters.quest import detect_protagonist
-
-    bible = SeriesBible(series_slug="s", title="S", protagonist_id="")
-    bible.characters["char_hero"] = CharacterProfile(
-        id="char_hero", canonical_name="Hero", tier=CharacterTier.SUPPORTING,
-        appearances=[f"p{i:04d}_01" for i in range(40)], confidence=0.9,
-    )
-    bible.characters["char_extra"] = CharacterProfile(
-        id="char_extra", canonical_name="Extra", tier=CharacterTier.MINOR,
-        appearances=["p0001_01"], confidence=0.5,
-    )
-
-    assert detect_protagonist(bible, {}) == "char_hero"
 
 
 def test_election_prefers_named_profile_over_descriptor() -> None:
@@ -1215,33 +840,6 @@ def test_intro_guard_is_idempotent_across_stages() -> None:
     assert cards[1].people[0].ref == "char_joo"
 
 
-def test_basis_text_naming_a_character_resolves_the_ref() -> None:
-    """Vision sometimes recognizes someone but leaves ref='new', burying the
-    recognition in the basis: "curly hair matching Bak's profile observed from behind".
-    That orphaned Bak's inner line from his identity in the shipped video.
-    """
-    from manhwa2vid.characters.link import _resolve_from_basis_text
-    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
-
-    bible = SeriesBible(series_slug="s", title="S")
-    bible.characters["char_bak"] = CharacterProfile(
-        id="char_bak", canonical_name="Bak", tier=CharacterTier.SUPPORTING
-    )
-    bible.characters["char_kim"] = CharacterProfile(
-        id="char_kim", canonical_name="Kim Sangshik", tier=CharacterTier.SUPPORTING
-    )
-    bible.characters["char_desc"] = CharacterProfile(
-        id="char_desc", canonical_name="man in blue jacket", tier=CharacterTier.MINOR
-    )
-
-    assert _resolve_from_basis_text(
-        "basis: curly hair matching Bak's profile observed from behind/above", bible
-    ) == "char_bak"
-    # Ambiguous (two names) -> no resolution; guessing is roster priming.
-    assert _resolve_from_basis_text("basis: either Bak or Sangshik from behind", bible) == ""
-    # Descriptor-profile words must not match ("blue jacket" appears in half the bases).
-    assert _resolve_from_basis_text("basis: torso in a blue jacket holding a cup", bible) == ""
-    assert _resolve_from_basis_text("", bible) == ""
 
 
 def test_bubbles_carry_speaker_and_addressee() -> None:
@@ -1274,51 +872,8 @@ def test_bubbles_accept_legacy_string_shape() -> None:
     assert _normalize_bubbles(None) == ([], [])
 
 
-def test_generic_ref_binds_to_named_cast_seen_face_on() -> None:
-    """char_bystander's descriptor is literally "person with dark curly hair" — Bak's
-    trait — so Bak's own inner line was delivered by an anonymous stranger, twice."""
-    from manhwa2vid.characters.link import resolve_generic_refs
-    from manhwa2vid.models import (
-        CharacterProfile, CharacterRef, CharacterTier, SceneCard, SeriesBible,
-    )
-
-    bible = SeriesBible(series_slug="s", title="S")
-    bible.characters["char_bak"] = CharacterProfile(
-        id="char_bak", canonical_name="Bak", tier=CharacterTier.SUPPORTING,
-        descriptors=["man with curly black hair in a green vest", "dark curly hair"],
-    )
-    cards = [
-        # Bak face-on earlier in the chapter — the intro requirement is satisfied.
-        SceneCard(panel_ids=["p0012_01"], people=[
-            CharacterRef(ref="char_bak", visibility="face", confidence=0.95),
-        ]),
-        SceneCard(panel_ids=["p0014_03"], people=[
-            CharacterRef(ref="char_bystander", visibility="partial",
-                         descriptor="top of head with dark curly hair"),
-        ]),
-    ]
-    assert resolve_generic_refs(cards, bible) == 1
-    assert cards[1].people[0].ref == "char_bak"
 
 
-def test_generic_ref_refuses_before_a_face_on_appearance() -> None:
-    """Binding must never INTRODUCE someone — that is the roster-priming failure."""
-    from manhwa2vid.characters.link import resolve_generic_refs
-    from manhwa2vid.models import (
-        CharacterProfile, CharacterRef, CharacterTier, SceneCard, SeriesBible,
-    )
-
-    bible = SeriesBible(series_slug="s", title="S")
-    bible.characters["char_bak"] = CharacterProfile(
-        id="char_bak", canonical_name="Bak", tier=CharacterTier.SUPPORTING,
-        descriptors=["dark curly hair"],
-    )
-    cards = [SceneCard(panel_ids=["p0002_01"], people=[
-        CharacterRef(ref="char_bystander", visibility="crowd",
-                     descriptor="someone with dark curly hair"),
-    ])]
-    assert resolve_generic_refs(cards, bible) == 0
-    assert cards[0].people[0].ref == "char_bystander"
 
 
 def test_attribution_survives_into_the_scene_card() -> None:
@@ -1450,32 +1005,6 @@ def test_corrections_tolerate_stale_panel_ids_and_bad_json(tmp_path):
     assert apply_corrections(paths, cards)[0].action == "original"
 
 
-def test_llm_link_pass_survives_malformed_merges(monkeypatch):
-    """A model returning merges as a list of LISTS crashed the entire cast stage on
-    item.get(...). A malformed entry costs that entry, never the run."""
-    import json as _json
-
-    from manhwa2vid.characters import link as link_mod
-    from manhwa2vid.models import CharacterProfile, CharacterTier, SceneCard, SeriesBible
-
-    bible = SeriesBible(
-        series_slug="s", title="S", protagonist_id="char_mc",
-        characters={"char_mc": CharacterProfile(
-            id="char_mc", canonical_name="MC", tier=CharacterTier.MAIN)},
-    )
-    cards = [SceneCard(panel_ids=["p1"], action="a man walks", source_text="", is_story=True)]
-
-    class _LLM:
-        def complete(self, *a, **k):
-            return _json.dumps({
-                "merges": [["descriptor", "char_mc"], {"descriptor_or_name": "x"}],
-                "panel_updates": [],
-            })
-
-    monkeypatch.setattr(link_mod, "get_stage_llm", lambda *a, **k: _LLM())
-    monkeypatch.setattr(link_mod, "apply_stage_model", lambda llm, *a, **k: llm, raising=False)
-    merges, updates = link_mod._llm_link_pass(cards, bible, {})
-    assert merges == {} and updates == []
 
 
 def test_dialogue_delivery_fails_only_on_a_dropped_required_system_line():

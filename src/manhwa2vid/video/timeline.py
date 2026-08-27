@@ -34,29 +34,6 @@ def audio_duration(path: Path) -> float:
     return 3.0
 
 
-def panel_salience(
-    cards: list[Any],
-    attribution: list[Any] | None = None,
-) -> dict[str, float]:
-    """Deterministic per-panel importance from evidence that already exists.
-
-    Used to rank panels a beat's audio cannot afford to show in full. Signals, by
-    weight: on-panel dialogue (the story's engine) > people present > nothing. Position
-    bonuses (first/last of beat) are applied at selection time, not here, because the
-    same panel can sit in different positions in different beats.
-    """
-    scores: dict[str, float] = {}
-    for card in cards or []:
-        has_dialogue = bool(getattr(card, "source_text", "") or (card.get("source_text") if isinstance(card, dict) else ""))
-        pids = getattr(card, "panel_ids", None) or (card.get("panel_ids") if isinstance(card, dict) else []) or []
-        for pid in pids:
-            scores[pid] = max(scores.get(pid, 0.0), 3.0 if has_dialogue else 0.0)
-    for row in attribution or []:
-        people = getattr(row, "people", None) or (row.get("people") if isinstance(row, dict) else []) or []
-        pid = getattr(row, "panel_id", None) or (row.get("panel_id") if isinstance(row, dict) else "")
-        if pid:
-            scores[pid] = scores.get(pid, 0.0) + min(len(people), 2) * 0.75
-    return scores
 
 
 def select_panels_for_beat(

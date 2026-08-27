@@ -20,8 +20,6 @@ from manhwa2vid.models import (
     project_paths,
     save_json,
 )
-from manhwa2vid.characters.link import run_cast_linking
-from manhwa2vid.characters.scout import run_character_scout
 from manhwa2vid.ocr.extract import run_ocr_and_scenes
 from manhwa2vid.panels.split import split_panels
 from manhwa2vid.tts.engine import run_tts_and_timeline
@@ -69,21 +67,10 @@ def run_stage(
     elif stage == PipelineStage.PANELS:
         split_panels(meta, paths, config, force=force)
         mark_stage(checkpoint, stage, paths)
-    elif stage == PipelineStage.STORY:
-        from manhwa2vid.story.brief import run_story_pass
-
-        run_story_pass(meta, paths, config, force=force)
-        mark_stage(checkpoint, stage, paths)
-    elif stage == PipelineStage.SCOUT:
-        run_character_scout(meta, paths, config, force=force)
-        mark_stage(checkpoint, stage, paths)
     elif stage in (PipelineStage.OCR, PipelineStage.SCENE):
         run_ocr_and_scenes(meta, paths, config, force=force)
         mark_stage(checkpoint, PipelineStage.OCR, paths)
         mark_stage(checkpoint, PipelineStage.SCENE, paths)
-    elif stage == PipelineStage.CAST:
-        run_cast_linking(meta, paths, config, force=force)
-        mark_stage(checkpoint, stage, paths)
     elif stage == PipelineStage.SCRIPT:
         # Story-first, and now the only path: read the pages -> write the narration as
         # prose -> audit it against the pages -> revise once -> align paragraphs to
@@ -138,10 +125,7 @@ def run_all_until_review(project_dir: Path, force: bool = False, force_past_qa: 
     stages = [
         PipelineStage.INGEST,
         PipelineStage.PANELS,
-        PipelineStage.STORY,
-        PipelineStage.SCOUT,
         PipelineStage.OCR,
-        PipelineStage.CAST,
         PipelineStage.SCRIPT,
     ]
     for stage in stages:

@@ -6,7 +6,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class SourceLanguage(str, Enum):
@@ -276,11 +276,8 @@ class Timeline(BaseModel):
 class PipelineStage(str, Enum):
     INGEST = "ingest"
     PANELS = "panels"
-    STORY = "story"
-    SCOUT = "scout"
     OCR = "ocr"
     SCENE = "scene"
-    CAST = "cast"
     SCRIPT = "script"
     TTS = "tts"
     TIMELINE = "timeline"
@@ -292,6 +289,22 @@ class CheckpointState(BaseModel):
     completed_stages: list[PipelineStage] = Field(default_factory=list)
     script_approved: bool = False
     preview_approved: bool = False
+
+    @field_validator("completed_stages", mode="before")
+    @classmethod
+    def _drop_retired_stages(cls, value: Any) -> Any:
+        """Ignore stages that no longer exist instead of refusing to load the project.
+
+        A checkpoint is a RECORD of what ran, not a schema. When the story/scout/cast
+        stages were retired, every project on disk still listed them and pydantic
+        rejected the enum — which made `load_project` raise and locked every existing
+        project out of the pipeline entirely, including `run tts` on an already-approved
+        script. Unknown values are dropped; the run continues.
+        """
+        if not isinstance(value, list):
+            return value
+        known = {stage.value for stage in PipelineStage}
+        return [v for v in value if not isinstance(v, str) or v in known]
 
 
 def series_paths(repo_root: Path, series_slug: str) -> dict[str, Path]:
@@ -327,10 +340,8 @@ def project_paths(project_dir: Path) -> dict[str, Path]:
         "scene_partial_json": project_dir / "scene_cards.partial.json",
         "scene_enriched_json": project_dir / "scene_cards.enriched.json",
         "corrections_json": project_dir / "corrections.json",
-        "scene_normalized_json": project_dir / "scene_cards.normalized.json",
         # Chapter-mode only: the whole-chapter reading the vision pass produced before
         # annotating individual panels (arc summary + temporal devices).
-        "scene_story_map_json": project_dir / "scene_story_map.json",
         "cast_attribution_json": project_dir / "cast_attribution.json",
         # --- story-first (freeform) architecture ---
         #: What the pages actually SAY, read straight off the images: verbatim system

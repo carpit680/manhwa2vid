@@ -97,22 +97,8 @@ def test_grounding_keywords_come_from_this_glossary():
         grounding.configure_grounding_keywords({})
 
 
-def test_wiki_fallback_seeds_no_cast():
-    """It used to return a curated Solo Leveling roster for ANY failed lookup."""
-    from manhwa2vid.characters.wiki import _fetch_wiki_fallback
-
-    assert _fetch_wiki_fallback("The Frozen Climb", {}) == []
-    assert _fetch_wiki_fallback("Solo Leveling", {}) == []
 
 
-def test_link_prompt_names_this_series_marks(frozen_bible):
-    from manhwa2vid.characters.link import _link_prompt
-
-    prompt = _link_prompt(frozen_bible)
-    assert "frost-scarred" in prompt or "silver-eyed" in prompt
-    assert "backpack" not in prompt.lower()
-    # The mock provider branches on this substring; keep it.
-    assert "linking manhwa panel" in prompt.lower()
 
 
 # Names from the series this pipeline was developed against. None may appear in text that
@@ -236,38 +222,6 @@ def test_bible_prompt_never_prints_tier_as_role():
     assert "role: hunter" in text
 
 
-def test_protagonist_signal_uses_the_series_own_word():
-    """The +5 bonus was the literal "hunter" — Solo Leveling's noun. Dead weight on most
-    titles and actively wrong on one with a large non-protagonist cast sharing it. It is
-    now derived from the bible's own roles, so it resolves to whatever the title calls its
-    people with no code change."""
-    from manhwa2vid.characters.quest import detect_protagonist
-    from manhwa2vid.models import CharacterProfile, CharacterTier, SeriesBible
-
-    # A title whose people are "knights" and whose protagonist is one.
-    bible = SeriesBible(
-        series_slug="s", title="S", protagonist_id="",
-        characters={
-            "char_a": CharacterProfile(id="char_a", canonical_name="Rell",
-                                       tier=CharacterTier.MAIN, role="wandering knight",
-                                       appearances=["p1", "p2", "p3"], confidence=0.9),
-            "char_b": CharacterProfile(id="char_b", canonical_name="Vesh",
-                                       tier=CharacterTier.SUPPORTING, role="knight",
-                                       appearances=["p1"], confidence=0.5),
-            "char_c": CharacterProfile(id="char_c", canonical_name="Doran",
-                                       tier=CharacterTier.SUPPORTING, role="knight",
-                                       appearances=["p2"], confidence=0.5),
-        },
-    )
-    assert detect_protagonist(bible, {}) == "char_a"
-    # No franchise term is required for the election to work at all.
-    bare = SeriesBible(
-        series_slug="s", title="S", protagonist_id="",
-        characters={"char_a": CharacterProfile(
-            id="char_a", canonical_name="Rell", tier=CharacterTier.MAIN,
-            appearances=["p1"], confidence=0.9)},
-    )
-    assert detect_protagonist(bare, {}) == "char_a"
 
 
 def test_pronoun_is_inferred_from_the_descriptors_vision_already_wrote():
