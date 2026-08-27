@@ -281,6 +281,12 @@ def plan_shots(
     if text_only and panel_order:
         art_at = {pid: i for i, pid in enumerate(panel_order)}
         art_seq = [pid for pid in panel_order if pid not in text_only]
+        # Panels already on screen somewhere. A swap that lands on one of them does not
+        # replace a shot, it DELETES one: the two entries fold into a single hold. That
+        # is how removing FP's closing "WHAT?!" first made things worse rather than
+        # better — both it and the shot before it swapped onto the same neighbour and
+        # became one 30.6s hold, up from 18.6s. Take the nearest UNUSED art panel.
+        taken = {pid for item in flat for pid in item["panels"] if pid not in text_only}
         for item in flat:
             swapped: list[str] = []
             for pid in item["panels"]:
@@ -288,13 +294,17 @@ def plan_shots(
                     swapped.append(pid)
                     continue
                 here = art_at[pid]
-                nearest = min(
-                    art_seq, key=lambda a: abs(art_at[a] - here), default=None
-                )
-                if nearest is None:
+                nearby = sorted(art_seq, key=lambda a: abs(art_at[a] - here))
+                pick = next((a for a in nearby if a not in taken and a not in swapped), None)
+                if pick is None:
+                    # every art panel is already showing: fall back to the nearest one
+                    # not in THIS sentence, and only then keep the text claim.
+                    pick = next((a for a in nearby if a not in swapped), None)
+                if pick is None:
                     swapped.append(pid)      # nothing but text anywhere — keep the claim
-                elif nearest not in swapped:
-                    swapped.append(nearest)
+                else:
+                    swapped.append(pick)
+                    taken.add(pick)
             item["panels"] = swapped
 
     # Bounded fill: rewrite each unclaimed RUN's panels from the reading-order gap
@@ -343,6 +353,13 @@ def plan_shots(
     #
     # Prefer the next unclaimed ART panel in reading order; keep the hold when there is
     # none, because an unrelated image is still worse than a long one.
+    #
+    # Reaching BACK for a callback when nothing unclaimed remains was tried and dropped
+    # (2026-08-27). Panel reuse is render-safe and the reference channel does close on a
+    # replayed image, but it contradicts the rule above, and the residual runs are the
+    # ones where a beat simply has more narration than panels — a content shortage that
+    # a camera trick hides rather than fixes. The `no-invisible-cuts` timeline gate
+    # reports what is left instead.
     if panel_order:
         pos = {pid: i for i, pid in enumerate(panel_order)}
         claimed = {pid for item in flat for pid in item["panels"]}
