@@ -156,8 +156,20 @@ def run_render(
     preview: bool = typer.Option(True, "--preview/--no-preview"),
     final: bool = typer.Option(False, "--final", help="Render final 1080p output"),
     force: bool = False,
+    # RENDER is the ONLY stage that refuses to run over a failed upstream gate, and it
+    # was the only one missing this flag — so the QAGateFailure it raises told you to
+    # re-run with an option `run render` did not accept. Dead end at exactly the moment
+    # the operator has decided to override.
+    force_past_qa: bool = typer.Option(False, "--force-past-qa", help="Continue despite failed QA gates"),
 ) -> None:
-    run_stage(project.resolve(), PipelineStage.RENDER, preview=preview, final=final, force=force)
+    run_stage(
+        project.resolve(),
+        PipelineStage.RENDER,
+        preview=preview,
+        final=final,
+        force=force,
+        force_past_qa=force_past_qa,
+    )
 
 
 @run_app.command("export")
