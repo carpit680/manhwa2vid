@@ -99,7 +99,11 @@ def measure_video(video: Path) -> dict[str, Any]:
     clipped_flags: list[bool] = []
     dead: list[float] = []
     lumas: list[float] = []
+    opening_frames: list[np.ndarray] = []
+    open_budget = int(4 * _FPS)
     for frame in _iter_frames(video):
+        if len(opening_frames) < open_budget:
+            opening_frames.append(frame.copy())
         frac, clipped = _bubble_stats(frame)
         bubble_fracs.append(frac)
         clipped_flags.append(clipped)
@@ -108,10 +112,21 @@ def measure_video(video: Path) -> dict[str, Any]:
 
     n = max(len(lumas), 1)
     open_n = min(int(4 * _FPS), n)  # first 4 seconds
+    # Lettering in the opening, measured with the VALIDATED detector rather than the
+    # bright-blob test below. The two disagreed on the 2026-08-27 render and the blob
+    # test was wrong: it read the Frost Queen's pale hair as a 34%-of-frame "bubble" and
+    # failed an opening that had in fact improved, while lettering fell 48% -> 30%.
+    from manhwa2vid.panels.regions import _text_and_content_masks, _text_norm
+
+    opening_text = 0.0
+    for f in opening_frames[:open_n]:
+        t, _c, _ct = _text_and_content_masks(_text_norm(f))
+        opening_text = max(opening_text, float(t.mean()))
     metrics: dict[str, Any] = {
         "frames": n,
         "opening_luma_mean": round(float(np.mean(lumas[:open_n])), 1),
         "opening_bubble_frac_max": round(float(max(bubble_fracs[:open_n], default=0.0)), 3),
+        "opening_lettering_max": round(opening_text, 3),
         "bubble_over_20pct_frames_pct": round(
             100.0 * float(np.mean([f > 0.20 for f in bubble_fracs])), 1
         ),
@@ -174,14 +189,19 @@ def enforce_render_qa(
     report = QAReport(stage="render")
 
     # Opening: SL opened on 19 seconds of speech bubbles on black.
+    # Lettering, not "bright blob". Solo Leveling opened on 19 seconds of speech bubbles
+    # on black, which is what this must catch; the bright-blob test caught pale artwork
+    # instead and inverted the verdict on a real render. Measured openings: 48% before
+    # the camera was retargeted, 30% after, and the band sits above both.
     opening_ok = (
         metrics["opening_luma_mean"] > 16.0
-        and metrics["opening_bubble_frac_max"] < 0.35
+        and metrics.get("opening_lettering_max", 0.0) < 0.55
     )
     report.add(
         "opening-shot",
         opening_ok,
-        f"first seconds: luma {metrics['opening_luma_mean']}, "
+        f"first seconds: luma {metrics['opening_luma_mean']}, lettering "
+        f"{100 * metrics.get('opening_lettering_max', 0.0):.0f}% of frame, "
         f"largest bubble {metrics['opening_bubble_frac_max']:.0%} of frame — "
         "a recap must not open on a bubble or a black screen",
         **{k: metrics[k] for k in ("opening_luma_mean", "opening_bubble_frac_max")},

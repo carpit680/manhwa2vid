@@ -24,6 +24,7 @@ def _metrics(**over):
         "frames": 100,
         "opening_luma_mean": 110.0,
         "opening_bubble_frac_max": 0.10,
+        "opening_lettering_max": 0.20,
         "bubble_over_20pct_frames_pct": 15.0,
         "clipped_text_frames_pct": 40.0,
         "dead_width_mean": 0.55,
@@ -60,8 +61,17 @@ def test_opening_on_a_black_screen_fails(monkeypatch, tmp_path):
     assert _run(monkeypatch, tmp_path, opening_luma_mean=8.0)["opening-shot"] == "fail"
 
 
-def test_opening_on_a_giant_bubble_fails(monkeypatch, tmp_path):
-    assert _run(monkeypatch, tmp_path, opening_bubble_frac_max=0.55)["opening-shot"] == "fail"
+def test_opening_on_a_wall_of_lettering_fails(monkeypatch, tmp_path):
+    """Solo Leveling opened on 19 seconds of speech bubbles on black."""
+    assert _run(monkeypatch, tmp_path, opening_lettering_max=0.70)["opening-shot"] == "fail"
+
+
+def test_opening_gate_ignores_the_bright_blob_measure(monkeypatch, tmp_path):
+    """It read the Frost Queen's pale hair as a 34%-of-frame "bubble" and failed an
+    opening whose lettering had in fact dropped from 48% to 30%. The blob number is
+    still recorded; it no longer decides anything."""
+    r = _run(monkeypatch, tmp_path, opening_bubble_frac_max=0.90, opening_lettering_max=0.28)
+    assert r["opening-shot"] == "pass"
 
 
 def test_true_peak_above_the_ceiling_fails(monkeypatch, tmp_path):

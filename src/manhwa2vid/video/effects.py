@@ -152,12 +152,20 @@ def _text_boxes(rgb: np.ndarray) -> list[tuple[int, int, int, int]]:
     return text_regions(rgb)
 
 
-def _salience(gray: np.ndarray, bubbles: list[tuple[int, int, int, int]], *, bubble_weight: float = 0.15) -> np.ndarray:
+def _salience(gray: np.ndarray, bubbles: list[tuple[int, int, int, int]], *, bubble_weight: float = 0.40) -> np.ndarray:
     """Where the art is: local gradient energy, bubbles down-weighted.
 
     Flat background scores zero by construction; a bubble is full of high-contrast text
     edges, which is exactly why raw gradient energy loved them — hence the explicit
     down-weight rather than a smarter operator.
+
+    0.40, not the original 0.15. That near-total suppression was harmless only while the
+    detector rarely found real lettering; once it did, SOUND EFFECTS became the problem.
+    SFX is painted ON the art and sits exactly where the action is, so shoving the camera
+    off it walks away from the subject — Frozen Player's opening reframed from its only
+    character onto an empty door. Measured over FP's 42 fill-frame panels, counting
+    windows where lettering covers more than 30% of the screen: 21 with no down-weight,
+    10 at 0.15 (and a broken opening), 14 at 0.40, 18 at 0.55.
     """
     g = gray.astype(np.float32)
     energy = np.zeros_like(g)
@@ -244,7 +252,7 @@ def render_fill_frame_frames(
     fps = int(get_nested(config, "video", "fps", default=30))
     max_px_per_sec = float(get_nested(config, "video", "max_scroll_px_per_sec", default=600.0))
     max_dwell = float(get_nested(config, "video", "max_dwell_seconds", default=7.0))
-    bubble_weight = float(get_nested(config, "video", "bubble_salience_weight", default=0.15))
+    bubble_weight = float(get_nested(config, "video", "bubble_salience_weight", default=0.40))
 
     panel = crop_to_content(Image.open(panel_path).convert("RGB"))
     arr = np.asarray(panel)

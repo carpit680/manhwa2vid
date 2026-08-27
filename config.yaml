@@ -301,7 +301,7 @@ video:
   max_pan_frame_fraction: 0.20  # cap on per-shot travel, as a fraction of the window
   pan_min_seconds: 1.8          # shorter shots hold still — fast AND moving is jarring
   max_dwell_seconds: 7.0    # longer shots get a mid re-frame cut on the same panel
-  bubble_salience_weight: 0.15  # gradient energy inside bubble boxes is scaled by this
+  bubble_salience_weight: 0.40  # how hard lettering repels the camera; 0.15 shoved it off the subject
 
 export:
   preview_scale: 0.5

@@ -289,8 +289,15 @@ def _text_lines(boxes, shape):
     return lines
 
 
-def _text_and_content_masks(gray: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """(lettering-with-its-container, everything-that-is-not-page-ground), same shape.
+def _text_and_content_masks(gray: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(all-lettering, not-page-ground, lettering-that-sits-in-a-container), same shape.
+
+    The third mask is the CAMERA's answer, and the distinction is load-bearing. A speech
+    bubble or caption box COVERS the art, so framing one wastes the screen. Sound-effect
+    lettering is painted ON the art and marks where the action is — down-weighting it
+    walks the camera away from the subject. Pointing the camera with all lettering
+    reframed Frozen Player's opening off its only character and failed the opening-shot
+    gate at 39% bubble.
 
     Split out of `text_content_ratio` so the CAMERA can use the same regions the panel
     test uses. `effects` needs the boxes, not the fraction: a window chosen inside a tall
@@ -300,12 +307,12 @@ def _text_and_content_masks(gray: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     content = np.abs(gray.astype(np.int16) - bg) > 18
     empty = np.zeros(gray.shape, bool)
     if int(content.sum()) < 200:
-        return empty, content
+        return empty, content, empty.copy()
 
     glyphs = _glyph_boxes(gray)
     lines = _text_lines(glyphs, gray.shape)
     if not lines:
-        return empty, content
+        return empty, content, empty.copy()
 
     # Every glyph, not just the ones that grouped into a line. Flatness of a container is
     # measured with ALL lettering removed: a caption box holds more type than one grouped
@@ -315,6 +322,7 @@ def _text_and_content_masks(gray: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         ink[max(0, gy - 2):gy + gh + 2, max(0, gx - 2):gx + gw + 2] = True
 
     text = np.zeros_like(content)
+    contained = np.zeros_like(content)
     # The container search below depends only on the sampled TONE, and a panel's lines
     # nearly all sit on the same white. Recomputing connected components per LINE made
     # the camera tests on tall strips take 30s each; caching by tone is a pure
@@ -329,6 +337,7 @@ def _text_and_content_masks(gray: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         x0, y0 = max(0, x - pad), max(0, y - pad)
         x1, y1 = min(gray.shape[1], x + w + pad), min(gray.shape[0], y + h + pad)
         text[y0:y1, x0:x1] = True
+        line_box = (slice(y0, y1), slice(x0, x1))
         # Grow to the enclosing bubble/caption box. Seed from the RING around the text
         # line, never its centre: the centre of "WHAT?!" lands inside a letter, and the
         # enclosed white counter of a glyph is a 114px blob, not the bubble.
@@ -427,21 +436,23 @@ def _text_and_content_masks(gray: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
             if gap.sum() > 0.08 * hull_area and float(content[gap].mean()) > 0.15:
                 continue
             text |= filled.astype(bool)
+            contained |= filled.astype(bool)
+            contained[line_box] = True
 
-    return text, content
+    return text, content, contained
 
 
 def text_content_ratio(img: np.ndarray) -> float:
     """Fraction of the panel's non-background content that is lettering or its container."""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
-    text, content = _text_and_content_masks(_text_norm(gray))
+    text, content, _contained = _text_and_content_masks(_text_norm(gray))
     total = int(content.sum())
     if total < 200:
         return 1.0  # nothing here at all
     return float((text & content).sum() / total)
 
 
-def text_regions(img: np.ndarray) -> list[Box]:
+def text_regions(img: np.ndarray, *, containers_only: bool = False) -> list[Box]:
     """Boxes of the lettering (and the bubbles holding it), in the INPUT's coordinates.
 
     The camera's own bubble finder is the tonal one this module documents as unusable,
@@ -451,10 +462,11 @@ def text_regions(img: np.ndarray) -> list[Box]:
     """
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
     norm = _text_norm(gray)
-    text, _content = _text_and_content_masks(norm)
-    if not text.any():
+    all_text, _content, contained = _text_and_content_masks(norm)
+    mask = contained if containers_only else all_text
+    if not mask.any():
         return []
-    n, _lbl, stats, _c = cv2.connectedComponentsWithStats(text.astype(np.uint8), 8)
+    n, _lbl, stats, _c = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
     sx = gray.shape[1] / norm.shape[1]
     sy = gray.shape[0] / norm.shape[0]
     out: list[Box] = []
