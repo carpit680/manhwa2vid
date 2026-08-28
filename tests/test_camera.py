@@ -508,3 +508,47 @@ def test_only_true_strips_get_the_scrolling_camera(tmp_path: Path) -> None:
     assert not np.array_equal(np.asarray(a[0]), np.asarray(b[0])), (
         "strip and gutter panels took the same camera path"
     )
+
+
+def test_opening_framing_prefers_art_over_contrast(tmp_path: Path) -> None:
+    """Gradient energy cannot tell a face from a wall of lettering — the spiky edges of a
+    speech bubble are exactly the contrast it rewards. Solo Leveling opened on
+    "E-RANK HUNTER." on black at t=6s because of it, and the panel behind that frame is
+    NOT text-dominant (0.231), so no panel-level rule could have caught it: the defect is
+    which window the camera chose.
+
+    Measured on that real panel: art 0.299 -> 0.699 and lettering 0.214 -> 0.002.
+    """
+    import cv2
+    import numpy as np
+    from PIL import Image as PILImage
+
+    from manhwa2vid.video.effects import render_fill_frame_frames
+
+    # A tall panel: a big lettered bubble at the top, real art at the bottom.
+    arr = np.zeros((1600, 720, 3), np.uint8)
+    cv2.ellipse(arr, (360, 300), (300, 200), 0, 0, 360, (250, 250, 250), -1)
+    for i in range(7):
+        cv2.putText(arr, "A", (150 + i * 60, 320), cv2.FONT_HERSHEY_SIMPLEX,
+                    1.6, (0, 0, 0), 4)
+    rng = np.random.default_rng(3)
+    arr[900:1500, 60:660] = cv2.blur(
+        rng.integers(40, 210, (600, 600, 3), dtype=np.uint8), (9, 9)
+    )
+
+    path = tmp_path / "panel.png"
+    PILImage.fromarray(arr).save(path)
+
+    def lettering_of(frames):
+        from manhwa2vid.panels.regions import _text_and_content_masks, _text_norm
+
+        g = cv2.cvtColor(np.asarray(frames[2]), cv2.COLOR_RGB2GRAY)
+        text, _content, _c = _text_and_content_masks(_text_norm(g))
+        return float(text.mean())
+
+    cfg = {"video": {"fps": 30}}
+    normal = render_fill_frame_frames(path, 1920, 1080, 6, cfg, seed="s")
+    art = render_fill_frame_frames(path, 1920, 1080, 6, cfg, seed="s", prefer_art=True)
+    assert lettering_of(art) < lettering_of(normal), (
+        "the opening camera must move off the lettering, not toward it"
+    )

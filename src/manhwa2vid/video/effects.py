@@ -238,8 +238,16 @@ def render_fill_frame_frames(
     config: dict[str, Any],
     *,
     seed: str = "",
+    prefer_art: bool = False,
 ) -> list[Image.Image]:
     """Salience-framed fill-frame camera: static, pan, or pan-with-reframe-cut.
+
+    `prefer_art` picks the window carrying the most ARTWORK rather than the most gradient
+    energy. It exists for the opening: gradient energy cannot tell a face from a wall of
+    lettering — the spiky edges of a speech bubble are exactly the kind of contrast it
+    rewards — and Solo Leveling opened on "E-RANK HUNTER." on black at t=6s because of it.
+    The panel behind that frame is not text-dominant (0.231), so no panel-level rule could
+    have caught it; the defect is which window the camera chose.
 
     - The window is the largest 16:9 rect inside the panel; the free axis is walked in
       reading order (down, or left-to-right), speed-capped like the scroll path.
@@ -258,7 +266,18 @@ def render_fill_frame_frames(
     arr = np.asarray(panel)
     gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
     bubbles = _text_boxes(arr)
-    sal = _salience(gray, bubbles, bubble_weight=bubble_weight)
+    if prefer_art:
+        # Content that is not lettering, measured at panel resolution where the detector
+        # is validated. Blurred a little so a window is scored by the region it covers
+        # rather than by individual strokes.
+        from manhwa2vid.panels.regions import _text_and_content_masks, _text_norm
+
+        text_n, content_n, _ = _text_and_content_masks(_text_norm(gray))
+        art = cv2.resize((content_n & ~text_n).astype(np.float32),
+                         (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_LINEAR)
+        sal = cv2.blur(art, (15, 15))
+    else:
+        sal = _salience(gray, bubbles, bubble_weight=bubble_weight)
 
     win_w, win_h, axis, span = _window_geometry(panel.width, panel.height, width, height)
     profile = _offset_profile(sal, axis, win_h if axis == "y" else win_w)
@@ -404,6 +423,7 @@ def render_panel_motion_frames(
     config: dict[str, Any],
     *,
     seed_salt: int | None = None,
+    prefer_art: bool = False,
 ) -> list[Image.Image]:
     if panel.split_method == "strip":
         # A genuine continuous strip: the classic full-width crawl reads best.
@@ -450,5 +470,5 @@ def render_panel_motion_frames(
         )
 
     return render_fill_frame_frames(
-        panel_path, width, height, num_frames, config, seed=seed
+        panel_path, width, height, num_frames, config, seed=seed, prefer_art=prefer_art
     )

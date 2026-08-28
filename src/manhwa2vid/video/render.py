@@ -59,6 +59,7 @@ def _render_panel_clip(
     config: dict[str, Any],
     upscale_map: dict[str, Path] | None = None,
     num_frames: int | None = None,
+    prefer_art: bool = False,
 ) -> Path:
     panel_path = project_root / entry.panel_path
     upscaled = upscale_map.get(panel_path.name) if upscale_map else None
@@ -77,7 +78,8 @@ def _render_panel_clip(
     clip_dir.mkdir(parents=True, exist_ok=True)
 
     motion_frames = render_panel_motion_frames(
-        panel_path, panel, width, height, num_frames, config, seed_salt=entry_index
+        panel_path, panel, width, height, num_frames, config, seed_salt=entry_index,
+        prefer_art=prefer_art,
     )
     for i, frame in enumerate(motion_frames):
         frame.save(clip_dir / f"{i:05d}.png")
@@ -330,6 +332,9 @@ def render_video(
                     fps,
                     config,
                     upscale_map,
+                    # A viewer decides in the first ten seconds, so the opening shots are
+                    # framed for artwork rather than for contrast.
+                    prefer_art=acc_time <= opening_art_seconds,
                     num_frames=num_frames,
                 )
                 clips.append(clip)

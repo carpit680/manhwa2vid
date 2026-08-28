@@ -320,6 +320,11 @@ video:
   # splits when a spare unused panel exists and the shot spans >=2 sentences, so the
   # cut lands on a sentence boundary.
   max_shot_seconds: 10.0
+  # Shots ending inside this window are framed for ARTWORK rather than contrast. Gradient
+  # energy cannot tell a face from a wall of lettering — the spiky edges of a speech
+  # bubble are exactly what it rewards — and Solo Leveling opened on "E-RANK HUNTER." on
+  # black at t=6s because of it. Matches the opening-shot gate's window.
+  opening_art_seconds: 15.0
   max_dwell_seconds: 7.0    # longer shots get a mid re-frame cut on the same panel
   bubble_salience_weight: 0.40  # how hard lettering repels the camera; 0.15 shoved it off the subject
 
