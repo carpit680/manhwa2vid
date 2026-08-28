@@ -230,6 +230,79 @@ def _snap_offset(
     return offset
 
 
+def _crop_rect(offset: int, zoom: float, axis: str, win_w: int, win_h: int,
+               panel_w: int, panel_h: int) -> tuple[float, float, float, float]:
+    """The rect the frame loop actually crops, for a given offset and zoom."""
+    cw, ch = win_w / zoom, win_h / zoom
+    if axis == "y":
+        cx, cy = panel_w / 2.0, offset + win_h / 2.0
+    else:
+        cx, cy = offset + win_w / 2.0, panel_h / 2.0
+    left = max(0.0, min(panel_w - cw, cx - cw / 2.0))
+    top = max(0.0, min(panel_h - ch, cy - ch / 2.0))
+    return left, top, left + cw, top + ch
+
+
+def _max_unclipped_zoom(
+    bubbles: list[tuple[int, int, int, int]],
+    legs: list[tuple[int, int]],
+    axis: str,
+    win_w: int,
+    win_h: int,
+    panel_w: int,
+    panel_h: int,
+    z_hi: float,
+) -> float:
+    """Largest zoom <= `z_hi` that does not slice a bubble the WINDOW already holds whole.
+
+    `_snap_offset` positions the window so no bubble is cut by its edge — and then the
+    frame loop crops `win/zoom` INSIDE that window, so a zoom of 1.12 takes ~5.5% off
+    every edge and re-clips the bubble the snap just saved. Solo Leveling shipped a
+    four-second shot of "IF ANYTHING, I'M CONFIDENT IN MY OWN SPEED." with SPEED. cut
+    off along the bottom for the whole shot, getting worse as the push-in progressed.
+    A later pass undoing an earlier pass's work, which is this project's dominant defect
+    class.
+
+    Only bubbles the window contains WHOLE are protected: one already half-outside was
+    deliberately left there by `_snap_offset`'s fallback, and forcing zoom to 1.0 for it
+    would trade the camera move for nothing. If no zoom clears them, 1.0 is returned and
+    the shot is static — the same trade `_snap_offset` makes, in the same direction.
+    """
+    if not bubbles or z_hi <= 1.0:
+        return z_hi
+
+    def held_whole(rect: tuple[float, float, float, float], b: tuple[int, int, int, int]) -> bool:
+        l, t, r, bt = rect
+        bx, by, bw, bh = b
+        return l <= bx and t <= by and bx + bw <= r and by + bh <= bt
+
+    def clips(rect: tuple[float, float, float, float], b: tuple[int, int, int, int]) -> bool:
+        l, t, r, bt = rect
+        bx, by, bw, bh = b
+        overlaps = bx < r and bx + bw > l and by < bt and by + bh > t
+        return overlaps and not held_whole(rect, b)
+
+    # Sample the whole move: endpoints plus a midpoint, since offset eases between them.
+    offsets = sorted({o for leg in legs for o in (leg[0], (leg[0] + leg[1]) // 2, leg[1])})
+    protected = [
+        b for b in bubbles
+        if any(held_whole(_crop_rect(o, 1.0, axis, win_w, win_h, panel_w, panel_h), b)
+               for o in offsets)
+    ]
+    if not protected:
+        return z_hi
+
+    zoom = z_hi
+    while zoom > 1.0:
+        if not any(
+            clips(_crop_rect(o, zoom, axis, win_w, win_h, panel_w, panel_h), b)
+            for o in offsets for b in protected
+        ):
+            return zoom
+        zoom = round(zoom - 0.005, 4)
+    return 1.0
+
+
 def render_fill_frame_frames(
     panel_path: Path,
     width: int,
@@ -334,6 +407,13 @@ def render_fill_frame_frames(
             zoom_in_leg = True
 
     z0, z1 = ken_burns_params(seed or str(panel_path))
+    # The zoom must not re-clip what `_snap_offset` just protected. Not applied to the
+    # `closer` push-in below: that fires only when the alternative is a frozen hold over
+    # `max_dwell` with nowhere left to cut to, where stillness is the worse defect.
+    z_cap = _max_unclipped_zoom(
+        bubbles, legs, axis, win_w, win_h, panel.width, panel.height, max(z0, z1)
+    )
+    z0, z1 = min(z0, z_cap), min(z1, z_cap)
     frames: list[Image.Image] = []
     per_leg = [num_frames // len(legs)] * len(legs)
     per_leg[-1] += num_frames - sum(per_leg)
