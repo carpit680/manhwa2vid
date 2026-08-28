@@ -186,10 +186,19 @@ def enforce_render_qa(
     # Also requires the opening to actually SHOW something: every second of the first 15
     # must carry art. Solo Leveling's per-second minimum is 5.4% — it opens on a speech
     # bubble on black — against Frozen Player's 28.3% and the reference's 26.2-45.7%.
+    # Judged on LUMA and ART, not on a lettering ceiling. The lettering ceiling was here
+    # and it produced a false FAIL on a real render: Solo Leveling's frame at t=14.5s is a
+    # blood-spattered stone wall with no lettering whatsoever, and the frame-level detector
+    # scored it 0.736. That is the same failure documented in §7 of the audit — texture
+    # reads as glyph rows — and gating on it here contradicted the decision to demote
+    # `lettering-share` and `bare-bubble` to report-only for exactly that reason.
+    #
+    # The art floor catches what the ceiling was meant to catch. A bubble on black has
+    # almost no art: Solo Leveling's opening measured 5.4% before the camera was retargeted
+    # and 26% after, against a 15% floor. Lettering stays in the details as data.
     art_min = metrics.get("opening_art_min_second")
     opening_ok = (
         metrics["opening_luma_mean"] > 16.0
-        and metrics.get("opening_lettering_max", 0.0) < 0.55
         and (art_min is None or art_min >= _OPENING_ART_FAIL)
     )
     report.add(

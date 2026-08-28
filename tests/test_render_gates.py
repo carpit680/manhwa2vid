@@ -69,9 +69,13 @@ def test_opening_on_a_black_screen_fails(monkeypatch, tmp_path):
     assert _run(monkeypatch, tmp_path, opening_luma_mean=8.0)["opening-shot"] == "fail"
 
 
-def test_opening_on_a_wall_of_lettering_fails(monkeypatch, tmp_path):
-    """Solo Leveling opened on 19 seconds of speech bubbles on black."""
-    assert _run(monkeypatch, tmp_path, opening_lettering_max=0.70)["opening-shot"] == "fail"
+def test_opening_is_not_failed_by_the_frame_lettering_detector(monkeypatch, tmp_path):
+    """It read a blood-spattered stone wall in Solo Leveling's opening at 0.736 lettering
+    — there is no text in that frame at all. Texture reads as glyph rows at frame scale
+    (audit §7), which is why lettering-share and bare-bubble are report-only; gating on
+    the same number here contradicted that."""
+    r = _run(monkeypatch, tmp_path, opening_lettering_max=0.74, opening_art_min_second=0.26)
+    assert r["opening-shot"] == "pass"
 
 
 def test_opening_gate_ignores_the_bright_blob_measure(monkeypatch, tmp_path):
