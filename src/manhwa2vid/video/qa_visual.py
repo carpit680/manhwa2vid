@@ -20,7 +20,8 @@ from typing import Any
 import numpy as np
 from rich.console import Console
 
-from manhwa2vid.measure.audio import loudness_metrics
+from manhwa2vid.config import get_nested
+from manhwa2vid.measure.audio import measure_audio
 from manhwa2vid.measure.frames import (
     FRAME_FPS,
     FRAME_H,
@@ -55,6 +56,25 @@ _REF_UNDER_1_5_PCT = 22.0
 # report-only. See the bubble-dominance note in `enforce_render_qa`.
 _REF_BUBBLE_PCT = 21.9
 _REF_CLIPPED_PCT = 43.9
+
+# Audio bands — docs/audio-quality-spec.md §6, reconciled in
+# reports/render_audit_2026-08-28.md. Loudness has no constant here on purpose: it is
+# judged against `export.loudness_target` so the gate cannot codify the current undershoot.
+_TRUE_PEAK_MAX_DBTP = -1.0
+_BED_FLOOR_MIN_DBFS = -40.0
+_BED_TONALITY_MIN = 5.0
+_DUCK_MIN_DB, _DUCK_MAX_DB = 12.0, 15.0
+_LRA_MIN_LU, _LRA_MAX_LU = 5.0, 9.0
+
+# Rhythm bands. Derived from the reference channel measured with THIS scene detector over
+# three windows (reference/mamoru_metrics_2026-08-28.json), not from the hardening brief's
+# proposals — four of those would have failed the reference itself. Justifications live in
+# reports/render_audit_2026-08-28.md §5.
+_MEDIAN_MIN_S, _MEDIAN_MAX_S = 2.0, 3.5
+_ACCENT_MIN_PCT = 15.0
+_CADENCE_MIN, _CADENCE_MAX = 12.0, 22.0     # brief said 12-20; reference W1 is 20.08
+_SHOT_MAX_WARN_S, _SHOT_MAX_FAIL_S = 12.0, 18.0   # brief said fail at 12; reference is 16.37
+_LONGTAIL_WARN_PCT, _LONGTAIL_FAIL_PCT = 18.0, 25.0  # brief said 15; reference reaches 22.2
 
 
 def measure_video(video: Path) -> dict[str, Any]:
@@ -97,7 +117,7 @@ def measure_video(video: Path) -> dict[str, Any]:
         "dead_over_50pct_frames_pct": round(100.0 * float(np.mean([d > 0.5 for d in dead])), 1),
     }
 
-    metrics.update(loudness_metrics(video))
+    metrics.update(measure_audio(video))
 
     # Shot lengths via scene detection — same detector the reference was profiled with.
     cuts = detect_cuts(video)
@@ -194,28 +214,131 @@ def enforce_render_qa(
         mean=dead,
     )
 
-    # Audio: audited true peak was +0.30/+0.35 dBTP — clips on transcode.
+    # --- audio ------------------------------------------------------------------------
+    #
+    # Thresholds from docs/audio-quality-spec.md §6, reconciled against fresh
+    # measurements in reports/render_audit_2026-08-28.md. Two of them are WARN today and
+    # promote to FAIL when the mastering chain lands: a permanently-red blocking gate
+    # trains the operator to reach for --force-past-qa, which is how both audited videos
+    # shipped over a failing name-integrity in the first place.
+
+    # Audited true peak was +0.30/+0.35 dBTP — clips on transcode. The spec tightens the
+    # ceiling from -0.8 to -1.0; measured -1.35/-1.32, so this costs nothing today and
+    # catches a real regression.
     tp = metrics.get("true_peak_dbtp")
     if tp is not None:
         report.add(
             "true-peak",
-            tp <= -0.8,
-            f"true peak {tp} dBTP (target -1.5, must stay below -0.8)",
-            dbtp=tp,
+            tp <= _TRUE_PEAK_MAX_DBTP,
+            f"true peak {tp} dBTP (target -1.5, must stay below {_TRUE_PEAK_MAX_DBTP})",
+            dbtp=tp, threshold=_TRUE_PEAK_MAX_DBTP,
         )
 
-    # Editing rhythm vs the measured reference — report-only.
-    if "shot_median_s" in metrics:
-        drift = (
-            metrics["shot_median_s"] > _REF_MEDIAN_S * 1.75
-            or metrics["shot_under_1_5s_pct"] < _REF_UNDER_1_5_PCT * 0.25
-        )
+    # Loudness is judged against the CONFIGURED target, never a hardcoded -16. The spec
+    # proposed -16 +/- 1, but -16.4 is the pipeline's UNDERSHOOT: loudnorm in linear mode
+    # will not apply gain that would breach TP -1.5, so it lands short of the -14 it aims
+    # for. Pinning the gate at the undershoot would fail a future render that fixes it.
+    lufs = metrics.get("loudness_lufs")
+    if lufs is not None:
+        target = float(get_nested(config, "export", "loudness_target", default=-14))
+        off = lufs - target
         report.add(
-            "shot-rhythm",
-            "warn" if drift else True,
-            f"median {metrics['shot_median_s']}s (ref {_REF_MEDIAN_S}s), "
-            f"{metrics['shot_under_1_5s_pct']}% under 1.5s (ref {_REF_UNDER_1_5_PCT}%)",
-            **{k: metrics[k] for k in ("shot_median_s", "shot_under_1_5s_pct", "cuts_per_min")},
+            "audio-loudness",
+            True if abs(off) <= 1.0 else ("warn" if -3.0 <= off <= 2.0 else False),
+            f"{lufs} LUFS against a {target} target ({off:+.1f} LU)",
+            lufs=lufs, target=target, offset=round(off, 2),
+        )
+
+    # Is there music under this at all? The bed is chosen by globbing assets/bgm/ and
+    # taking the first file, so an empty directory ships a silent bed and no level check
+    # can tell that from a quiet mix. Tonality (peak/mean of the quiet-window spectrum)
+    # can: music is peaky, room tone is not. Measured 6.26/6.58 against a floor of 5.
+    floor = metrics.get("quiet_floor_dbfs")
+    tonality = metrics.get("tonality_ratio")
+    if floor is not None and tonality is not None:
+        ok = floor > _BED_FLOOR_MIN_DBFS and tonality > _BED_TONALITY_MIN
+        report.add(
+            "audio-music-present",
+            ok,
+            f"bed floor {floor} dBFS (min {_BED_FLOOR_MIN_DBFS}), tonality {tonality} "
+            f"(min {_BED_TONALITY_MIN}) — is there actually music under the narration?",
+            floor_dbfs=floor, tonality=tonality,
+        )
+
+    # How far the bed drops under the voice. 19.5/19.7 dB today: the bed is so far down it
+    # barely registers. WARN until the sidechain chain lands (audio-quality-spec §5).
+    duck = metrics.get("duck_depth_db")
+    if duck is not None:
+        report.add(
+            "audio-duck-depth",
+            True if _DUCK_MIN_DB <= duck <= _DUCK_MAX_DB else "warn",
+            f"narration sits {duck} dB over the bed (want {_DUCK_MIN_DB}-{_DUCK_MAX_DB}); "
+            f"promotes to FAIL when the mastering chain lands",
+            duck_depth_db=duck,
+        )
+
+    # Loudness range. 2.0-2.3 LU is a flat wall — the delivery has no dynamics at all.
+    lra = metrics.get("loudness_range_lu")
+    if lra is not None:
+        report.add(
+            "audio-lra",
+            True if _LRA_MIN_LU <= lra <= _LRA_MAX_LU else "warn",
+            f"loudness range {lra} LU (want {_LRA_MIN_LU}-{_LRA_MAX_LU}); "
+            f"promotes to FAIL when the mastering chain lands",
+            lra_lu=lra,
+        )
+
+    # --- editing rhythm ----------------------------------------------------------------
+    #
+    # Measured on the FINISHED file by the same scene detector the reference channel was
+    # profiled with, so the bands below are like-for-like. Reference windows, measured
+    # 2026-08-28 (reference/mamoru_metrics_2026-08-28.json): median 2.30-2.87s, 21.8-23.6%
+    # under 1.5s, 16.2-20.1 cuts/min, longest shot 13.1-16.4s, 13.6-22.2% of runtime in
+    # shots over 8s.
+    if "shot_median_s" in metrics:
+        median = metrics["shot_median_s"]
+        report.add(
+            "shot-median",
+            True if _MEDIAN_MIN_S <= median <= _MEDIAN_MAX_S else "warn",
+            f"median shot {median}s (reference {_REF_MEDIAN_S}s; band "
+            f"{_MEDIAN_MIN_S}-{_MEDIAN_MAX_S}s)",
+            median_s=median,
+        )
+        accent = metrics["shot_under_1_5s_pct"]
+        report.add(
+            "shot-accent-share",
+            True if accent >= _ACCENT_MIN_PCT else "warn",
+            f"{accent}% of shots under 1.5s (reference {_REF_UNDER_1_5_PCT}%, floor "
+            f"{_ACCENT_MIN_PCT}%) — short shots are the reference's main rhythm tool",
+            pct=accent,
+        )
+    if "cuts_per_min" in metrics:
+        cadence = metrics["cuts_per_min"]
+        report.add(
+            "shot-cadence",
+            True if _CADENCE_MIN <= cadence <= _CADENCE_MAX else "warn",
+            f"{cadence} cuts/min (reference 16.2-20.1; band {_CADENCE_MIN}-{_CADENCE_MAX})",
+            cuts_per_min=cadence,
+        )
+    if "shot_longest_s" in metrics:
+        longest = metrics["shot_longest_s"]
+        report.add(
+            "shot-max-duration",
+            True if longest <= _SHOT_MAX_WARN_S
+            else ("warn" if longest <= _SHOT_MAX_FAIL_S else False),
+            f"longest shot {longest}s (reference's own longest is 16.37s; warn over "
+            f"{_SHOT_MAX_WARN_S}s, fail over {_SHOT_MAX_FAIL_S}s)",
+            longest_s=longest,
+        )
+    if "shot_over_8s_runtime_pct" in metrics:
+        longtail = metrics["shot_over_8s_runtime_pct"]
+        report.add(
+            "shot-longtail-share",
+            True if longtail <= _LONGTAIL_WARN_PCT
+            else ("warn" if longtail <= _LONGTAIL_FAIL_PCT else False),
+            f"{longtail}% of runtime sits in shots over 8s (reference 13.6-22.2%; warn "
+            f"over {_LONGTAIL_WARN_PCT}%, fail over {_LONGTAIL_FAIL_PCT}%)",
+            pct=longtail,
         )
 
     enforce(report, paths["root"], force=qa_forced(config))
