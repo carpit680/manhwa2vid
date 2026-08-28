@@ -184,15 +184,59 @@ coded against, so:
   image serves as both the YouTube thumbnail and the end card under the closing hook, with
   a clearly-labelled placeholder when absent. Phase 5.
 
-## 7. False-positive rates
+## 7. False-positive rates — and a gate that cannot ship
 
-To be filled in Phase 2, before any detector-backed gate becomes blocking. A gate that
-cries wolf trains the operator to force past it, and that already happened here: both
-audited videos shipped while `name-integrity` was failing.
+A gate that cries wolf trains the operator to force past it, and that already happened
+here: both audited videos shipped while `name-integrity` was failing. So every
+detector-backed gate was audited by eye on both projects before being allowed to block.
 
-| gate | FP rate on FP ch1-2 | FP rate on SL ch1-5 | audited by |
-|---|---|---|---|
-| `bare-bubble` | | | |
-| `lettering-share` | | | |
-| `noun-repetition` | | | |
-| `opening-strength` | | | |
+| gate | verdict | evidence |
+|---|---|---|
+| `name-integrity` | **0 false positives** | the two historical cases ("Rank Hunter" from "E-Rank Hunter", "Earth Jun-Ho" from a correct sentence) are fixed with pinned regression tests; passes both projects |
+| `noun-repetition` | **0 false positives** | both scripts pass at >4 per 200 words; responds correctly when tightened (finds `hunter` x4 at a cap of 3, `floor` x7 unexempted), so it is not vacuous |
+| `bare-bubble` | **NOT GATEABLE** | see below |
+| `lettering-share` | **NOT GATEABLE** | see below |
+| `opening-strength` | **warn only** | shares the detector below; the opening window is a smaller surface but the same failure mode is possible |
+
+### Why `bare-bubble` and `lettering-share` cannot ship as gates
+
+The geometric lettering detector was validated on **panels** — clean line art at source
+resolution. That validation does not transfer to rendered frames or camera-window crops,
+and the numbers say so plainly. On real frames the false positives outscore the true
+positives:
+
+| frame | truth | lettering measured |
+|---|---|---|
+| brick wall, no text at all | art | **0.615** |
+| crowd on rock, no text at all | art | **0.818** |
+| "E-RANK HUNTER." bubble on black | bare bubble | 0.402 |
+| starburst bubble on white | bare bubble | 0.151 |
+
+Four approaches were tried against a 15-window set labelled by eye, and all four overlap:
+
+1. **Frame-level lettering area** — false positives above every true positive, at every
+   resolution tested (480/720/960/1280 px wide).
+2. **Window-crop lettering area** — BARE 0.122–0.404 vs ART 0.193–0.651.
+3. **Container area** (blobs passing the flatness/hull/solidity guards) — mostly 0.000 for
+   true bare bubbles; their bubbles fail the container test at window scale.
+4. **Detect at panel resolution, intersect with the window rectangle** — the
+   methodologically correct version, and still interleaved: sorted by art area the labels
+   run BARE, BARE, ART, ART, ART, BARE, BARE, BARE.
+
+Texture is the mechanism. Brick, rock and hatching produce rows of similar-sized,
+similar-stroke-width blobs at frame scale, which is exactly the geometric signature of
+lettering.
+
+**The defect is real and remains unguarded.** Solo Leveling opens on "E-RANK HUNTER." in a
+starburst bubble on pure black at t=6s — the 2026-08-26 audit's A1 defect, still shipping.
+The panel behind it (`p0002_03`) scores 0.231 and is correctly *not* text-dominant: the
+panel is fine and the **camera window** creates the defect, so the validated panel
+classifier cannot catch it either.
+
+Both therefore ship as **report-only measurements**. Per this brief's own rule — a
+threshold must be defensible from data — shipping them as blocking gates on an unvalidated
+detector would be the same error the `bubble-dominance` gate already made once.
+
+What would unblock them: a window-level detector validated the way the panel one was, on a
+labelled set of camera windows rather than panels. That is real work and it is not
+smuggled into a threshold.
