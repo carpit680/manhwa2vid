@@ -76,6 +76,13 @@ _CADENCE_MIN, _CADENCE_MAX = 12.0, 22.0     # brief said 12-20; reference W1 is 
 _SHOT_MAX_WARN_S, _SHOT_MAX_FAIL_S = 12.0, 18.0   # brief said fail at 12; reference is 16.37
 _LONGTAIL_WARN_PCT, _LONGTAIL_FAIL_PCT = 18.0, 25.0  # brief said 15; reference reaches 22.2
 
+# Opening. A viewer decides in ten seconds, so the window is 15, not 4 — Solo Leveling's
+# bubble-on-black opener sits at t=6s and a 4s window could not see it. The art floors are
+# measured: the reference's own per-second minimum over the first 15s is 26.2% (W2) and
+# 45.7% (W1), so the brief's proposed 50% floor would fail the reference.
+_OPENING_SECONDS = 15.0
+_OPENING_ART_FAIL, _OPENING_ART_WARN = 0.15, 0.25
+
 
 def measure_video(video: Path) -> dict[str, Any]:
     """Whole-runtime frame metrics + audio true peak + shot-length stats."""
@@ -83,8 +90,12 @@ def measure_video(video: Path) -> dict[str, Any]:
     clipped_flags: list[bool] = []
     dead: list[float] = []
     lumas: list[float] = []
+    lettering: list[float] = []
+    art: list[float] = []
     opening_frames: list[np.ndarray] = []
-    open_budget = int(4 * _FPS)
+    # 15 seconds, not 4: a viewer decides in the first ten, and Solo Leveling's
+    # bubble-on-black opener sits at t=6s — outside a 4s window entirely.
+    open_budget = int(_OPENING_SECONDS * _FPS)
     for frame in _iter_frames(video):
         if len(opening_frames) < open_budget:
             opening_frames.append(frame.copy())
@@ -93,22 +104,36 @@ def measure_video(video: Path) -> dict[str, Any]:
         clipped_flags.append(clipped)
         dead.append(_dead_width(frame))
         lumas.append(float(frame.mean()))
+        text_mask, content_mask = lettering_masks(frame)
+        lettering.append(float(text_mask.mean()))
+        # "Art" is content that is not lettering: what the viewer is here to look at.
+        art.append(float((content_mask & ~text_mask).mean()))
 
     n = max(len(lumas), 1)
-    open_n = min(int(4 * _FPS), n)  # first 4 seconds
+    open_n = min(open_budget, n)
     # Lettering in the opening, measured with the VALIDATED detector rather than the
     # bright-blob test below. The two disagreed on the 2026-08-27 render and the blob
     # test was wrong: it read the Frost Queen's pale hair as a 34%-of-frame "bubble" and
     # failed an opening that had in fact improved, while lettering fell 48% -> 30%.
-    opening_text = 0.0
-    for f in opening_frames[:open_n]:
-        text, _content = lettering_masks(f)
-        opening_text = max(opening_text, float(text.mean()))
+    opening_text = max(lettering[:open_n], default=0.0)
+    per_second = [
+        float(np.mean(art[i : i + max(int(_FPS), 1)]))
+        for i in range(0, open_n, max(int(_FPS), 1))
+    ]
     metrics: dict[str, Any] = {
         "frames": n,
         "opening_luma_mean": round(float(np.mean(lumas[:open_n])), 1),
         "opening_bubble_frac_max": round(float(max(bubble_fracs[:open_n], default=0.0)), 3),
         "opening_lettering_max": round(opening_text, 3),
+        "opening_art_min_second": round(min(per_second), 3) if per_second else 0.0,
+        # Composition, validated detector. REPORT-ONLY — see the note on the gates below.
+        "lettering_area_median": round(float(np.median(lettering)), 3),
+        "lettering_over_30pct_frames_pct": round(
+            100.0 * float(np.mean([x > 0.30 for x in lettering])), 1
+        ),
+        "bare_bubble_frames_pct": round(
+            100.0 * float(np.mean([t > 0.15 and a < 0.12 for t, a in zip(lettering, art)])), 1
+        ),
         "bubble_over_20pct_frames_pct": round(
             100.0 * float(np.mean([f > 0.20 for f in bubble_fracs])), 1
         ),
@@ -144,15 +169,22 @@ def enforce_render_qa(
     # on black, which is what this must catch; the bright-blob test caught pale artwork
     # instead and inverted the verdict on a real render. Measured openings: 48% before
     # the camera was retargeted, 30% after, and the band sits above both.
+    # Also requires the opening to actually SHOW something: every second of the first 15
+    # must carry art. Solo Leveling's per-second minimum is 5.4% — it opens on a speech
+    # bubble on black — against Frozen Player's 28.3% and the reference's 26.2-45.7%.
+    art_min = metrics.get("opening_art_min_second")
     opening_ok = (
         metrics["opening_luma_mean"] > 16.0
         and metrics.get("opening_lettering_max", 0.0) < 0.55
+        and (art_min is None or art_min >= _OPENING_ART_FAIL)
     )
     report.add(
         "opening-shot",
         opening_ok,
-        f"first seconds: luma {metrics['opening_luma_mean']}, lettering "
+        f"first {_OPENING_SECONDS:.0f}s: luma {metrics['opening_luma_mean']}, lettering "
         f"{100 * metrics.get('opening_lettering_max', 0.0):.0f}% of frame, "
+        f"quietest second carries {100 * (art_min or 0.0):.0f}% art "
+        f"(fail under {100 * _OPENING_ART_FAIL:.0f}%), "
         f"largest bubble {metrics['opening_bubble_frac_max']:.0%} of frame — "
         "a recap must not open on a bubble or a black screen",
         **{k: metrics[k] for k in ("opening_luma_mean", "opening_bubble_frac_max")},
@@ -191,16 +223,39 @@ def enforce_render_qa(
         pct=pct,
     )
 
-    # Edge-clipped text: the reference's own edit measures 41.9% — a panning camera
-    # over bubbled art clips text mid-move as a matter of course. Gate only the excess.
+    # Edge-clipped text: REPORT-ONLY. Re-measured 2026-08-28 with the validated lettering
+    # detector, the REFERENCE channel slices lettering on 67.5-69.8% of its frames against
+    # our 45.3% (FP) and 56.5% (SL) — it is markedly worse at this than we are. Panning a
+    # 16:9 window over tall bubbled art clips lettering as a matter of course, so the
+    # brief's proposed 10% ceiling is unreachable for anyone. Kept as data; revisit if the
+    # crop-constraint work makes a low number achievable.
     pct = metrics["clipped_text_frames_pct"]
     report.add(
         "clipped-text",
-        True if pct <= _REF_CLIPPED_PCT + 11 else ("warn" if pct <= _REF_CLIPPED_PCT + 26 else False),
-        f"{pct}% of frames slice a text blob at the frame edge "
-        f"(reference, same content: {_REF_CLIPPED_PCT}%)",
+        True,
+        f"{pct}% of frames slice a text blob at the frame edge (reference, same "
+        f"detector: 67.5-69.8% — worse than ours; data only)",
         pct=pct,
     )
+
+    # Lettering on screen, and frames that are lettering with no art beside them.
+    # REPORT-ONLY, and this is a measured limitation rather than caution: the geometric
+    # detector is validated on PANELS at source resolution, and that validation does not
+    # transfer to rendered frames. On real frames a brick wall with no text measures 0.615
+    # and a crowd on rock 0.818, against 0.402 for a real "E-RANK HUNTER." bubble —
+    # texture makes rows of similar-sized, similar-stroke-width blobs, which is the
+    # geometric signature of lettering. Four separating rules were tried against an
+    # eye-labelled window set and all four overlap; see reports/render_audit_2026-08-28.md
+    # §7. Gating on them would repeat the mistake bubble-dominance already made.
+    for gate, key, unit in (
+        ("lettering-share", "lettering_over_30pct_frames_pct",
+         "% of frames where lettering covers >30% of the screen (reference 5.5-11.0%)"),
+        ("bare-bubble", "bare_bubble_frames_pct",
+         "% of frames that are lettering with no art beside them (reference 0.0-0.4%)"),
+    ):
+        if key in metrics:
+            report.add(gate, True, f"{metrics[key]}{unit} — data only, detector "
+                                   f"not validated at frame resolution", pct=metrics[key])
 
     # Dead space: REPORT-ONLY. The detector reads low-detail columns, and manhwa art is
     # flat by style — the reference video measures 0.742, worse than anything we ship.

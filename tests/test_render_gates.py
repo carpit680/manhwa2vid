@@ -25,6 +25,9 @@ def _metrics(**over):
         "opening_luma_mean": 110.0,
         "opening_bubble_frac_max": 0.10,
         "opening_lettering_max": 0.20,
+        "opening_art_min_second": 0.45,
+        "lettering_over_30pct_frames_pct": 12.0,
+        "bare_bubble_frames_pct": 0.0,
         "bubble_over_20pct_frames_pct": 15.0,
         "clipped_text_frames_pct": 40.0,
         "dead_width_mean": 0.55,
@@ -98,11 +101,40 @@ def test_bubble_dominance_is_report_only(monkeypatch, tmp_path):
         assert _run(monkeypatch, tmp_path, bubble_over_20pct_frames_pct=pct)["bubble-dominance"] == "pass"
 
 
-def test_clipped_text_tolerates_the_reference_rate(monkeypatch, tmp_path):
-    """The reference measures 43.9% — a panning camera clips text as a matter of course,
-    so the band must not punish the source material."""
-    assert _run(monkeypatch, tmp_path, clipped_text_frames_pct=43.9)["clipped-text"] == "pass"
-    assert _run(monkeypatch, tmp_path, clipped_text_frames_pct=80.0)["clipped-text"] == "fail"
+def test_clipped_text_is_report_only(monkeypatch, tmp_path):
+    """Re-measured 2026-08-28 with the validated lettering detector: the REFERENCE slices
+    lettering on 67.5-69.8% of its frames against our 45.3%/56.5%. It is worse at this
+    than we are, and the brief's proposed 10% ceiling is unreachable for anyone — panning
+    a 16:9 window over tall bubbled art clips lettering as a matter of course."""
+    for pct in (43.9, 56.5, 80.0):
+        assert _run(monkeypatch, tmp_path, clipped_text_frames_pct=pct)["clipped-text"] == "pass"
+
+
+def test_composition_measures_are_reported_not_gated(monkeypatch, tmp_path):
+    """The geometric detector is validated on PANELS at source resolution and that does
+    not transfer to frames: a brick wall with no text measures 0.615 and a crowd on rock
+    0.818, against 0.402 for a real bubble. Pinned so a future edit cannot quietly promote
+    them without validating a frame-level detector first."""
+    r = _run(monkeypatch, tmp_path, lettering_over_30pct_frames_pct=95.0,
+             bare_bubble_frames_pct=50.0)
+    assert r["lettering-share"] == "pass" and r["bare-bubble"] == "pass"
+
+
+def test_opening_on_a_bubble_with_no_art_fails(monkeypatch, tmp_path):
+    """Solo Leveling opens on "E-RANK HUNTER." on black at t=6s — outside the old 4s
+    window entirely. Its quietest opening second carries 5.4% art against Frozen Player's
+    28.3% and the reference's 26.2-45.7%."""
+    assert _run(monkeypatch, tmp_path, opening_art_min_second=0.054)["opening-shot"] == "fail"
+    assert _run(monkeypatch, tmp_path, opening_art_min_second=0.283)["opening-shot"] == "pass"
+
+
+def test_opening_art_floor_does_not_fail_the_reference(monkeypatch, tmp_path):
+    """The brief proposed 50% detail-bearing area every second. The reference's own
+    per-second minimum is 26.2%."""
+    from manhwa2vid.video.qa_visual import _OPENING_ART_FAIL
+
+    assert _OPENING_ART_FAIL < 0.262
+    assert _run(monkeypatch, tmp_path, opening_art_min_second=0.262)["opening-shot"] == "pass"
 
 
 def test_dead_space_is_report_only(monkeypatch, tmp_path):
