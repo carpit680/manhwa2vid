@@ -354,3 +354,39 @@ Loosening the compressor would raise the number, but that is tuning against a th
 with no source, on the one dimension where two changes have already been rejected by ear.
 It stays a warn with this note until either the reference audio is obtained or a listening
 test says the delivery is too flat.
+
+---
+
+## 10. Phase 5 — what changed in the videos
+
+| defect | before | after | how |
+|---|---|---|---|
+| flat, lifeless mix | −16.4 LUFS, bed 19.5 dB down | **−14.5 LUFS, bed 13.6 dB down** | mastering chain (spec §5) |
+| longest single image, FP | 18.6s | **9.4s** | shot cap borrowing unused panels |
+| longest single image, SL | 27.8s | **10.2s** | same |
+| invisible cuts, FP | 6 | **2** | cross-beat search both directions |
+| panel utilisation, FP | 58.8% | **65.9%** | the cap spends unused panels |
+| panel utilisation, SL | 71.5% | **79.6%** | same |
+| SL opens on a bubble on black | yes | fixed at the camera | opening framed for art |
+| narration quotes nobody | 0.00 spans/1k | prompt corrected | writer told to quote |
+
+### Three bugs I introduced and caught
+
+Worth recording, because each was found by a different mechanism and only one by a test.
+
+1. **Tuned the bed against a broken metric.** `bgm_gain_db` was set to −6.0 on the strength
+   of a duck-depth estimate that read 13.29 dB where the truth was 2.91. Caught by
+   measuring the same quantity a second way, from the narration stem.
+2. **`NameError` in the render loop.** A string replacement matched nothing because of an
+   indentation mismatch and said so silently, so `opening_art_seconds` was referenced but
+   never defined. **Two Solo Leveling renders crashed before I noticed**, and what noticed
+   was the QA report still naming an older file — the staleness stamp from Phase 4 — not
+   any test. Nothing in the suite had ever executed `render_video`; that gap is now closed
+   with an end-to-end render test that reproduces this exact failure.
+3. **A test that passed for the wrong reason.** The first fixture for the opening-framing
+   fix used blurred noise as "art", which already beats a flat ellipse on gradient energy,
+   so both cameras chose the same window and the assertion held without exercising
+   anything. Rebuilt with the shape the real defect has.
+
+The `--force-past-qa` guard, the subject stamp and the end-to-end render test were all
+written for hypothetical failures. Two of the three caught a real one within the day.
