@@ -192,3 +192,30 @@ Two performance fixes were needed and are verified to leave the detector's outpu
 identical: cache the container search by tone, and break out of the row grouping once
 past its vertical bound (it was O(n²), and a 22000px strip carries tens of thousands of
 glyph-sized components — two camera tests went 0.4s → 30s, now 2s).
+
+---
+
+# Both titles delivered (narration untouched)
+
+Regenerated with `run tts --force` + `run render --force` only. The SCRIPT stage never
+ran, so no LLM call was made and the narration is byte-identical to what was approved.
+
+| | Frozen Player ch1-2 | Solo Leveling ch1-5 |
+|---|---|---|
+| file | `preview_2026-08-27_165848.mp4` | `preview_2026-08-27_195630.mp4` |
+| runtime | 6.4 min (381.60s, +0.02s vs timeline) | 13.2 min (792.00s, +0.02s) |
+| shots seen / distinct panels | 100 / 100 | 228 / 228 |
+| median shot, <1.5s | 2.41s, 23% | 2.35s, 23% |
+| **lettering/void panels shown** | **0** | **0** |
+| lettering >30% of screen | 14.1% of frames | 19.1% of frames |
+| render gates | 6 pass, 0 warn, 0 fail | 6 pass, 0 warn, 0 fail |
+
+Solo Leveling's timeline barely moved (4 entries reordered by the cross-beat duplicate
+fix); its gain is almost entirely the corrected imagery — **210 of its cached upscales
+were stale**, so it had been rendering with wrong panel images even more widely than
+Frozen Player. Both now open on artwork and close on artwork.
+
+SL carries more lettering per frame than FP (19.1% vs 14.1% over 30%), which tracks the
+source: its opening chapters are dialogue-dense. Its longest hold is 28s, reported by
+`dwell-over-limit` — a beat with more narration than panels, the same content shortage
+`no-invisible-cuts` reports elsewhere, and not something the camera can fix.
