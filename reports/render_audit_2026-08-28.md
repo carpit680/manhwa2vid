@@ -390,3 +390,42 @@ Worth recording, because each was found by a different mechanism and only one by
 
 The `--force-past-qa` guard, the subject stamp and the end-to-end render test were all
 written for hypothetical failures. Two of the three caught a real one within the day.
+
+---
+
+## 11. End state
+
+Both titles re-rendered and passing every blocking gate.
+
+| | Frozen Player ch1-2 | Solo Leveling ch1-5 |
+|---|---|---|
+| file | `preview_2026-08-28_152519.mp4` | `preview_2026-08-28_144158.mp4` |
+| render gates | **15, 0 failed**, 1 warn | **15, 0 failed**, 1 warn |
+| timeline gates | **11, 0 failed**, 3 warn | **11, 0 failed**, 4 warn |
+| loudness | −14.46 LUFS | −14.52 LUFS |
+| true peak | −1.41 dBTP | −1.39 dBTP |
+| duck depth | 13.59 dB | 13.04 dB |
+| shots seen | 108 | 239 |
+| median shot | 2.47s | 2.42s |
+| longest shot | **9.5s** (was 18.6) | **11.6s** (was 27.8) |
+| cuts/min | 17.46 | 18.33 |
+
+Remaining warns, all with a written reason: `audio-lra` (band unverified, §9),
+`dwell-over-limit` and `no-invisible-cuts` (beats with more narration than panels),
+`match-rate` (61.1% / 48.7% against a 70% floor), and one `hold-run` on SL.
+
+### Still open, in value order
+
+1. **The narration is the largest remaining gap.** Dialogue verbs 6.98 (FP) / 2.77 (SL)
+   per 1000 words against the reference's 31.34, and zero quoted dialogue against 1.16.
+   The writer's prompt is fixed — it now asks for reporting verbs at the reference's rate
+   and for short verbatim quotes, the instruction that previously forbade them — but the
+   scripts have not been regenerated, so no shipped video reflects it yet.
+2. **`audio-lra` at 2.0 LU.** Needs either the reference's audio track for a like-for-like
+   band, or a listening test on a less compressed chain.
+3. **Bubble-dominant camera windows** outside the opening. Not gateable until a
+   window-level lettering detector is validated (§7).
+4. **Match rate.** 61.1% / 48.7% of sentences are bound to their own panel; the rest
+   inherit the picture rather than choosing it.
+5. **Pronunciation.** Verified broken, twice rejected as a fix (§8). The remaining lever is
+   the voice, measured with F0.
