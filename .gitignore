@@ -31,3 +31,6 @@ assets/bgm/*.wav
 .claude/
 .agents/
 skills-lock.json
+
+# Human-review artifacts (A/B audio, listening tests) — not source
+_review/
