@@ -215,3 +215,60 @@ def test_noun_repetition_folds_plurals():
     filler = " ".join(a + b + "zz" for a in string.ascii_lowercase for b in "aeiou")
     text = "hunter hunters hunter hunters hunter hunters " + filler
     assert noun_repetition(text)["findings"][0]["word"] == "hunter"
+
+
+# --- the mastering chain (docs/audio-quality-spec.md §5) --------------------------------
+
+def test_the_master_graph_is_built_once_and_used_for_both_passes():
+    """Two-pass loudnorm only works if pass two normalizes the signal pass one measured.
+    The old code measured an AAC intermediate produced by a DIFFERENT filter chain."""
+    from manhwa2vid.video.master import build_filter, measure_pass, render_pass
+
+    measured = {"input_i": "-20", "input_tp": "-3", "input_lra": "5",
+                "input_thresh": "-30", "target_offset": "0.1"}
+    one = build_filter({}, pad_seconds=0.0, with_bed=True, loudnorm=measure_pass(-14, 7))
+    two = build_filter({}, pad_seconds=0.0, with_bed=True,
+                       loudnorm=render_pass(-14, 7, measured))
+    strip = lambda g: g[: g.index("loudnorm=")]  # noqa: E731
+    assert strip(one) == strip(two), "the graph must be identical up to the loudnorm stage"
+    assert "linear=true" in two and "measured_I=-20" in two
+
+
+def test_the_limiter_sits_before_loudnorm_not_after():
+    """alimiter after normalization re-introduces exactly the overshoot loudnorm just
+    removed — the audit's constant +0.30 dBTP was that mistake in its earlier form."""
+    from manhwa2vid.video.master import build_filter, measure_pass
+
+    g = build_filter({}, pad_seconds=0.0, with_bed=True, loudnorm=measure_pass(-14, 7))
+    assert g.index("alimiter") < g.index("loudnorm"), "limit inter-sample peaks first"
+
+
+def test_the_bed_is_ducked_off_the_voice_not_just_turned_down():
+    """A flat bed under a voice measured 19.5 dB down and inaudible. The key is an
+    asplit of the PROCESSED narration, so the duck follows the delivered voice."""
+    from manhwa2vid.video.master import build_filter, measure_pass
+
+    g = build_filter({}, pad_seconds=0.0, with_bed=True, loudnorm=measure_pass(-14, 7))
+    assert "sidechaincompress" in g and "asplit=2[v_mix][v_key]" in g
+    assert g.index("asplit") < g.index("sidechaincompress")
+
+
+def test_no_bed_still_masters_the_voice():
+    """An empty assets/bgm/ must not silently skip the whole chain."""
+    from manhwa2vid.video.master import build_filter, measure_pass
+
+    g = build_filter({}, pad_seconds=0.0, with_bed=False, loudnorm=measure_pass(-14, 7))
+    assert "sidechaincompress" not in g
+    assert "acompressor" in g and "deesser" in g and "loudnorm" in g
+
+
+def test_pitch_shift_is_disableable_and_preserves_formants():
+    """asetrate+atempo would shift formants and give the giant/chipmunk effect."""
+    from manhwa2vid.video.master import build_filter, measure_pass
+
+    on = build_filter({"video": {"voice_pitch_semitones": -1.5}}, pad_seconds=0.0,
+                      with_bed=False, loudnorm=measure_pass(-14, 7))
+    assert "rubberband=pitch=0.917" in on and "formant=preserved" in on
+    off = build_filter({"video": {"voice_pitch_semitones": 0}}, pad_seconds=0.0,
+                       with_bed=False, loudnorm=measure_pass(-14, 7))
+    assert "rubberband" not in off

@@ -162,84 +162,59 @@ def _mix_audio(
 
     root = find_repo_root()
     bgm_dir = root / "assets" / "bgm"
-    bgm_files = list(bgm_dir.glob("*.mp3")) + list(bgm_dir.glob("*.wav"))
-    bgm_volume = float(get_nested(config, "video", "bgm_volume", default=0.18))
+    bgm_files = sorted(bgm_dir.glob("*.mp3")) + sorted(bgm_dir.glob("*.wav"))
 
+    # ONE graph, measured then rendered. Two-pass loudnorm only works if pass two
+    # normalizes the signal pass one measured, and the old code measured the mixed MP4
+    # after the fact — a different signal, already AAC-encoded, from a different filter
+    # chain. See docs/audio-quality-spec.md §5 and video/master.py.
+    from manhwa2vid.video import master
+
+    target = float(get_nested(config, "export", "loudness_target", default=-14))
+    lra = float(get_nested(config, "video", "loudness_range", default=7))
+
+    inputs = ["-i", str(video_path), "-i", str(narration)]
     if bgm_files:
-        bgm = bgm_files[0]
-        _run_ffmpeg(
-            [
-                "-i",
-                str(video_path),
-                "-i",
-                str(narration),
-                "-i",
-                str(bgm),
-                "-filter_complex",
-                # apad extends the narration with silence under the end card, so
-                # duration=first doesn't cut the BGM the moment the voice stops.
-                f"[1:a]volume=1.0,apad=pad_dur={max(pad_seconds, 0.0)}[narr];"
-                f"[2:a]volume={bgm_volume},aloop=loop=-1:size=2e+09[bgm];"
-                f"[narr][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]",
-                "-map",
-                "0:v",
-                "-map",
-                "[aout]",
-                "-c:v",
-                "copy",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "192k",
-                "-shortest",
-                str(output),
-            ]
+        inputs += ["-i", str(bgm_files[0])]
+
+    def graph(loudnorm: str) -> str:
+        return master.build_filter(
+            config, pad_seconds=max(pad_seconds, 0.0),
+            with_bed=bool(bgm_files), loudnorm=loudnorm,
         )
-    else:
-        _run_ffmpeg(
-            [
-                "-i",
-                str(video_path),
-                "-i",
-                str(narration),
-                "-map",
-                "0:v",
-                "-map",
-                "1:a",
-                "-af",
-                f"apad=pad_dur={max(pad_seconds, 0.0)}",
-                "-c:v",
-                "copy",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "192k",
-                "-shortest",
-                str(output),
-            ]
-        )
+
+    probe = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-nostdin", *inputs,
+         "-filter_complex", graph(master.measure_pass(target, lra)),
+         "-map", "[aout]", "-f", "null", "-"],
+        capture_output=True, text=True,
+    )
+    measured = _parse_loudnorm(probe.stderr)
+    loudnorm = (
+        master.render_pass(target, lra, measured) if measured
+        else master.measure_pass(target, lra).replace(":print_format=json", "")
+    )
+    if not measured:
+        console.print("[yellow]loudnorm measurement failed — falling back to single pass[/]")
+
+    _run_ffmpeg([
+        *inputs,
+        "-filter_complex", graph(loudnorm),
+        "-map", "0:v", "-map", "[aout]",
+        # loudnorm resamples internally to 192 kHz; pin the rate or the output lands at
+        # 96 kHz from 24 kHz sources.
+        "-ar", "48000",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+        # Without this the moov atom lands after mdat and several players refuse to start
+        # until the whole file has downloaded.
+        "-movflags", "+faststart",
+        "-shortest", str(output),
+    ])
     narration.unlink(missing_ok=True)
 
 
-def _measure_loudness(input_path: Path, target: float) -> dict[str, str] | None:
-    """First loudnorm pass: measure only. Returns the measured_* values for pass two."""
-    proc = subprocess.run(
-        [
-            "ffmpeg",
-            "-hide_banner",
-            "-nostdin",
-            "-i",
-            str(input_path),
-            "-af",
-            f"loudnorm=I={target}:TP=-1.5:LRA=11:print_format=json",
-            "-f",
-            "null",
-            "-",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    text = proc.stderr
+def _parse_loudnorm(text: str) -> dict[str, str] | None:
+    """Pull the measured_* values out of a loudnorm print_format=json pass."""
     start = text.rfind("{")
     if start == -1:
         return None
@@ -251,54 +226,6 @@ def _measure_loudness(input_path: Path, target: float) -> dict[str, str] | None:
     if not all(k in data for k in keys):
         return None
     return {k: str(data[k]) for k in keys}
-
-
-def _normalize_loudness(input_path: Path, output: Path, target: float) -> None:
-    # Two-pass loudnorm: single-pass runs in dynamic mode and overshoots true peak —
-    # both audited videos measured +0.30/+0.35 dBTP (clips on transcode) despite the
-    # alimiter, which limits SAMPLE peaks and is blind to inter-sample ones. Pass one
-    # measures; pass two applies linearly, which honors TP=-1.5.
-    measured = _measure_loudness(input_path, target)
-    if measured:
-        loudnorm = (
-            f"loudnorm=I={target}:TP=-1.5:LRA=11:linear=true"
-            f":measured_I={measured['input_i']}:measured_TP={measured['input_tp']}"
-            f":measured_LRA={measured['input_lra']}:measured_thresh={measured['input_thresh']}"
-            f":offset={measured['target_offset']}"
-        )
-    else:
-        loudnorm = f"loudnorm=I={target}:TP=-1.5:LRA=11"
-    # loudnorm internally resamples to 192 kHz, so pin the rate afterwards or the output
-    # lands at 96 kHz from 24 kHz sources. alimiter's `limit` takes a LINEAR value, not a
-    # dB string — 0.89 is about -1 dBFS of headroom (kept as a last-resort backstop).
-    # level=false is LOAD-BEARING: alimiter's default (level=1) auto-normalizes its
-    # output back UP to 0 dBFS after limiting — which silently undid loudnorm's TP
-    # headroom on every render this pipeline ever produced (the audit's constant
-    # +0.30 dBTP on both videos, old and new, was exactly this).
-    _run_ffmpeg(
-        [
-            "-i",
-            str(input_path),
-            "-af",
-            f"{loudnorm},alimiter=limit=0.89:level=false,aresample=48000",
-            "-ar",
-            "48000",
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            # Without this the moov atom lands after mdat (ffmpeg's default for a
-            # streamed write), which several players — including the one used to hand
-            # previews back for review — refuse to start until the whole file has
-            # downloaded. Costs nothing extra to write it here since output is already
-            # a fresh file.
-            "-movflags",
-            "+faststart",
-            str(output),
-        ]
-    )
 
 
 def render_video(
@@ -405,11 +332,10 @@ def render_video(
 
         silent = Path(tmp) / "silent.mp4"
         _concat_clips(clips, silent, fps)
-        mixed = Path(tmp) / "mixed.mp4"
-        _mix_audio(timeline, paths["root"], silent, mixed, config, pad_seconds=0.0)
-
-        target_lufs = float(get_nested(config, "export", "loudness_target", default=-14))
-        _normalize_loudness(mixed, output, target_lufs)
+        # _mix_audio now masters and normalizes in one graph, so there is no separate
+        # normalize step to undo it. The old shape mixed to an AAC intermediate and then
+        # measured THAT, which is a different signal from the one being normalized.
+        _mix_audio(timeline, paths["root"], silent, output, config, pad_seconds=0.0)
 
     if not final:
         shutil.copy2(output, paths["output"] / "preview.mp4")

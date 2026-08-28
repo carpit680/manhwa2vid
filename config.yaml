@@ -286,7 +286,19 @@ video:
   # Timeline QA warns when a single panel dwells longer than this multiple of
   # max_panel_seconds — the signature of a beat whose narration outruns its panel count.
   dwell_warn_multiplier: 1.5
-  bgm_volume: 0.18
+  # Music bed level going INTO the sidechain, in dB. Tuned by measurement, not by ear:
+  # turn this until the audio-duck-depth gate reads 12-15 dB. -6.0 measures 13.29 dB on
+  # Frozen Player. The relationship is not the obvious one — a quieter bed measures a
+  # SHALLOWER duck, because loudnorm then applies more make-up gain and lifts it back.
+  # Replaces the old linear `bgm_volume: 0.18`; two controls fighting over one level is
+  # how the bed ended up 19.5 dB down and inaudible.
+  bgm_gain_db: -6.0
+  # Voice depth, in semitones, formants preserved (rubberband). Set 0 to disable.
+  # Beyond -2 the artefacts accumulate over a long passage.
+  voice_pitch_semitones: -1.5
+  # Loudness range target. The old value was 11, which let the delivery sit at 2.0-2.3 LU
+  # — a flat wall with no dynamics at all.
+  loudness_range: 7
   motion_supersample: 2
   max_scroll_px_per_sec: 600
   # Fill-frame camera (2026-08-26 decision): the camera is a 16:9 window INSIDE the
