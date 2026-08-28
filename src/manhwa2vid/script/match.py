@@ -406,13 +406,17 @@ def plan_shots_with_sentences(
             last, first = prev_item["panels"][-1], item["panels"][0]
             if last != first or last not in pos:
                 continue
-            nxt = next(
+            # Nearest unused panel, searched BOTH ways. Forward-only leaves the holds at
+            # the end of a chapter unfixable — there is nothing after them — and those
+            # are exactly the ones that grew to 14-18s.
+            nxt = min(
                 (
                     pid
-                    for pid in panel_order[pos[last] + 1 :]
+                    for pid in panel_order
                     if pid not in claimed and pid not in (text_only or ())
                 ),
-                None,
+                key=lambda pid: abs(pos[pid] - pos[last]),
+                default=None,
             )
             if nxt is not None:
                 item["panels"][0] = nxt
@@ -546,4 +550,29 @@ def plan_shots_with_sentences(
             plan[beat_id] = [
                 (pid, sec, sorted(set(nums))) for pid, sec, _accent, nums in merged
             ]
+    # Final pass over the ASSEMBLED sequence. Everything above works inside one beat, so
+    # a shot that is legal in beat N and legal in beat N+1 can still be one long hold on
+    # screen: 7.2s + 7.2s on the same panel is 14.4s to a viewer. This is the only place
+    # that sees the whole timeline, so it is the only place that can catch it.
+    if plan and panel_order and max_shot > 0:
+        order_pos = {pid: i for i, pid in enumerate(panel_order)}
+        flat_shots = [(beat, idx) for beat in sorted(plan) for idx in range(len(plan[beat]))]
+        used = {plan[b][i][0] for b, i in flat_shots}
+        for (pb, pi), (cb, ci) in zip(flat_shots, flat_shots[1:]):
+            prev, cur = plan[pb][pi], plan[cb][ci]
+            if prev[0] != cur[0] or prev[1] + cur[1] <= max_shot:
+                continue
+            spare = min(
+                (
+                    cand for cand in panel_order
+                    if cand not in used and cand not in (text_only or ())
+                ),
+                key=lambda cand: abs(order_pos[cand] - order_pos.get(cur[0], 0)),
+                default=None,
+            )
+            if spare is None:
+                continue  # an unrelated image is still worse than a long one
+            plan[cb][ci] = (spare, cur[1], cur[2])
+            used.add(spare)
+
     return plan or None

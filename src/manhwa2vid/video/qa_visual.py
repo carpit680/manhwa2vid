@@ -159,9 +159,15 @@ def measure_video(video: Path) -> dict[str, Any]:
 
 
 def enforce_render_qa(
-    video: Path, paths: dict[str, Path], config: dict[str, Any]
+    video: Path,
+    paths: dict[str, Path],
+    config: dict[str, Any],
+    extra_metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """`extra_metrics` carries values only the renderer could measure — chiefly the true
+    duck depth, which needs the narration stem the mix consumes and deletes."""
     metrics = measure_video(video)
+    metrics.update(extra_metrics or {})
     report = QAReport(stage="render")
     # Which file these numbers describe. A project accumulates dozens of previews; without
     # this, export gates on whichever one last wrote the report.
@@ -330,6 +336,9 @@ def enforce_render_qa(
 
     # How far the bed drops under the voice. 19.5/19.7 dB today: the bed is so far down it
     # barely registers. WARN until the sidechain chain lands (audio-quality-spec §5).
+    # Only the stem-derived value, never the estimate. The estimate overstates the duck
+    # by 2-7 dB on long material, and acting on it would mean mixing the bed far too loud
+    # while this gate reported it was fine.
     duck = metrics.get("duck_depth_db")
     if duck is not None:
         report.add(

@@ -46,9 +46,13 @@ def window_rms_db(samples: np.ndarray, sr: int) -> np.ndarray:
 def audio_metrics(samples: np.ndarray, sr: int) -> dict[str, Any]:
     """Bed level, ducking depth and whether the bed is music at all.
 
-    `quiet_floor_dbfs` is the p10 of window RMS: the narration has gaps, and what is
-    audible in them is the music bed. `speech_p75_dbfs` is the p75, i.e. a
-    narration-dominated window. Their difference is the duck depth a viewer hears.
+    `quiet_floor_dbfs` is the p10 of window RMS and `speech_p75_dbfs` the p75. Their
+    difference is reported as `duck_depth_estimate_db` and is NOT the duck depth: on long
+    material it overstates by 2-7 dB, because the quietest tenth of a 6-minute mix is
+    sidechain-ducked moments right after speech rather than bed-only windows. Use
+    `duck_depth_from_stem` for anything that decides. This estimate stays because the bed
+    floor and tonality it shares a pass with are sound, and because a number that is only
+    ever compared against itself is still useful for spotting drift.
 
     `tonality_ratio` separates "there is music under this" from "there is hiss under
     this": averaged spectra of the quiet windows, peak over mean across 80-2000 Hz.
@@ -61,7 +65,7 @@ def audio_metrics(samples: np.ndarray, sr: int) -> dict[str, Any]:
     samples = np.asarray(samples, dtype=np.float64)
     if not samples.size:
         return {"quiet_floor_dbfs": -120.0, "speech_p75_dbfs": -120.0,
-                "duck_depth_db": 0.0, "tonality_ratio": 0.0}
+                "duck_depth_estimate_db": 0.0, "tonality_ratio": 0.0}
 
     rms_db = window_rms_db(samples, sr)
     quiet_floor = float(np.percentile(rms_db, 10))
@@ -94,9 +98,46 @@ def audio_metrics(samples: np.ndarray, sr: int) -> dict[str, Any]:
     return {
         "quiet_floor_dbfs": round(quiet_floor, 2),
         "speech_p75_dbfs": round(speech_p75, 2),
-        "duck_depth_db": round(speech_p75 - quiet_floor, 2),
+        "duck_depth_estimate_db": round(speech_p75 - quiet_floor, 2),
         "tonality_ratio": round(tonality, 2),
     }
+
+
+def duck_depth_from_stem(narration: Path, mix: Path) -> float | None:
+    """True duck depth: bed level in real narration gaps, against speech level.
+
+    This needs the narration STEM, and that is the point. The mix alone cannot tell a
+    bed-only window from a quiet moment of speech, and every percentile-of-the-mix
+    estimate overstates the duck badly — measured against this on a 6:22 render: p10 of
+    all windows +7.5 dB, median of the lowest quarter +6.1, p30 +2.4. Acting on those
+    numbers would mean mixing the bed far too loud while a gate reported it was fine.
+
+    So it is computed at MIX time, where the stem still exists, and handed to the render
+    QA. When it is unavailable the gate reports nothing rather than a wrong number.
+    """
+    import soundfile as sf
+
+    try:
+        voice, vr = sf.read(str(narration), dtype="float64", always_2d=False)
+        mixed, mr = sf.read(str(mix), dtype="float64", always_2d=False)
+    except (OSError, RuntimeError):
+        return None
+    if voice.ndim > 1:
+        voice = voice.mean(axis=1)
+    if mixed.ndim > 1:
+        mixed = mixed.mean(axis=1)
+
+    v_db = window_rms_db(np.asarray(voice), int(vr))
+    m_db = window_rms_db(np.asarray(mixed), int(mr))
+    n = min(len(v_db), len(m_db))
+    if n < 40:
+        return None
+    v_db, m_db = v_db[:n], m_db[:n]
+    # A gap is where the NARRATION is essentially silent, 35 dB under its own loud level.
+    gaps = v_db < (np.percentile(v_db, 95) - 35.0)
+    if gaps.sum() < 20 or (~gaps).sum() < 20:
+        return None
+    return round(float(np.percentile(m_db[~gaps], 75)) - float(np.median(m_db[gaps])), 2)
 
 
 def loudness_metrics(video: Path) -> dict[str, Any]:

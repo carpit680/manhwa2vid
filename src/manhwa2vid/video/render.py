@@ -129,7 +129,7 @@ def _mix_audio(
     output: Path,
     config: dict[str, Any],
     pad_seconds: float = 0.0,
-) -> None:
+) -> dict[str, Any]:
     audio_dir = project_root / "audio"
     beat_files: list[Path] = []
     seen: set[str] = set()
@@ -140,7 +140,7 @@ def _mix_audio(
 
     if not beat_files:
         shutil.copy2(video_path, output)
-        return
+        return {}
 
     concat_list = output.with_suffix(".audio.txt")
     concat_list.write_text("\n".join(f"file '{f.resolve()}'" for f in beat_files), encoding="utf-8")
@@ -210,7 +210,13 @@ def _mix_audio(
         "-movflags", "+faststart",
         "-shortest", str(output),
     ])
+    # Measure the duck against the STEM before it is deleted — this is the only moment
+    # both signals exist, and the mix alone cannot recover it.
+    from manhwa2vid.measure.audio import duck_depth_from_stem
+
+    duck = duck_depth_from_stem(narration, output)
     narration.unlink(missing_ok=True)
+    return {"duck_depth_db": duck} if duck is not None else {}
 
 
 def _parse_loudnorm(text: str) -> dict[str, str] | None:
@@ -335,7 +341,8 @@ def render_video(
         # _mix_audio now masters and normalizes in one graph, so there is no separate
         # normalize step to undo it. The old shape mixed to an AAC intermediate and then
         # measured THAT, which is a different signal from the one being normalized.
-        _mix_audio(timeline, paths["root"], silent, output, config, pad_seconds=0.0)
+        audio_extra = _mix_audio(timeline, paths["root"], silent, output, config,
+                                 pad_seconds=0.0)
 
     if not final:
         shutil.copy2(output, paths["output"] / "preview.mp4")
@@ -355,5 +362,5 @@ def render_video(
     if run_qa:
         from manhwa2vid.video.qa_visual import enforce_render_qa
 
-        enforce_render_qa(output, paths, config)
+        enforce_render_qa(output, paths, config, extra_metrics=audio_extra)
     return output

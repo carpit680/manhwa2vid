@@ -346,17 +346,21 @@ def test_a_beat_does_not_open_on_the_panel_the_last_one_closed_on():
     assert plan[2][0][0] == "p3", "should advance to the next unclaimed panel, not repeat"
 
 
-def test_the_hold_survives_when_there_is_nothing_to_advance_to():
+def test_the_hold_survives_when_every_panel_is_already_shown():
     """An unrelated image is worse than a repeated one — keep the hold rather than
-    reaching for a panel that has nothing to do with the line."""
+    reaching for a panel that has nothing to do with the line.
+
+    The search looks BOTH ways in reading order now, so "nothing to advance to" means
+    genuinely nothing unused anywhere, not merely nothing after this panel."""
     plan = plan_shots(
         {"sentences": [
+            {"beat_id": 1, "panels": ["p1"]},
             {"beat_id": 1, "panels": ["p2"]},
             {"beat_id": 2, "panels": ["p2"]},
         ]},
-        {1: [{"seconds": 3.0}], 2: [{"seconds": 3.0}]},
+        {1: [{"seconds": 3.0}, {"seconds": 3.0}], 2: [{"seconds": 3.0}]},
         floor=1.0,
-        panel_order=["p1", "p2"],   # nothing unclaimed after p2
+        panel_order=["p1", "p2"],   # both already claimed
     )
     assert plan is not None
     assert plan[2][0][0] == "p2"
@@ -437,3 +441,22 @@ def test_the_cap_is_off_by_default():
         floor=1.0, panel_order=["p1", "p2"],
     )
     assert plan == {1: [("p1", 40.0)]}
+
+
+def test_a_hold_spanning_two_beats_is_broken_up():
+    """Everything else in the planner works inside ONE beat, so a shot that is legal in
+    beat N and legal in beat N+1 is still one long hold on screen: 7.2s + 7.2s on the same
+    panel is 14.4s to a viewer. Frozen Player shipped exactly that."""
+    plan = plan_shots(
+        {"sentences": [
+            {"number": 1, "beat_id": 1, "panels": ["p2"]},
+            {"number": 2, "beat_id": 2, "panels": ["p2"]},
+        ]},
+        {1: [{"seconds": 7.2}], 2: [{"seconds": 7.2}]},
+        floor=1.0,
+        panel_order=["p1", "p2", "p3"],
+        max_shot=10.0,
+    )
+    assert plan is not None
+    assert plan[1][0][0] != plan[2][0][0], "the viewer must see a cut between the beats"
+    assert abs(plan[1][0][1] + plan[2][0][1] - 14.4) < 1e-6, "A/V total preserved"

@@ -69,15 +69,53 @@ def _voice_over_bed(*, bed_amp: float, sr: int = 16000, seconds: int = 4) -> np.
     return bed + voice
 
 
-def test_duck_depth_is_speech_over_the_quiet_floor():
+def test_duck_depth_estimate_tracks_bed_level_but_is_only_an_estimate():
     from manhwa2vid.measure.audio import audio_metrics
 
     loud_bed = audio_metrics(_voice_over_bed(bed_amp=0.06), 16000)
     quiet_bed = audio_metrics(_voice_over_bed(bed_amp=0.006), 16000)
-    assert quiet_bed["duck_depth_db"] > loud_bed["duck_depth_db"] + 10, (
-        "a quieter bed must read as a deeper duck"
-    )
+    assert quiet_bed["duck_depth_estimate_db"] > loud_bed["duck_depth_estimate_db"] + 10
     assert loud_bed["quiet_floor_dbfs"] > quiet_bed["quiet_floor_dbfs"]
+    assert "duck_depth_db" not in loud_bed, (
+        "the estimate must not answer to the name the gate reads — it overstates the "
+        "duck by 2-7 dB on real material"
+    )
+
+
+def test_true_duck_depth_needs_the_narration_stem(tmp_path):
+    """The mix alone cannot tell a bed-only window from a quiet moment of speech. Measured
+    on a 6:22 render against a stem-derived truth of 2.91 dB, every mix-only estimate was
+    badly high: p10 of all windows 10.39, median of the lowest quarter 9.05, p30 5.26.
+    Acting on those would mix the bed far too loud while the gate said it was fine."""
+    import soundfile as sf
+
+    from manhwa2vid.measure.audio import duck_depth_from_stem
+
+    sr = 16000
+    voice = _voice_over_bed(bed_amp=0.0, sr=sr, seconds=8)          # speech + real gaps
+    for amp, expect_deeper in ((0.002, True), (0.05, False)):
+        t = np.arange(sr * 8) / sr
+        mix = voice + amp * np.sin(2 * np.pi * 220 * t)
+        sf.write(str(tmp_path / "n.wav"), voice, sr)
+        sf.write(str(tmp_path / "m.wav"), mix, sr)
+        depth = duck_depth_from_stem(tmp_path / "n.wav", tmp_path / "m.wav")
+        assert depth is not None
+        if expect_deeper:
+            quiet = depth
+        else:
+            assert quiet > depth + 10, "a quieter bed is a deeper duck"
+
+
+def test_true_duck_depth_returns_none_rather_than_guessing(tmp_path):
+    """A gate that cannot measure must report nothing, not a number."""
+    import soundfile as sf
+
+    from manhwa2vid.measure.audio import duck_depth_from_stem
+
+    sf.write(str(tmp_path / "n.wav"), np.zeros(800), 16000)
+    sf.write(str(tmp_path / "m.wav"), np.zeros(800), 16000)
+    assert duck_depth_from_stem(tmp_path / "n.wav", tmp_path / "m.wav") is None
+    assert duck_depth_from_stem(tmp_path / "missing.wav", tmp_path / "m.wav") is None
 
 
 def test_tonality_separates_music_from_no_music():
@@ -98,7 +136,7 @@ def test_audio_metrics_on_silence_does_not_explode():
 
     m = audio_metrics(np.zeros(16000), 16000)
     assert m["quiet_floor_dbfs"] < -100 and m["tonality_ratio"] == 0.0
-    assert audio_metrics(np.array([]), 16000)["duck_depth_db"] == 0.0
+    assert audio_metrics(np.array([]), 16000)["duck_depth_estimate_db"] == 0.0
 
 
 # --- binding --------------------------------------------------------------------------

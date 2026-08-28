@@ -78,7 +78,7 @@ def build_filter(
     if not with_bed:
         return f"[1:a]{voice}{pad},{loudnorm}[aout]"
 
-    bed_db = float(get_nested(config, "video", "bgm_gain_db", default=-6.0))
+    bed_db = float(get_nested(config, "video", "bgm_gain_db", default=-30.0))
     # Ducking is measured, not eyeballed: `bgm_gain_db` is the one number to turn until
     # the audio-duck-depth gate reads 12-15 dB. The old linear `bgm_volume` is gone —
     # two controls fighting over the same level is how it ended up 19.5 dB down.
