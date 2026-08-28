@@ -312,6 +312,11 @@ video:
   # Ours panned on 93% of shots (47% over 0.25) and read as one continuous scroll.
   max_pan_frame_fraction: 0.20  # cap on per-shot travel, as a fraction of the window
   pan_min_seconds: 1.8          # shorter shots hold still — fast AND moving is jarring
+  # Longest one image may hold before the planner splits it across two panels. The
+  # reference channel's own longest shot is 16.37s; 10 leaves room under that. Only
+  # splits when a spare unused panel exists and the shot spans >=2 sentences, so the
+  # cut lands on a sentence boundary.
+  max_shot_seconds: 10.0
   max_dwell_seconds: 7.0    # longer shots get a mid re-frame cut on the same panel
   bubble_salience_weight: 0.40  # how hard lettering repels the camera; 0.15 shoved it off the subject
 

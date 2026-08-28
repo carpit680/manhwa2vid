@@ -360,3 +360,80 @@ def test_the_hold_survives_when_there_is_nothing_to_advance_to():
     )
     assert plan is not None
     assert plan[2][0][0] == "p2"
+
+
+def test_an_over_long_shot_is_split_across_a_spare_panel():
+    """Solo Leveling shipped one image held 27.8s and Frozen Player 18.6s, both from a
+    beat carrying more narration than it has panels. The reference's own longest is
+    16.37s."""
+    plan = plan_shots(
+        {"sentences": [
+            {"number": 1, "beat_id": 1, "panels": ["p1"]},
+            {"number": 2, "beat_id": 1, "panels": ["p1"]},
+        ]},
+        {1: [{"seconds": 7.0}, {"seconds": 7.0}]},
+        floor=1.0,
+        panel_order=["p1", "p2", "p3"],
+        max_shot=10.0,
+    )
+    assert plan is not None
+    assert max(sec for _pid, sec in plan[1]) <= 10.0
+    assert {pid for pid, _sec in plan[1]} == {"p1", "p2"}
+    assert abs(sum(sec for _pid, sec in plan[1]) - 14.0) < 1e-6, "A/V total preserved"
+
+
+def test_a_very_long_beat_keeps_splitting_until_every_shot_is_legal():
+    """The first half of a split can still be over the cap, so the pass re-examines it."""
+    plan = plan_shots(
+        {"sentences": [{"number": i, "beat_id": 1, "panels": ["p1"]} for i in range(1, 5)]},
+        {1: [{"seconds": 6.0}] * 4},
+        floor=1.0,
+        panel_order=["p1", "p2", "p3", "p4"],
+        max_shot=10.0,
+    )
+    assert plan is not None
+    assert max(sec for _pid, sec in plan[1]) <= 10.0
+    assert abs(sum(sec for _pid, sec in plan[1]) - 24.0) < 1e-6
+
+
+def test_a_long_shot_borrows_backwards_when_nothing_follows():
+    """These holds sit at the END of a chapter with no unused panel after them, which is
+    why a forward-only search could never fix them. An unused panel is art the reader saw
+    on the same pages either way."""
+    plan = plan_shots(
+        {"sentences": [
+            {"number": 1, "beat_id": 1, "panels": ["p3"]},
+            {"number": 2, "beat_id": 1, "panels": ["p3"]},
+        ]},
+        {1: [{"seconds": 9.0}, {"seconds": 9.0}]},
+        floor=1.0,
+        panel_order=["p1", "p2", "p3"],
+        max_shot=10.0,
+    )
+    assert plan is not None
+    assert {pid for pid, _sec in plan[1]} == {"p2", "p3"}
+
+
+def test_a_single_sentence_shot_is_never_split():
+    """Splitting inside one sentence would cut mid-thought; the planner only splits where
+    a sentence boundary already exists."""
+    plan = plan_shots(
+        {"sentences": [{"number": 1, "beat_id": 1, "panels": ["p1"]}]},
+        {1: [{"seconds": 30.0}]},
+        floor=1.0,
+        panel_order=["p1", "p2"],
+        max_shot=10.0,
+    )
+    assert plan == {1: [("p1", 30.0)]}
+
+
+def test_the_cap_is_off_by_default():
+    """max_shot=0 keeps the previous behaviour, so every other test in this file still
+    describes the planner it was written against."""
+    plan = plan_shots(
+        {"sentences": [{"number": 1, "beat_id": 1, "panels": ["p1"]},
+                       {"number": 2, "beat_id": 1, "panels": ["p1"]}]},
+        {1: [{"seconds": 20.0}, {"seconds": 20.0}]},
+        floor=1.0, panel_order=["p1", "p2"],
+    )
+    assert plan == {1: [("p1", 40.0)]}

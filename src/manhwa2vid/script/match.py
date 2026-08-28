@@ -231,6 +231,7 @@ def plan_shots(
     panel_order: list[str] | None = None,
     accent_floor: float = 0.4,
     text_only: set[str] | None = None,
+    max_shot: float = 0.0,
 ) -> dict[int, list[tuple[str, float]]] | None:
     """(panel, seconds) per beat. See `plan_shots_with_sentences` for the full result.
 
@@ -241,7 +242,7 @@ def plan_shots(
     """
     result = plan_shots_with_sentences(
         shotlist, segments_by_beat, floor=floor, panel_order=panel_order,
-        accent_floor=accent_floor, text_only=text_only,
+        accent_floor=accent_floor, text_only=text_only, max_shot=max_shot,
     )
     if result is None:
         return None
@@ -256,6 +257,7 @@ def plan_shots_with_sentences(
     panel_order: list[str] | None = None,
     accent_floor: float = 0.4,
     text_only: set[str] | None = None,
+    max_shot: float = 0.0,
 ) -> dict[int, list[tuple[str, float, list[int]]]] | None:
     """Join claims with measured sentence seconds into per-beat shots.
 
@@ -495,6 +497,50 @@ def plan_shots_with_sentences(
                 merged.pop(k + 1)
                 run -= 1
             i = max(j, i + 1)
+
+        # Split a shot that holds one image too long. The reference channel's own longest
+        # is 16.37s; Solo Leveling shipped 27.8s and Frozen Player 18.6s, both from a
+        # beat carrying more narration than it has panels.
+        #
+        # The panel it borrows is the nearest UNUSED one in reading order, searched both
+        # ways. Searching only forward is why the earlier cross-beat fix could not help
+        # these: they sit at the end of their chapter with nothing after them. Borrowing
+        # backwards is safe because an unused panel is art the reader saw on the same
+        # pages — and 41% (FP) / 28% (SL) of story panels never reach the screen at all,
+        # so this pays the same debt twice.
+        if panel_order and max_shot > 0:
+            order_pos = {pid: idx for idx, pid in enumerate(panel_order)}
+            used = {row[0] for rows in plan.values() for row in rows}
+            used.update(row[0] for row in merged)
+            i = 0
+            while i < len(merged):
+                pid, sec, accent, nums = merged[i]
+                if sec <= max_shot or pid not in order_pos or len(nums) < 2:
+                    i += 1
+                    continue
+                here = order_pos[pid]
+                spare = min(
+                    (
+                        cand for cand in panel_order
+                        if cand not in used and cand not in (text_only or ())
+                    ),
+                    key=lambda cand: abs(order_pos[cand] - here),
+                    default=None,
+                )
+                if spare is None:
+                    i += 1
+                    continue
+                # Split the narration, not just the clock: the second half of the
+                # sentences moves to the borrowed panel, so the cut lands on a sentence
+                # boundary rather than mid-thought.
+                half = len(nums) // 2
+                share = sec * (len(nums) - half) / len(nums)
+                merged[i] = [pid, sec - share, accent, nums[:half]]
+                merged.insert(i + 1, [spare, share, accent, nums[half:]])
+                used.add(spare)
+                # Do NOT advance: the first half may still be over the cap. Termination is
+                # guaranteed because a split halves the sentence count and the `< 2` guard
+                # stops at one sentence.
 
         if merged:
             plan[beat_id] = [

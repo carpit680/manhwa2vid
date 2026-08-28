@@ -116,6 +116,9 @@ def run_tts_and_timeline(
             panel_order=fill_order,
             accent_floor=accent_floor,
             text_only=text_only,
+            # Cap one image's screen time. The reference's own longest shot is 16.37s;
+            # a cross-beat hold shipped 27.8s on Solo Leveling.
+            max_shot=float(get_nested(config, "video", "max_shot_seconds", default=10.0)),
         )
         if shot_plan:
             shots = sum(len(v) for v in shot_plan.values())
