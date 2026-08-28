@@ -333,8 +333,11 @@ def render_video(
                     config,
                     upscale_map,
                     # A viewer decides in the first ten seconds, so the opening shots are
-                    # framed for artwork rather than for contrast.
-                    prefer_art=acc_time <= opening_art_seconds,
+                    # framed for artwork rather than for contrast. Judged on the shot's
+                    # START: `acc_time` is already its END here, and testing that excluded
+                    # the shot STRADDLING the boundary — which is precisely the one that
+                    # kept Solo Leveling's opening failing, at 74% lettering on t=14.5s.
+                    prefer_art=(acc_time - entry.duration) < opening_art_seconds,
                     num_frames=num_frames,
                 )
                 clips.append(clip)
