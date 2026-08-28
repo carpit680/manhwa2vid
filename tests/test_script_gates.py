@@ -114,3 +114,28 @@ def test_noun_repetition_exempts_the_cast(tmp_path: Path) -> None:
 def test_quoted_dialogue_counts_actual_quotes(tmp_path: Path) -> None:
     r = _report(tmp_path, 'He says, "Then leave." She does not answer him at all.')
     assert r["quoted-dialogue"]["quoted_spans"] == 1
+
+
+def test_quoted_span_counter_ignores_apostrophes(tmp_path: Path) -> None:
+    """The counter originally treated the ASCII apostrophe as a quote delimiter, so every
+    contraction matched. It reported the reference channel at 1.62 "quoted spans" per 1000
+    words when the spans it found were fragments like "re nothing" out of "they're
+    nothing" — and that number nearly rewrote the writer's prompt."""
+    from manhwa2vid.measure.script_text import quoted_span_rate
+
+    contractions = "They're nothing. He's done. It isn't over. She'd know. We'll see."
+    assert quoted_span_rate(contractions)["quoted_spans"] == 0
+
+    real = 'He turns and says, "This can\'t be happening." Then he runs.'
+    assert quoted_span_rate(real)["quoted_spans"] == 1
+    assert quoted_span_rate('She whispers “That’s right.”')["quoted_spans"] == 1
+
+
+def test_the_writer_is_told_to_quote_because_the_reference_does(tmp_path: Path) -> None:
+    """The prompt used to forbid verbatim quotes outright. Re-measuring the reference with
+    a working counter found 87 real double-quoted lines in 75k words — short, sharp ones
+    like "That's right." — so the instruction contradicted the channel being imitated."""
+    from manhwa2vid.script.freeform import _SYSTEM
+
+    assert "Never quote a line" not in _SYSTEM
+    assert "QUOTE THE PUNCHY LINES VERBATIM" in _SYSTEM

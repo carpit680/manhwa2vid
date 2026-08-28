@@ -31,11 +31,11 @@ console = Console()
 # in measure/script_text.py — see reports/render_audit_2026-08-28.md §3. Floors are a
 # fraction of the reference, not the reference itself: this is a floor, not a target.
 _REF_VERBS_PER_1K = 31.34
-_REF_QUOTED_PER_1K = 1.62
+_REF_QUOTED_PER_1K = 1.16
 _REF_SHORT_PCT = 21.5
 _REF_MEAN_WORDS = 12.76
 _VERBS_MIN_PER_1K = 18.0   # brief's number, now justified against a like-for-like 31.34
-_QUOTED_MIN_PER_1K = 0.5   # brief's number; reference 1.62
+_QUOTED_MIN_PER_1K = 0.5   # brief's number; reference 1.16 re-measured
 # The brief proposed 25%. The reference is 21.5%, so 25% would fail the channel being
 # imitated -- and Solo Leveling at 23.7% would fail while being MORE reference-like than
 # the reference. 18% sits below the reference with margin.

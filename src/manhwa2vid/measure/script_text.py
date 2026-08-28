@@ -27,7 +27,11 @@ from manhwa2vid.script.sentences import split_sentences
 DIALOGUE_VERBS = ("says", "asks", "tells", "replies", "answers", "explains", "admits")
 
 _WORD_RE = re.compile(r"[A-Za-z']+")
-_QUOTE_RE = re.compile(r"[\"“‘']([^\"“”‘’]{3,})[\"”’]")
+# DOUBLE quotes only, straight or curly. The ASCII apostrophe is excluded deliberately:
+# including it matched every contraction in the corpus and reported the reference channel
+# at 1.62 "quoted spans" per 1000 words, when the real spans it found were fragments like
+# "re nothing" out of "they're nothing". That number nearly rewrote the writer's prompt.
+_QUOTE_RE = re.compile(r"[\"“]([^\"“”]{3,}?)[\"”]")
 
 # Words that carry no story weight, so repeating them is not the defect the gate is for.
 _STOPWORDS = frozenset("""

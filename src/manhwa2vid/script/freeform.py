@@ -51,9 +51,14 @@ into a clause or drop it entirely rather than replaying it as new plot.
 VOICE — wry, confident, gen-Z-coded. Measured targets from the reference channel:
 - Present tense, third person. Past tense only for genuine backstory.
 - Mean sentence ~12 words; about 1 in 4 sentences under 7 words. Vary the rhythm.
-- Narrate dialogue as reported speech ("he asks whether…", "she warns him that…") —
-  roughly one says/asks/tells/warns-class verb every 32 words. Never quote a line
-  verbatim, never read a speech bubble aloud.
+- LET PEOPLE SPEAK. This is the single biggest gap between this channel and the
+  reference. Mostly reported speech ("he asks whether…", "she warns him that…") — one
+  says/asks/tells/warns-class verb every 32 words, which is roughly one per two
+  sentences, not one per paragraph. Count them as you write.
+- QUOTE THE PUNCHY LINES VERBATIM, in double quotes, about once per 900 words. The
+  reference does this and it lands: "That's right.", "This can't be happening.",
+  "I'll kill you and end this nightmare." Short, sharp, a line a character actually
+  says. Do not quote exposition and do not read a whole bubble aloud — one clause.
 - A dry read on events is wanted, about 8 evaluative asides per 1000 words: "which is
   probably smart when you're the weakest in the room". Casual register is correct —
   "bro", "our guy", "dude" — and mild profanity is fine where the moment earns it.
