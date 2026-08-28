@@ -27,6 +27,20 @@ from manhwa2vid.script.sentences import split_sentences
 
 console = Console()
 
+# Prose bands. Reference values measured 2026-08-28 from the Mamoru SRT with the counters
+# in measure/script_text.py — see reports/render_audit_2026-08-28.md §3. Floors are a
+# fraction of the reference, not the reference itself: this is a floor, not a target.
+_REF_VERBS_PER_1K = 31.34
+_REF_QUOTED_PER_1K = 1.62
+_REF_SHORT_PCT = 21.5
+_REF_MEAN_WORDS = 12.76
+_VERBS_MIN_PER_1K = 18.0   # brief's number, now justified against a like-for-like 31.34
+_QUOTED_MIN_PER_1K = 0.5   # brief's number; reference 1.62
+# The brief proposed 25%. The reference is 21.5%, so 25% would fail the channel being
+# imitated -- and Solo Leveling at 23.7% would fail while being MORE reference-like than
+# the reference. 18% sits below the reference with margin.
+_SHORT_MIN_PCT = 18.0
+
 #: Sentence-case words that open a sentence are not evidence of a name.
 _CAPITALISED_RE = re.compile(r"\b([A-Z][a-z]+(?:[- ][A-Z][a-z]+)*)\b")
 #: "E-Rank Hunter", "S-Class Gate" — a single-letter grade prefix does not match
@@ -186,10 +200,24 @@ def generate_story_first_script(
         report.gates.append(gate)
 
     # Identity: every name in the narration must be one the glossary knows.
-    strangers = unknown_names(text, glossary_names(paths))
+    # The SERIES TITLE is a legitimate proper noun in the narration — the closing ask
+    # names it ("Where <title> goes from here...", script/outro.py) — but it lives in
+    # meta, not in the glossary's characters or terms. Promoting this gate to blocking
+    # surfaced that immediately: it flagged the title of the very project under test.
+    allowed = glossary_names(paths) | {meta.title, *meta.title.split()}
+    strangers = unknown_names(text, allowed)
+    # BLOCKING. It was warn-only, and both audited videos shipped over it. Promoted only
+    # after its false-positive rate was driven to zero and pinned: the two known cases
+    # ("Rank Hunter" from "E-Rank Hunter", "Earth Jun-Ho" from a correct sentence) have
+    # regression tests, and it passes both projects clean.
+    #
+    # Note what it CANNOT see: the audio. "Carthenon Temple" and its own glossary alias
+    # "Cartenon Temple" are both known names, so this passes — and the TTS then speaks
+    # them differently (kˈɑɹθɛnən vs kˈɑɹtɛnən). One place, two spoken names. That is a
+    # separate failure with a separate guard; see reports/render_audit_2026-08-28.md §8.
     report.add(
         "name-integrity",
-        "warn" if strangers else True,
+        not strangers,
         f"narration uses name(s) absent from the glossary: {strangers} — either the "
         "writer invented them or the glossary is missing an alias; fix glossary.json",
         unknown=strangers,
@@ -202,6 +230,63 @@ def generate_story_first_script(
         False if broken else True,
         "; ".join(f"beat {b}: {v[0]}" for b, v in sorted(broken.items())[:3]),
         broken=sorted(broken),
+    )
+
+    # --- prose texture vs the reference channel -----------------------------------------
+    #
+    # The brief ranks these highest, from ~950 comments across 16 videos and 6 channels:
+    # viewers punish script errors roughly two orders of magnitude harder than voice
+    # quality. All bands are measured with the SAME counters used on the reference SRT
+    # (reference/profile_srt.py parity is pinned in tests/test_measure.py), because a
+    # threshold derived from one counter and enforced by another is a mistake this project
+    # has already made.
+    from manhwa2vid.measure.script_text import (
+        dialogue_verb_density,
+        noun_repetition,
+        quoted_span_rate,
+        sentence_length_stats,
+    )
+
+    verbs = dialogue_verb_density(text)
+    report.add(
+        "dialogue-verb-density",
+        True if verbs["per_1k"] >= _VERBS_MIN_PER_1K else "warn",
+        f"{verbs['per_1k']} reporting verbs per 1000 words (floor {_VERBS_MIN_PER_1K}, "
+        f"reference {_REF_VERBS_PER_1K}) — the reference lets people SPEAK",
+        **verbs,
+    )
+
+    quoted = quoted_span_rate(text)
+    report.add(
+        "quoted-dialogue",
+        True if quoted["per_1k"] >= _QUOTED_MIN_PER_1K else "warn",
+        f"{quoted['per_1k']} quoted spans per 1000 words (floor {_QUOTED_MIN_PER_1K}, "
+        f"reference {_REF_QUOTED_PER_1K})",
+        **quoted,
+    )
+
+    lengths = sentence_length_stats(text)
+    report.add(
+        "sentence-length",
+        True if lengths["under_8_pct"] >= _SHORT_MIN_PCT else "warn",
+        f"{lengths['under_8_pct']}% of sentences run under 8 words (floor "
+        f"{_SHORT_MIN_PCT}%, reference {_REF_SHORT_PCT}%); mean {lengths['mean_words']}w "
+        f"against the reference's {_REF_MEAN_WORDS}w",
+        **lengths,
+    )
+
+    # The niche's second-most-liked craft complaint is a channel repeating a bare noun
+    # where a pronoun belonged (78 likes for a viewer asking them to count it). Character
+    # and place names are exempt — a recap MUST repeat its protagonist's name.
+    repeats = noun_repetition(text, exempt=allowed)
+    report.add(
+        "noun-repetition",
+        "warn" if repeats["findings"] else True,
+        "; ".join(f"{f['word']} x{f['count']}" for f in repeats["findings"][:5])
+        + f" in a {repeats['window_words']}-word window (limit {repeats['max_count']})"
+        if repeats["findings"] else "",
+        worst_count=repeats["worst_count"],
+        findings=repeats["findings"][:10],
     )
 
     residual = (record.get("revision") or {}).get("residual") or []
