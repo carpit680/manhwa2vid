@@ -20,6 +20,9 @@ dependencies = [
     "httpx>=0.27",
     "openai>=1.0",
     "python-dotenv>=1.0",
+    # Reading the finished mix for the audio QA gates (bed level, duck depth, tonality).
+    # Was tts-extra-only, but QA runs on every render regardless of TTS provider.
+    "soundfile>=0.12",
     # Last-resort repair for malformed model JSON (literal newlines in strings, trailing
     # commas, single-quoted keys, unescaped quotes in prose). See _extract_json_object.
     "json-repair>=0.30",

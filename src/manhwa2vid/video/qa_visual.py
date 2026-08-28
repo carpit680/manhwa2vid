@@ -14,19 +14,34 @@ read reference/ (tests/test_series_agnostic.py enforces that).
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 from rich.console import Console
 
+from manhwa2vid.measure.audio import loudness_metrics
+from manhwa2vid.measure.frames import (
+    FRAME_FPS,
+    FRAME_H,
+    FRAME_W,
+    bubble_stats,
+    dead_width,
+    iter_frames,
+    lettering_masks,
+)
+from manhwa2vid.measure.shots import detect_cuts, shot_lengths
 from manhwa2vid.qa import QAReport, enforce, qa_forced
 
 console = Console()
 
-_W, _H, _FPS = 480, 270, 2.0
+# The primitives live in `manhwa2vid.measure` so the gate that blocks a render and the
+# tool that profiles the reference channel cannot drift apart. These aliases keep the
+# historical names working for tests and callers.
+_W, _H, _FPS = FRAME_W, FRAME_H, FRAME_FPS
+_iter_frames = iter_frames
+_bubble_stats = bubble_stats
+_dead_width = dead_width
 
 # Measured from the reference channel (see reference/mamoru_shot_profile.md):
 # median 2.87s, 22% of shots under 1.5s, 16.3 cuts/min. Report-only bands.
@@ -40,57 +55,6 @@ _REF_UNDER_1_5_PCT = 22.0
 # report-only. See the bubble-dominance note in `enforce_render_qa`.
 _REF_BUBBLE_PCT = 21.9
 _REF_CLIPPED_PCT = 43.9
-
-
-def _iter_frames(video: Path):
-    proc = subprocess.Popen(
-        [
-            "ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(video),
-            "-vf", f"fps={_FPS},scale={_W}:{_H}", "-pix_fmt", "gray",
-            "-f", "rawvideo", "-",
-        ],
-        stdout=subprocess.PIPE,
-    )
-    size = _W * _H
-    assert proc.stdout is not None
-    while True:
-        buf = proc.stdout.read(size)
-        if len(buf) < size:
-            break
-        yield np.frombuffer(buf, np.uint8).reshape(_H, _W)
-
-
-def _bubble_stats(frame: np.ndarray) -> tuple[float, bool]:
-    """(largest TEXT-BEARING bright blob as frame fraction, any such blob edge-clipped).
-
-    A speech bubble is a solid bright blob WITH dark text strokes inside it; a white
-    wall or bright sky is a solid bright blob without them. The first version had no
-    text test and scored a hospital wall as a 40%-of-frame 'bubble' — the gate then
-    failed a render whose frames read fine. Dark-pixel fraction inside the blob's box
-    separates the two (measured: bubbles 2-20%, backgrounds ~0%)."""
-    bright = (frame > 232).astype(np.uint8)
-    bright = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
-    count, _lbl, stats, _c = cv2.connectedComponentsWithStats(bright, 8)
-    best, clipped = 0.0, False
-    for i in range(1, count):
-        x, y, w, h, area = (int(v) for v in stats[i])
-        frac = area / (_W * _H)
-        if frac < 0.02 or area / max(w * h, 1) < 0.45:
-            continue
-        box = frame[y : y + h, x : x + w]
-        dark = float((box < 100).mean())
-        if not (0.01 <= dark <= 0.30):
-            continue  # no text inside: background, not a bubble
-        best = max(best, frac)
-        if (y <= 1 or y + h >= _H - 1 or x <= 1 or x + w >= _W - 1) and frac > 0.03:
-            clipped = True
-    return best, clipped
-
-
-def _dead_width(frame: np.ndarray) -> float:
-    gx = np.abs(np.diff(frame.astype(np.int16), axis=1)).mean(axis=0)
-    thr = max(float(gx.max()) * 0.12, 1.0)
-    return 1.0 - float((gx > thr).sum()) / _W
 
 
 def measure_video(video: Path) -> dict[str, Any]:
@@ -116,12 +80,10 @@ def measure_video(video: Path) -> dict[str, Any]:
     # bright-blob test below. The two disagreed on the 2026-08-27 render and the blob
     # test was wrong: it read the Frost Queen's pale hair as a 34%-of-frame "bubble" and
     # failed an opening that had in fact improved, while lettering fell 48% -> 30%.
-    from manhwa2vid.panels.regions import _text_and_content_masks, _text_norm
-
     opening_text = 0.0
     for f in opening_frames[:open_n]:
-        t, _c, _ct = _text_and_content_masks(_text_norm(f))
-        opening_text = max(opening_text, float(t.mean()))
+        text, _content = lettering_masks(f)
+        opening_text = max(opening_text, float(text.mean()))
     metrics: dict[str, Any] = {
         "frames": n,
         "opening_luma_mean": round(float(np.mean(lumas[:open_n])), 1),
@@ -135,43 +97,12 @@ def measure_video(video: Path) -> dict[str, Any]:
         "dead_over_50pct_frames_pct": round(100.0 * float(np.mean([d > 0.5 for d in dead])), 1),
     }
 
-    # Audio true peak from a loudnorm measurement pass.
-    proc = subprocess.run(
-        [
-            "ffmpeg", "-nostdin", "-hide_banner", "-i", str(video),
-            "-af", "loudnorm=print_format=json", "-f", "null", "-",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    start = proc.stderr.rfind("{")
-    if start != -1:
-        try:
-            data = json.loads(proc.stderr[start:])
-            metrics["true_peak_dbtp"] = float(data.get("input_tp"))
-            metrics["loudness_lufs"] = float(data.get("input_i"))
-        except (ValueError, TypeError):
-            pass
+    metrics.update(loudness_metrics(video))
 
     # Shot lengths via scene detection — same detector the reference was profiled with.
-    proc = subprocess.run(
-        [
-            "ffmpeg", "-nostdin", "-hide_banner", "-nostats", "-i", str(video),
-            "-vf", "select='gt(scene,0.30)',showinfo", "-f", "null", "-",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    cuts = []
-    for line in proc.stderr.splitlines():
-        if "showinfo" in line and "pts_time:" in line:
-            try:
-                cuts.append(float(line.split("pts_time:")[1].split()[0]))
-            except (ValueError, IndexError):
-                continue
+    cuts = detect_cuts(video)
     duration = n / _FPS
-    edges = [0.0, *cuts, duration]
-    shots = [b - a for a, b in zip(edges, edges[1:]) if b - a > 0.05]
+    shots = shot_lengths(cuts, duration)
     if shots:
         s = sorted(shots)
         metrics["shots"] = len(shots)
