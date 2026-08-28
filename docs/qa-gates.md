@@ -16,6 +16,23 @@ existing projects. Until then it warns, with the promotion recorded here. This i
 timidity: both audited videos shipped over a FAILING `name-integrity`, because a gate that
 cries wolf teaches the operator to reach for `--force-past-qa`.
 
+## A note on three broken metrics
+
+Three measurements in this document were wrong before they were right, and each was caught
+only by looking at what the number was made of rather than at the number:
+
+1. **Duck depth** read p75 − p10 of the mix. It said 10.39 dB where the truth was 2.91 —
+   the bed was three decibels under the voice while the gate called it healthy. Now
+   measured from the narration stem at mix time.
+2. **Quoted spans** treated the apostrophe as a quote delimiter, so every contraction
+   matched. It put the reference at 1.62 per 1k; the real figure is 1.16, and the spans it
+   had found were fragments like "re nothing" out of "they're nothing".
+3. **Frame lettering** is validated on panels and does not transfer to rendered frames,
+   where a brick wall outscores a real speech bubble.
+
+The common shape: a plausible number, in the right units, moving in the right direction,
+measuring the wrong thing. Print the matches, not just the count.
+
 ## script-story-first
 
 | gate | severity | threshold | source |
@@ -26,7 +43,7 @@ cries wolf teaches the operator to reach for `--force-past-qa`.
 | `beats-wellformed` | fail | no broken/truncated sentences | pre-existing |
 | `grounding` | warn | audit findings survived the revision | pre-existing |
 | `dialogue-verb-density` | warn | ≥ 18 per 1k words | reference **31.34**; floor is ~57% of it |
-| `quoted-dialogue` | warn | ≥ 0.5 spans per 1k | reference **1.62** |
+| `quoted-dialogue` | warn | ≥ 0.5 spans per 1k | reference **1.16** (re-measured; the first figure counted apostrophes in contractions) |
 | `sentence-length` | warn | ≥ 18% of sentences under 8 words | reference **21.5%**. The brief said 25%, which the reference itself would fail |
 | `noun-repetition` | warn | ≤ 4 repeats of a content word per rolling 200 words, cast exempt | brief |
 
@@ -52,8 +69,8 @@ cries wolf teaches the operator to reach for `--force-past-qa`.
 | `true-peak` | fail | ≤ −1.0 dBTP | audio spec §6, tightened from −0.8 |
 | `audio-loudness` | fail outside [target−3, +2], warn outside ±1 | vs `export.loudness_target` | **not** the spec's −16±1, which codifies the current undershoot |
 | `audio-music-present` | **fail** | bed floor > −40 dBFS **and** tonality > 5 | audio spec §6; catches an empty `assets/bgm/` |
-| `audio-duck-depth` | warn → fail | 12–15 dB | audio spec §6; promotes when the mastering chain lands |
-| `audio-lra` | warn → fail | 5–9 LU | audio spec §6; promotes when the mastering chain lands |
+| `audio-duck-depth` | warn → fail | 12–15 dB | audio spec §6. Measured from the narration STEM at mix time — the mix alone overstates the duck by 2–7 dB, so the gate is absent rather than wrong when the stem is unavailable |
+| `audio-lra` | warn | 5–9 LU | audio spec §6, **unverified**: the reference video in this repo has no audio stream, so there is no like-for-like value, and the spec's own chain compresses at 2.5:1 which reduces range. Stays a warn — see render_audit_2026-08-28 §9 |
 | `shot-median` | warn | 2.0–3.5s | reference 2.30–2.87s |
 | `shot-accent-share` | warn | ≥ 15% under 1.5s | reference 21.8–23.6% |
 | `shot-cadence` | warn | 12–22 cuts/min | reference 16.2–**20.08**; the brief's 12–20 would fail W1 |
