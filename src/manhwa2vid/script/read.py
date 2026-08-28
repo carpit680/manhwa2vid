@@ -20,6 +20,8 @@ cross-check rather than a source.
 
 from __future__ import annotations
 
+import re
+
 import json
 from pathlib import Path
 from typing import Any
@@ -115,6 +117,28 @@ def read_chapter_facts(
     return facts
 
 
+from manhwa2vid.script.lint import PLACEHOLDER_PREFIXES
+
+
+def _normalise_cast_name(name: str) -> str:
+    """Strip placeholder prefixes so a DESCRIPTOR never enters as a canonical name.
+
+    `read`'s prompt says "do not invent names for unnamed characters — describe them in
+    `note`". The model's usual half-compliance is to invent no name but file the
+    descriptor as one: `"Unnamed Man in Cowboy Hat"`. Glossary keys are the allowlist
+    the writer is handed AND the set `name-integrity` scores against, so that key
+    licenses "the unnamed man in a cowboy hat" in the finished narration.
+
+    Dropping the prefix keeps the useful half ("Man in Cowboy Hat"). A name that is
+    nothing but a placeholder carries no information and is refused outright. This runs
+    on the INCOMING entry only, so a human's own glossary key is still never rewritten.
+    """
+    cleaned = re.sub(
+        r"^(?:" + "|".join(PLACEHOLDER_PREFIXES) + r")\b[\s:,-]*", "", name, flags=re.I
+    ).strip()
+    return cleaned
+
+
 def merge_cast_into_glossary(cast: list[dict[str, Any]], paths: dict[str, Path]) -> dict[str, Any]:
     """Add newly-seen names to the project glossary without overwriting human edits.
 
@@ -135,7 +159,7 @@ def merge_cast_into_glossary(cast: list[dict[str, Any]], paths: dict[str, Path])
 
     added_names, added_aliases = 0, 0
     for entry in cast:
-        name = str(entry.get("name") or "").strip()
+        name = _normalise_cast_name(str(entry.get("name") or "").strip())
         if not name:
             continue
         # `str(a)` on a JSON null yields the literal "None", which is truthy — a null

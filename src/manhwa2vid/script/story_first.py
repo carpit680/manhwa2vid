@@ -21,7 +21,7 @@ from manhwa2vid.script.align import align_script
 from manhwa2vid.script.audit import audit_and_revise
 from manhwa2vid.script.freeform import paragraphs, write_freeform_script
 from manhwa2vid.script.outro import append_outro
-from manhwa2vid.script.lint import lint_broken_sentences
+from manhwa2vid.script.lint import PLACEHOLDER_PREFIXES, lint_broken_sentences, strip_placeholder_descriptors
 from manhwa2vid.script.read import glossary_names, read_chapter_facts
 from manhwa2vid.script.sentences import split_sentences
 
@@ -181,6 +181,12 @@ def generate_story_first_script(
     # story. Appended AFTER the audit so it sees the final sentence it must follow,
     # and so the audit never tries to ground it against panels.
     text = append_outro(text, meta, paths, config)
+
+    # Cast-labelling placeholders read aloud as prose ("the unnamed man in a cowboy
+    # hat") are a data leak, not a wording preference, so they are removed in code
+    # rather than asked for in the prompt. Runs after every LLM stage — including the
+    # outro — and before alignment, so beats, shot list and TTS all see one text.
+    text = strip_placeholder_descriptors(text)
     paths["script_freeform"].write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
 
     beats, align_report = align_script(text, paths, config)
@@ -221,6 +227,24 @@ def generate_story_first_script(
         f"narration uses name(s) absent from the glossary: {strangers} — either the "
         "writer invented them or the glossary is missing an alias; fix glossary.json",
         unknown=strangers,
+    )
+
+    # A regression guard, not a discovery gate: `strip_placeholder_descriptors` runs
+    # above, so this can only fire if narration reached the beats down a path that
+    # skipped it.
+    leaked = sorted({
+        m.group(0).lower()
+        for b in beats
+        for m in re.finditer(
+            r"\b(?:" + "|".join(PLACEHOLDER_PREFIXES) + r")\s+\w+", b.narration, re.I
+        )
+    })
+    report.add(
+        "placeholder-descriptors",
+        not leaked,
+        f"narration reads a cast label aloud: {leaked} — a glossary key holds a "
+        "descriptor where a name belongs; fix glossary.json",
+        leaked=leaked,
     )
 
     # Deterministic well-formedness — the absolute checks, no rewriting.

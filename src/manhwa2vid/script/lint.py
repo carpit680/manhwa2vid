@@ -191,6 +191,52 @@ def find_hedge_violations(text: str) -> list[str]:
     return sorted({m.group(0).lower() for m in _HEDGE_RE.finditer(text)})
 
 
+PLACEHOLDER_PREFIXES = ("unnamed", "unidentified")
+
+# One pattern, so the article is only ever touched at a strip site. A standalone
+# `\ba(n)?\b` fixup pass would re-agree EVERY article in the narration and silently
+# rewrite "an hour" to "a hour".
+#
+# No re.IGNORECASE: the flag applies to the whole pattern, so a case-insensitive
+# `[a-z]` lookahead would match capitals too.
+_PLACEHOLDER_ADJ_RE = re.compile(
+    r"\b(?:(?P<art>[Aa]n?)\s+)?"
+    + r"(?:" + "|".join(f"[{w[0]}{w[0].upper()}]{w[1:]}" for w in PLACEHOLDER_PREFIXES) + r")"
+    + r"\s+(?=(?P<next>\w))"
+)
+
+
+def strip_placeholder_descriptors(text: str) -> str:
+    """Remove cast-labelling placeholders that leaked into narration as adjectives.
+
+    The read pass is told not to invent names for unnamed characters, and complies by
+    putting the DESCRIPTOR in the name field: `"Unnamed Man in Cowboy Hat"`. That key
+    becomes part of the canonical-name set handed to the writer and scored by
+    `name-integrity`, so the narration says "the unnamed man in a cowboy hat" — a data
+    label read aloud to the viewer. `merge_cast_into_glossary` now normalises the key,
+    but narration is also written from panel text and from cached drafts, so the
+    invariant is enforced on the finished prose too.
+
+    Only the ATTRIBUTIVE use is stripped (placeholder directly modifying a following
+    word), leaving "the man in a cowboy hat" — the descriptor the label carried
+    survives. Predicative use ("the swordsman stayed unnamed") is ordinary English and
+    is left alone. Any indefinite article in front re-agrees with the new head word.
+
+    Sentence terminators are untouched, so `split_sentences` yields the same count
+    before and after: `plan_shots` returns None when the sidecar's sentence count
+    diverges from the narration's, which would silently drop the entire shot plan back
+    to airtime weighting.
+    """
+
+    def _sub(m: re.Match[str]) -> str:
+        art = m.group("art")
+        if not art:
+            return ""
+        return f"{art[0]}{'n' if m.group('next').lower() in 'aeiou' else ''} "
+
+    return re.sub(r"[ \t]{2,}", " ", _PLACEHOLDER_ADJ_RE.sub(_sub, text))
+
+
 def local_sanitize_narration(text: str) -> str:
     """Fast regex cleanup before optional LLM rewrite."""
     cleaned = text
