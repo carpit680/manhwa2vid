@@ -240,3 +240,66 @@ detector would be the same error the `bubble-dominance` gate already made once.
 What would unblock them: a window-level detector validated the way the panel one was, on a
 labelled set of camera windows rather than panels. That is real work and it is not
 smuggled into a threshold.
+
+---
+
+## 8. Pronunciation: verified, attempted twice, rejected twice
+
+`docs/audio-quality-spec.md` §0 identified a real mechanism and this repo is exposed to it.
+The fix was tried, listened to, and **rejected**. Recording it so nobody rebuilds it.
+
+### The mechanism is real and reproduces here
+
+This install is **Path B**: `espeak-ng` is not on PATH, but `espeakng-loader` supplies a
+bundled binary, so Kokoro's fallback is active and out-of-lexicon names are
+**mispronounced rather than deleted**. `tools/qa/tts_env_check.py` settles this on any
+machine; run it before trusting anything here.
+
+**22 of 46** proper nouns across both projects' `glossary.json` are outside Kokoro's
+178k-entry lexicon and depend on espeak. The spec's examples reproduce exactly
+(`Baek`→"beek", `Song Chi-Yul`→"Song KAI-yul"), plus two this repo cares about more:
+
+- `Seo Jun-Ho` → `sˈiO ʤˈʌnhˌO` — "**SEE-oh** Jun-Ho". The Frozen Player protagonist,
+  said throughout every video shipped.
+- `Carthenon Temple` → `kˈɑɹθɛnən` but its own glossary alias `Cartenon Temple` →
+  `kˈɑɹtɛnən`. **One place, two spoken names.** This is `name-integrity`'s downstream
+  failure exactly: the gate passes because both spellings are known, and the audio drifts
+  anyway. It is also the niche's single most-liked craft complaint ("From Rowan to Robert
+  to Ramen to Ron to Roen to Rowen", 634 likes).
+
+### Both fixes lost to the baseline
+
+| attempt | design | envelope vs baseline | user verdict |
+|---|---|---|---|
+| v1 — spec §0.4 | 27 entries, per-syllable, phonetically faithful | **+26%** articulation (over-articulating) | **rejected** |
+| v2 — correction-01 §4 `MIN_LEX` | 8 entries, whole-name, override only broken consonants | **−6.2%** articulation | **rejected** |
+
+v2 is the important one. It was designed specifically to fix what v1 was rejected for, it
+succeeded on that measure, and on this repo's rosters it changed only two words
+(`Deok-gu` "dee-OCK-goo"→"DUCK-goo", `Chi-Yul` "KAI-yul"→"chee-yul"). It still sounded
+worse. Two attempts with opposite designs both lost.
+
+**Conclusion: injecting `lexicon.golds` entries degrades delivery on this voice regardless
+of how minimal the entry is.** A plausible mechanism — a gold entry is used verbatim, so
+the word stops participating in the sentence-level prosody espeak-derived phonemization
+feeds — but that is a hypothesis, not a measurement, and it is not needed to act on the
+result. **No lexicon is wired into the pipeline.** The correction's own §7 says it best:
+the phoneme string being "more correct" is not evidence that the audio is better.
+
+Methodological note: the first envelope check compared this detector's absolute
+articulation rate against the correction's 5.3/6.7 figures. Those came from a different
+peak-picker — this one reads the same espeak baseline at 7.47/s — so the comparison was
+meaningless. It now measures against the baseline it took itself. That is the third time
+in this project a cross-detector comparison has produced a wrong reading.
+
+### What survives, and what is still guarded
+
+- **The deletion guard stays.** Path A is catastrophic and silent: on a machine without
+  the espeak fallback, every out-of-lexicon name vanishes from the audio entirely. A
+  `tts-phoneme-coverage` gate — zero glossary names resolving to empty phonemes — is still
+  worth shipping. It guards deletion, not mispronunciation.
+- **`tts-lexicon-valid` is dropped**: there is no lexicon to validate.
+- **The remaining lever is the voice, not the phonemes.** A different voice may handle rare
+  phoneme sequences better, which is the spec's own argument for preferring H-hours
+  training data. That is measured in Phase 5 with F0, and any name-audio revisit rides on
+  it — with its own A/B, because that assumption is what failed twice here.

@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """Render the pronunciation A/B so a human can LISTEN. (audio-quality-spec §0.3 Script 3)
 
+VERDICT 2026-08-28: BOTH lexicons were REJECTED at the §0.6 listening gate. The 27-entry
+v1 lost to espeak (over-articulation, +26% articulation rate), and so did the 8-entry
+MIN_LEX from correction-01 — even though it changed only two words on this repo's rosters
+and measured -6.2% articulation, i.e. it fixed the defect v1 was rejected for.
+
+Two attempts with opposite designs, both worse to the user's ear. NO LEXICON IS WIRED INTO
+THE PIPELINE, and none should be added without a fresh A/B that the user accepts. Keep
+this tool: it is the harness for that A/B, and the probes beside it document a separate
+failure mode that IS worth guarding (see tts_g2p_probe.py).
+
 This is the step the spec could not run — its container had no egress for the model
 weights. It is the gate at §0.6: the phoneme-layer finding is real, but phonemes are only
 the model's input, and nobody has heard the output. Until someone does, "correct phonemes
