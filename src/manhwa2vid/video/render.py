@@ -294,6 +294,11 @@ def render_video(
             seen_paths.add(entry.panel_path)
             shown.append(paths["root"] / entry.panel_path)
     upscale_map = upscale_panels(shown, paths["root"], config)
+    # The window the opening-shot gate inspects. Shots STARTING inside it are framed for
+    # artwork rather than contrast; `acc_time` in the loop below is the shot's END.
+    opening_art_seconds = float(
+        get_nested(config, "video", "opening_art_seconds", default=15.0)
+    )
 
     with tempfile.TemporaryDirectory(prefix="m2v_") as tmp:
         frames_dir = Path(tmp) / "frames"

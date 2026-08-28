@@ -89,3 +89,73 @@ def test_cumulative_frame_accounting_matches_audio_length() -> None:
     assert abs(acc_frames / fps - total) < 1.0 / fps, "cumulative accounting stays exact"
     truncated = sum(max(int(d * fps), 1) for d in durations)
     assert total - truncated / fps > 2.0, "the old rule really did lose seconds"
+
+
+def test_render_video_runs_end_to_end(tmp_path) -> None:
+    """Nothing executed render_video, and a NameError shipped through that hole.
+
+    `opening_art_seconds` was referenced in the render loop but its definition landed
+    outside the function, so every render crashed. Two Solo Leveling renders died before
+    anyone noticed — and what noticed was the QA report still naming an older file, not a
+    test. This is small and slow-ish, and it earns that by exercising the real path:
+    camera, concat, mastering chain, two-pass loudnorm, QA.
+    """
+    import json
+    import shutil
+    import struct
+    import wave
+
+    import numpy as np
+    import pytest
+    from PIL import Image
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not on PATH")
+
+    from manhwa2vid.models import (
+        Panel, PanelBBox, ProjectMeta, SourceLanguage, SourceType, Timeline,
+        TimelineEntry, project_paths, save_json,
+    )
+    from manhwa2vid.video.render import render_video
+
+    paths = project_paths(tmp_path)
+    for key in ("pages", "panels", "audio", "output", "debug"):
+        paths[key].mkdir(parents=True, exist_ok=True)
+    save_json(paths["meta"], ProjectMeta(
+        slug="t", title="T", chapters="1", source_lang=SourceLanguage.EN,
+        source_type=SourceType.IMAGES, source_path=str(tmp_path), pdf_path=str(tmp_path),
+    ))
+
+    rng = np.random.default_rng(0)
+    panels = []
+    for i in (1, 2):
+        pid = f"p0001_{i:02d}"
+        art = np.repeat(np.linspace(40, 200, 400, dtype=np.uint8)[:, None], 300, axis=1)
+        Image.fromarray(np.dstack([art] * 3)).save(paths["panels"] / f"{pid}.png")
+        panels.append(Panel(id=pid, page_num=1, image_path=f"panels/{pid}.png",
+                            bbox=PanelBBox(x=0, y=0, width=300, height=400)))
+    save_json(paths["panels_json"], [p.model_dump() for p in panels])
+
+    wav = paths["audio"] / "beat_001.wav"
+    with wave.open(str(wav), "wb") as wf:
+        wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(24000)
+        tone = (0.2 * np.sin(2 * np.pi * 180 * np.arange(24000 * 3) / 24000) * 32767)
+        wf.writeframes(b"".join(struct.pack("<h", int(v)) for v in tone))
+
+    entries, cursor = [], 0.0
+    for p in panels:
+        entries.append(TimelineEntry(
+            panel_id=p.id, panel_path=p.image_path, start=cursor, end=cursor + 1.5,
+            duration=1.5, beat_id=1, audio_file="audio/beat_001.wav",
+            subtitle_text="line",
+        ))
+        cursor += 1.5
+    paths["timeline_json"].write_text(
+        Timeline(entries=entries, total_duration=cursor).model_dump_json()
+    )
+
+    out = render_video(ProjectMeta.model_validate(json.loads(paths["meta"].read_text())),
+                       paths, {"video": {"fps": 12, "render_qa": False},
+                               "export": {"preview_scale": 0.25}},
+                       preview=True, final=False, force=True)
+    assert out.exists() and out.stat().st_size > 1000, "render produced no video"
