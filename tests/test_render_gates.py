@@ -124,11 +124,16 @@ def test_composition_measures_are_reported_not_gated(monkeypatch, tmp_path):
     assert r["lettering-share"] == "pass" and r["bare-bubble"] == "pass"
 
 
-def test_opening_on_a_bubble_with_no_art_fails(monkeypatch, tmp_path):
-    """Solo Leveling opens on "E-RANK HUNTER." on black at t=6s — outside the old 4s
-    window entirely. Its quietest opening second carries 5.4% art against Frozen Player's
-    28.3% and the reference's 26.2-45.7%."""
+def test_opening_art_floor_separates_the_defect_from_dark_artwork(monkeypatch, tmp_path):
+    """Both sides, measured on real frames.
+
+    Defect: Solo Leveling opening on "E-RANK HUNTER." on black — 0.054 art.
+    Not a defect: Frozen Player's Frost Queen crown against a dark ground — 0.13. That
+    is a strong atmospheric shot, and a floor of 0.15 (the reference's window minimum,
+    chosen with no negative example) failed it.
+    """
     assert _run(monkeypatch, tmp_path, opening_art_min_second=0.054)["opening-shot"] == "fail"
+    assert _run(monkeypatch, tmp_path, opening_art_min_second=0.13)["opening-shot"] == "pass"
     assert _run(monkeypatch, tmp_path, opening_art_min_second=0.283)["opening-shot"] == "pass"
 
 
@@ -137,7 +142,7 @@ def test_opening_art_floor_does_not_fail_the_reference(monkeypatch, tmp_path):
     per-second minimum is 26.2%."""
     from manhwa2vid.video.qa_visual import _OPENING_ART_FAIL
 
-    assert _OPENING_ART_FAIL < 0.262
+    assert _OPENING_ART_FAIL < 0.262, "the floor must sit below the reference's own minimum"
     assert _run(monkeypatch, tmp_path, opening_art_min_second=0.262)["opening-shot"] == "pass"
 
 

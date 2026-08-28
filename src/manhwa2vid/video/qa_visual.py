@@ -81,7 +81,14 @@ _LONGTAIL_WARN_PCT, _LONGTAIL_FAIL_PCT = 18.0, 25.0  # brief said 15; reference 
 # measured: the reference's own per-second minimum over the first 15s is 26.2% (W2) and
 # 45.7% (W1), so the brief's proposed 50% floor would fail the reference.
 _OPENING_SECONDS = 15.0
-_OPENING_ART_FAIL, _OPENING_ART_WARN = 0.15, 0.25
+# Re-derived 2026-08-28 against BOTH sides, which the first version never had. It was set
+# to 0.15 from the reference's per-second window minimum (26.2% W2, 45.7% W1) — a value
+# with no negative example behind it, and it then failed a legitimate frame: Frozen
+# Player's Frost Queen crown against a dark ground measures 0.13, and it is a strong
+# atmospheric shot, not a defect. The actual defect — Solo Leveling opening on a bubble on
+# black — measured 0.054. The floor now sits between the two, with the warn band still
+# well under the reference.
+_OPENING_ART_FAIL, _OPENING_ART_WARN = 0.09, 0.20
 
 
 def measure_video(video: Path) -> dict[str, Any]:
