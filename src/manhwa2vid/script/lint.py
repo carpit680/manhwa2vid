@@ -2380,8 +2380,26 @@ _TRUNCATED_SPEECH_RE = re.compile(
 # "They grit his teeth." — a plural subject carrying a singular possessive for the same
 # person. Narrow by construction: subject pronoun, then a short verb-and-modifier span
 # with no second subject in it, then a gendered possessive.
+#
+# Prepositions are excluded along with the conjunctions: a possessive inside a
+# prepositional phrase belongs to whoever the PP is about, not to the sentence's
+# subject, so "Song admits there is nothing they can do for his missing arm" is
+# correct English about two different people. That sentence blocked a whole Solo
+# Leveling script stage. The direct-object construction this gate is actually for
+# ("They grit his teeth") never crosses a preposition.
+#
+# The trade is deliberate: recall drops — "They look at his teeth" about one person is
+# no longer caught — and precision matters more here because the gate BLOCKS, and
+# because the plural reading of a PP is usually the correct one.
+_MIXED_NUMBER_STOP = (
+    "and", "or", "but", "while", "as",
+    "for", "to", "with", "about", "from", "at", "on", "in", "of", "into",
+    "against", "toward", "towards", "around", "over", "under", "near", "behind",
+    "beside", "through", "across", "beyond", "onto", "upon",
+)
 _MIXED_NUMBER_RE = re.compile(
-    r"\bThey\b(?:\s+(?!and\b|or\b|but\b|while\b|as\b)[\w'’-]+){1,3}\s+(his|her)\b",
+    r"\bThey\b(?:\s+(?!" + "|".join(rf"{w}\b" for w in _MIXED_NUMBER_STOP)
+    + r")[\w'’-]+){1,3}\s+(his|her)\b",
     re.I,
 )
 

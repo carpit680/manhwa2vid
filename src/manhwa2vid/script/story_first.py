@@ -212,10 +212,23 @@ def generate_story_first_script(
     # surfaced that immediately: it flagged the title of the very project under test.
     allowed = glossary_names(paths) | {meta.title, *meta.title.split()}
     strangers = unknown_names(text, allowed)
-    # BLOCKING. It was warn-only, and both audited videos shipped over it. Promoted only
-    # after its false-positive rate was driven to zero and pinned: the two known cases
-    # ("Rank Hunter" from "E-Rank Hunter", "Earth Jun-Ho" from a correct sentence) have
-    # regression tests, and it passes both projects clean.
+    # ADVISORY, and back to advisory after a spell as a blocking gate. The promotion
+    # rested on "false-positive rate driven to zero — passes both projects clean", which
+    # confused a property of two FROZEN glossaries with a property of the detector: both
+    # projects passed because their glossaries already happened to contain their place
+    # names. Regenerating Solo Leveling's narration produced "South Korea" — the writer
+    # completing "Seoul, South Korea", a country that appears nowhere in the source OCR —
+    # and the gate blocked the whole script stage on it.
+    #
+    # That is the SIXTH false positive, in the second of the five classes `unknown_names`
+    # already documents as unfixable without a POS tagger, against still zero true
+    # positives in four runs across two titles. The one argument for blocking that did
+    # not rest on the FP rate was the downstream audio one — a name spelled right and
+    # spoken wrong — and it lapsed when the pronunciation lexicon was dropped after
+    # A/B listening ("before is still better").
+    #
+    # The real defence against an invented character remains the audit stage, which sees
+    # the pages. Keep reading this report before approving; do not let it stop a run.
     #
     # Note what it CANNOT see: the audio. "Carthenon Temple" and its own glossary alias
     # "Cartenon Temple" are both known names, so this passes — and the TTS then speaks
@@ -223,7 +236,7 @@ def generate_story_first_script(
     # separate failure with a separate guard; see reports/render_audit_2026-08-28.md §8.
     report.add(
         "name-integrity",
-        not strangers,
+        True if not strangers else "warn",
         f"narration uses name(s) absent from the glossary: {strangers} — either the "
         "writer invented them or the glossary is missing an alias; fix glossary.json",
         unknown=strangers,

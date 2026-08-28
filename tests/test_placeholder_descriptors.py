@@ -137,3 +137,38 @@ class TestReportingVerbsAreNotNounRepetition:
 
         text = " ".join(["He tells her and she tells him no."] * 12)
         assert dialogue_verb_density(text)["dialogue_verbs"] == 24
+
+
+class TestGatesThatBlockedALegitimateScript:
+    """Both of these failed Solo Leveling's regenerated script on correct narration."""
+
+    def test_a_possessive_in_a_prepositional_phrase_is_not_number_disagreement(self):
+        """"they" = the healers, "his" = Jin-Woo. Two people, correct English — and it
+        blocked the whole script stage."""
+        from manhwa2vid.script.lint import mixed_number_pronouns
+
+        assert mixed_number_pronouns(
+            "Song admits there is nothing they can do for his missing arm."
+        ) == []
+
+    def test_the_direct_object_defect_is_still_caught(self):
+        """The construction the gate exists for never crosses a preposition."""
+        from manhwa2vid.script.lint import mixed_number_pronouns
+
+        assert mixed_number_pronouns("They grit his teeth.")
+        assert mixed_number_pronouns("They clench his fists.")
+
+    def test_an_unknown_real_world_place_warns_rather_than_blocks(self):
+        """`unknown_names` documents "real-world places" as false-positive class two and
+        calls itself advisory. "South Korea" — the writer completing "Seoul, South
+        Korea", absent from the source OCR — blocked a script stage while it was
+        promoted to blocking."""
+        from manhwa2vid.script.story_first import unknown_names
+
+        strangers = unknown_names(
+            'In Seoul, South Korea, Jin-Woo is known as the "World\'s Weakest".',
+            {"Seoul", "Jin-Woo"},
+        )
+        assert "South Korea" in strangers, "still reported — it is worth reading"
+        # The gate's severity is asserted where it is raised; see the report status in
+        # generate_story_first_script, which passes "warn" rather than False.
