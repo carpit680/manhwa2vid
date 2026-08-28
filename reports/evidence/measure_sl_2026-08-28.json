@@ -1,0 +1,119 @@
+{
+ "video": "projects/solo-leveling-ch1-5/output/preview_2026-08-27_195630.mp4",
+ "label": "SL ch1-5",
+ "duration_s": 792.0,
+ "detector": "geometric lettering (panels.regions) \u2014 brightness proxies are data only",
+ "windows": [
+  {
+   "start_s": null,
+   "duration_s": null,
+   "frames": 1584,
+   "fps_sampled": 2.0,
+   "lettering_area_median": 0.17,
+   "lettering_area_p95": 0.459,
+   "lettering_area_max": 0.792,
+   "lettering_over_30pct_frames_pct": 19.8,
+   "lettering_over_40pct_frames_pct": 8.3,
+   "clipped_lettering_frames_pct": 56.5,
+   "bare_bubble_frames_pct": 0.7,
+   "art_area_median": 0.628,
+   "opening_luma_mean": 88.8,
+   "opening_lettering_max": 0.736,
+   "opening_art_per_second": [
+    0.518,
+    0.521,
+    0.502,
+    0.489,
+    0.5,
+    0.507,
+    0.054,
+    0.304,
+    0.328,
+    0.274,
+    0.601,
+    0.573,
+    0.418,
+    0.664,
+    0.259
+   ],
+   "opening_art_min_second": 0.054,
+   "bubble_over_20pct_frames_pct": 17.0,
+   "clipped_text_frames_pct": 32.3,
+   "dead_width_mean": 0.62,
+   "shots": 234,
+   "cuts_per_min": 17.65,
+   "shot_median_s": 2.38,
+   "shot_mean_s": 3.38,
+   "shot_p10_s": 1.28,
+   "shot_p90_s": 5.79,
+   "shot_under_1_5s_pct": 21.4,
+   "shot_under_1s_pct": 1.3,
+   "shot_longest_s": 27.77,
+   "shot_over_8s_runtime_pct": 22.6,
+   "shot_over_12s_runtime_pct": 15.4
+  }
+ ],
+ "audio": {
+  "true_peak_dbtp": -1.32,
+  "loudness_lufs": -16.43,
+  "loudness_range_lu": 2.3,
+  "quiet_floor_dbfs": -34.68,
+  "speech_p75_dbfs": -14.96,
+  "duck_depth_db": 19.72,
+  "tonality_ratio": 6.58
+ },
+ "project": {
+  "timeline_duration_s": 791.9800000000007,
+  "match": {
+   "sentences": 232,
+   "matched": 113,
+   "match_rate_pct": 48.7
+  },
+  "utilisation": {
+   "story_panels": 319,
+   "shown": 228,
+   "utilisation_pct": 71.5
+  },
+  "holds": {
+   "basis": "entries",
+   "longest_hold": 2,
+   "over_limit": [],
+   "runs": 228,
+   "planned_entries": 235,
+   "invisible_cuts": 7,
+   "longest_run_seconds": 27.79
+  },
+  "timing": {
+   "sentences": 232,
+   "measured": 232,
+   "measured_pct": 100.0,
+   "mismatched_beats": []
+  },
+  "script": {
+   "verbs": {
+    "words": 2889,
+    "dialogue_verbs": 8,
+    "per_1k": 2.77
+   },
+   "quoted": {
+    "words": 2889,
+    "quoted_spans": 0,
+    "per_1k": 0.0
+   },
+   "sentences": {
+    "sentences": 232,
+    "mean_words": 12.45,
+    "median_words": 12,
+    "under_8_pct": 23.7,
+    "over_25_pct": 3.0
+   },
+   "noun_repetition": {
+    "window_words": 200,
+    "max_count": 4,
+    "worst_count": 0,
+    "findings": []
+   }
+  }
+ },
+ "measured_in_s": 35.3
+}

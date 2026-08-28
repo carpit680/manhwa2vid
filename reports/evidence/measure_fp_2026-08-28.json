@@ -1,0 +1,119 @@
+{
+ "video": "projects/return-of-the-frozen-player-ch1-2/output/preview_2026-08-27_165848.mp4",
+ "label": "FP ch1-2",
+ "duration_s": 381.6,
+ "detector": "geometric lettering (panels.regions) \u2014 brightness proxies are data only",
+ "windows": [
+  {
+   "start_s": null,
+   "duration_s": null,
+   "frames": 763,
+   "fps_sampled": 2.0,
+   "lettering_area_median": 0.147,
+   "lettering_area_p95": 0.417,
+   "lettering_area_max": 0.771,
+   "lettering_over_30pct_frames_pct": 14.9,
+   "lettering_over_40pct_frames_pct": 5.6,
+   "clipped_lettering_frames_pct": 45.3,
+   "bare_bubble_frames_pct": 0.0,
+   "art_area_median": 0.504,
+   "opening_luma_mean": 139.2,
+   "opening_lettering_max": 0.379,
+   "opening_art_per_second": [
+    0.773,
+    0.751,
+    0.347,
+    0.387,
+    0.312,
+    0.341,
+    0.283,
+    0.304,
+    0.295,
+    0.464,
+    0.557,
+    0.512,
+    0.555,
+    0.684,
+    0.637
+   ],
+   "opening_art_min_second": 0.283,
+   "bubble_over_20pct_frames_pct": 29.0,
+   "clipped_text_frames_pct": 42.1,
+   "dead_width_mean": 0.64,
+   "shots": 106,
+   "cuts_per_min": 16.51,
+   "shot_median_s": 2.52,
+   "shot_mean_s": 3.6,
+   "shot_p10_s": 1.27,
+   "shot_p90_s": 7.13,
+   "shot_under_1_5s_pct": 21.7,
+   "shot_under_1s_pct": 6.6,
+   "shot_longest_s": 16.7,
+   "shot_over_8s_runtime_pct": 28.1,
+   "shot_over_12s_runtime_pct": 11.4
+  }
+ ],
+ "audio": {
+  "true_peak_dbtp": -1.35,
+  "loudness_lufs": -16.38,
+  "loudness_range_lu": 2.0,
+  "quiet_floor_dbfs": -34.25,
+  "speech_p75_dbfs": -14.8,
+  "duck_depth_db": 19.45,
+  "tonality_ratio": 6.26
+ },
+ "project": {
+  "timeline_duration_s": 381.58,
+  "match": {
+   "sentences": 90,
+   "matched": 55,
+   "match_rate_pct": 61.1
+  },
+  "utilisation": {
+   "story_panels": 170,
+   "shown": 100,
+   "utilisation_pct": 58.8
+  },
+  "holds": {
+   "basis": "entries",
+   "longest_hold": 2,
+   "over_limit": [],
+   "runs": 100,
+   "planned_entries": 106,
+   "invisible_cuts": 6,
+   "longest_run_seconds": 18.58
+  },
+  "timing": {
+   "sentences": 90,
+   "measured": 90,
+   "measured_pct": 100.0,
+   "mismatched_beats": []
+  },
+  "script": {
+   "verbs": {
+    "words": 1433,
+    "dialogue_verbs": 10,
+    "per_1k": 6.98
+   },
+   "quoted": {
+    "words": 1433,
+    "quoted_spans": 0,
+    "per_1k": 0.0
+   },
+   "sentences": {
+    "sentences": 90,
+    "mean_words": 15.92,
+    "median_words": 15,
+    "under_8_pct": 8.9,
+    "over_25_pct": 8.9
+   },
+   "noun_repetition": {
+    "window_words": 200,
+    "max_count": 4,
+    "worst_count": 0,
+    "findings": []
+   }
+  }
+ },
+ "measured_in_s": 16.6
+}
