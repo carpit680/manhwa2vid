@@ -303,3 +303,54 @@ in this project a cross-detector comparison has produced a wrong reading.
   phoneme sequences better, which is the spec's own argument for preferring H-hours
   training data. That is measured in Phase 5 with F0, and any name-audio revisit rides on
   it — with its own A/B, because that assumption is what failed twice here.
+
+---
+
+## 9. The mastering chain, and two metrics that were wrong
+
+`docs/audio-quality-spec.md` §5 landed. Measured on Frozen Player's full 6:22 render:
+
+| | before | after | gate band |
+|---|---|---|---|
+| integrated loudness | −16.38 LUFS | **−14.46** | target −14 ±1 |
+| true peak | −1.35 dBTP | **−1.41** | ≤ −1.0 |
+| duck depth (stem-derived) | — | **13.59 dB** | 12–15 |
+| loudness range | 2.0 LU | 2.0 LU | 5–9 — **still warns** |
+
+### The duck-depth metric was wrong, and I tuned against it before noticing
+
+`audio_metrics` computed duck depth as p75 − p10 of the mix's window RMS. On a 40s excerpt
+it read 13.29 dB and looked right. On the full render it read 10.39 dB while the true value
+— using the narration stem to locate real gaps — was **2.91 dB**. The bed was sitting three
+decibels under the voice while the gate called it healthy, and I had already set
+`bgm_gain_db` to −6.0 on the strength of it.
+
+No mix-only estimate recovers the truth. Against a stem-derived 2.91 dB: p10 of all windows
+reads 10.39, median of the lowest quarter 9.05, p30 5.26 — all badly high, because the
+quietest tenth of a long mix is sidechain-ducked moments right after speech, not bed-only
+windows. Duck depth is therefore measured at MIX time, where the stem still exists, and the
+old number is renamed `duck_depth_estimate_db` so it can no longer answer to the name the
+gate reads. With a metric that measures reality the relationship is finally monotonic
+(−6 dB → 3.12, −20 → 6.35, −30 → 13.57), and `bgm_gain_db` is −30.0.
+
+A second bug in the same area: `duck_depth_from_stem` used `soundfile`, which cannot open
+an mp4, so on the first real render it returned `None` and the gate silently disappeared
+from the report. It now decodes through ffmpeg first. Both failures are the same shape —
+**a measurement that quietly stops measuring is worse than one that is obviously broken.**
+
+### `audio-lra` stays a warn, and the band is unverified
+
+Loudness range is 2.0 LU after the chain, against the spec's 5–9. Three things are true:
+
+1. It is real, not a windowing artifact — 2.0 over the full file, 2.4 over a 40s window.
+2. **There is no like-for-like reference value.** `reference/frozen_player/mamoru_fp_video.mp4`
+   contains a video stream and no audio stream at all, so the reference's own LRA cannot be
+   measured from what we have.
+3. The spec's own chain contains `acompressor` at 2.5:1, which *reduces* loudness range,
+   and `loudnorm linear=true` cannot create range. The recommendation and the mechanism are
+   in tension.
+
+Loosening the compressor would raise the number, but that is tuning against a threshold
+with no source, on the one dimension where two changes have already been rejected by ear.
+It stays a warn with this note until either the reference audio is obtained or a listening
+test says the delivery is too flat.

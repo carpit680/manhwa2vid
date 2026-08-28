@@ -115,13 +115,36 @@ def duck_depth_from_stem(narration: Path, mix: Path) -> float | None:
     So it is computed at MIX time, where the stem still exists, and handed to the render
     QA. When it is unavailable the gate reports nothing rather than a wrong number.
     """
+    import tempfile
+
     import soundfile as sf
 
-    try:
-        voice, vr = sf.read(str(narration), dtype="float64", always_2d=False)
-        mixed, mr = sf.read(str(mix), dtype="float64", always_2d=False)
-    except (OSError, RuntimeError):
+    def _read(path: Path) -> tuple[np.ndarray, int] | None:
+        """Read any media. soundfile handles WAV; the mix is an mp4, which it cannot
+        open at all — that silently returned None and the gate went quiet on a real
+        render, which is exactly the failure mode this function exists to avoid."""
+        try:
+            data, rate = sf.read(str(path), dtype="float64", always_2d=False)
+            return np.asarray(data), int(rate)
+        except (OSError, RuntimeError):
+            pass
+        with tempfile.TemporaryDirectory() as tmp:
+            wav = Path(tmp) / "a.wav"
+            subprocess.run(
+                ["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", str(path),
+                 "-vn", "-ac", "1", "-c:a", "pcm_s16le", str(wav)],
+                check=False,
+            )
+            if not wav.exists() or wav.stat().st_size <= 44:
+                return None
+            data, rate = sf.read(str(wav), dtype="float64", always_2d=False)
+            return np.asarray(data), int(rate)
+
+    got_voice, got_mix = _read(narration), _read(mix)
+    if got_voice is None or got_mix is None:
         return None
+    voice, vr = got_voice
+    mixed, mr = got_mix
     if voice.ndim > 1:
         voice = voice.mean(axis=1)
     if mixed.ndim > 1:
