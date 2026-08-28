@@ -163,6 +163,14 @@ def enforce_render_qa(
 ) -> dict[str, Any]:
     metrics = measure_video(video)
     report = QAReport(stage="render")
+    # Which file these numbers describe. A project accumulates dozens of previews; without
+    # this, export gates on whichever one last wrote the report.
+    try:
+        stat = video.stat()
+        report.subject = {"video": video.name, "size": stat.st_size,
+                          "mtime": round(stat.st_mtime, 3)}
+    except OSError:
+        pass
 
     # Opening: SL opened on 19 seconds of speech bubbles on black.
     # Lettering, not "bright blob". Solo Leveling opened on 19 seconds of speech bubbles
@@ -400,11 +408,15 @@ def enforce_render_qa(
     return metrics
 
 
-def upstream_failures(project_dir: Path) -> list[str]:
+def upstream_failures(project_dir: Path, *, include_render: bool = False) -> list[str]:
     """Names of FAILED gates from the stages that CURRENTLY run — the render precondition.
 
     Both audited videos rendered while script-stage gates were failing; nothing
     connected a red gate to the render that shipped it.
+
+    `include_render` is for EXPORT: the visual and audio gates can only be measured on the
+    finished file, so they cannot gate the render that produces it — but they must gate
+    the export that publishes it.
 
     Scoped to `qa.CURRENT_QA_STAGES` rather than every qa.*.json on disk. A project
     directory outlives the pipeline that filled it: reports from deleted stages stay
@@ -415,8 +427,8 @@ def upstream_failures(project_dir: Path) -> list[str]:
     orphans: list[str] = []
     for qa_file in sorted(project_dir.glob("qa.*.json")):
         stage = qa_file.stem.removeprefix("qa.")
-        if stage == "render":
-            continue
+        if stage == "render" and not include_render:
+            continue  # the render's own report never blocks the NEXT render
         if stage not in CURRENT_QA_STAGES:
             orphans.append(qa_file.name)
             continue

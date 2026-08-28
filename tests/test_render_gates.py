@@ -279,3 +279,88 @@ def test_audio_gates_are_absent_rather_than_passing_when_unmeasurable(monkeypatc
     names = {g["name"] for g in json.loads((tmp_path / "qa.render.json").read_text())["gates"]}
     assert not (names & {"true-peak", "audio-loudness", "audio-music-present",
                          "audio-duck-depth", "audio-lra"})
+
+
+# --- export gating (qa-hardening-brief Phase 4) ----------------------------------------
+
+def _exportable(tmp_path: Path, *, render_gate: str = "pass", video_size: int = 1024):
+    """A project ready to export, with a render report describing its preview."""
+    from manhwa2vid.models import (
+        ProjectMeta, SourceLanguage, SourceType, project_paths, save_json,
+    )
+
+    paths = project_paths(tmp_path)
+    for key in ("pages", "panels", "audio", "output", "debug"):
+        paths[key].mkdir(parents=True, exist_ok=True)
+    save_json(paths["meta"], ProjectMeta(
+        slug="t", title="T", chapters="1", source_lang=SourceLanguage.EN,
+        source_type=SourceType.IMAGES, source_path=str(tmp_path), pdf_path=str(tmp_path),
+    ))
+    paths["timeline_json"].write_text(json.dumps({"entries": [], "total_duration": 0}))
+    video = paths["output"] / "preview.mp4"
+    video.write_bytes(b"x" * video_size)
+    (tmp_path / "qa.render.json").write_text(json.dumps({
+        "stage": "render",
+        "subject": {"video": "preview.mp4", "size": 1024, "mtime": 1.0},
+        "gates": [{"name": "audio-music-present", "status": render_gate,
+                   "details": "no bed", "data": {}}],
+    }))
+    return tmp_path
+
+
+def test_export_is_blocked_by_a_failed_render_gate(tmp_path):
+    """The visual and audio gates can only be measured on the finished file, so they
+    cannot gate the render that produces it — but they must gate the export that ships it."""
+    from manhwa2vid.pipeline import run_stage
+
+    with pytest.raises(QAGateFailure) as exc:
+        run_stage(_exportable(tmp_path, render_gate="fail"), PipelineStage.EXPORT)
+    assert "audio-music-present" in str(exc.value)
+
+
+def test_forcing_export_needs_the_operator_to_say_it_out_loud(tmp_path):
+    """--force-past-qa alone is not enough to PUBLISH over a named failure."""
+    from manhwa2vid.pipeline import run_stage
+
+    project = _exportable(tmp_path, render_gate="fail")
+    with pytest.raises(QAGateFailure) as exc:
+        run_stage(project, PipelineStage.EXPORT, force_past_qa=True)
+    assert "--i-understand" in str(exc.value)
+
+
+def test_a_forced_export_is_recorded_in_the_checkpoint_forever(tmp_path, monkeypatch):
+    """The override used to be a console line that scrolled away. Both audited videos
+    shipped over failing gates and nothing in the project said so afterwards."""
+    import manhwa2vid.pipeline as pipeline_mod
+    from manhwa2vid.models import CheckpointState
+
+    monkeypatch.setattr(pipeline_mod, "export_youtube_pack", lambda *a, **k: None)
+    project = _exportable(tmp_path, render_gate="fail")
+    pipeline_mod.run_stage(project, PipelineStage.EXPORT,
+                           force_past_qa=True, i_understand=True)
+
+    saved = CheckpointState.model_validate(json.loads((project / "checkpoint.json").read_text()))
+    assert len(saved.qa_overrides) == 1
+    assert saved.qa_overrides[0].stage == "export"
+    assert saved.qa_overrides[0].failed_gates == ["render:audio-music-present"]
+
+
+def test_export_refuses_a_render_report_describing_a_different_file(tmp_path):
+    """A project accumulates dozens of previews and qa.render.json describes exactly one.
+    Without this, a clean report from an older render certifies a newer, unmeasured file."""
+    from manhwa2vid.pipeline import run_stage
+
+    project = _exportable(tmp_path, render_gate="pass", video_size=2048)  # report says 1024
+    with pytest.raises(QAGateFailure) as exc:
+        run_stage(project, PipelineStage.EXPORT)
+    assert "not the preview.mp4 being exported" in str(exc.value)
+
+
+def test_a_clean_project_exports(tmp_path, monkeypatch):
+    import manhwa2vid.pipeline as pipeline_mod
+
+    called = {}
+    monkeypatch.setattr(pipeline_mod, "export_youtube_pack",
+                        lambda *a, **k: called.setdefault("ran", True))
+    pipeline_mod.run_stage(_exportable(tmp_path), PipelineStage.EXPORT)
+    assert called.get("ran") is True

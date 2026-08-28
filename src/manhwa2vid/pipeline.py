@@ -6,6 +6,7 @@ import os
 
 import json
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 
@@ -56,6 +57,7 @@ def run_stage(
     preview: bool = False,
     final: bool = False,
     force_past_qa: bool = False,
+    i_understand: bool = False,
 ) -> None:
     meta, paths, config, checkpoint = load_project(project_dir)
     if force_past_qa:
@@ -98,26 +100,114 @@ def run_stage(
         from manhwa2vid.video.qa_visual import upstream_failures
 
         failed = upstream_failures(project_dir)
-        if failed and not force_past_qa:
-            from manhwa2vid.qa import QAGateFailure
-
-            raise QAGateFailure(
-                "Refusing to render over failed upstream QA gates: "
-                + ", ".join(failed)
-                + ". Fix them or re-run with --force-past-qa."
-            )
-        if failed:
-            console.print(
-                f"[red]Rendering over failed upstream gate(s) ({', '.join(failed)}) "
-                "— forced[/]"
-            )
+        _guard_qa(
+            "render", failed, checkpoint, paths,
+            force_past_qa=force_past_qa, i_understand=True,
+        )
         render_video(meta, paths, config, preview=preview, final=final, force=force)
         mark_stage(checkpoint, stage, paths)
     elif stage == PipelineStage.EXPORT:
+        # Export publishes. The visual and audio gates can only be measured on the
+        # finished file, so they cannot gate the render that produces it — but they must
+        # gate the export that ships it, which is why this includes the render report.
+        from manhwa2vid.video.qa_visual import upstream_failures
+
+        _require_fresh_render_report(paths, force_past_qa=force_past_qa)
+        failed = upstream_failures(project_dir, include_render=True)
+        _guard_qa(
+            "export", failed, checkpoint, paths,
+            force_past_qa=force_past_qa, i_understand=i_understand,
+        )
         export_youtube_pack(meta, paths, config)
         mark_stage(checkpoint, stage, paths)
     else:
         raise ValueError(f"Unknown stage: {stage}")
+
+
+def _require_fresh_render_report(paths: dict[str, Path], *, force_past_qa: bool) -> None:
+    """The render report must describe the video being packaged.
+
+    Export reads `qa.render.json`, but a project directory holds dozens of previews and
+    that report describes exactly one of them. Without this check, a clean report from an
+    older render silently certifies a newer, unmeasured file.
+    """
+    report_path = paths["root"] / "qa.render.json"
+    video = paths["output"] / "preview.mp4"
+    final = paths["output"] / "final.mp4"
+    if final.exists():
+        video = final
+    if not report_path.exists() or not video.exists():
+        return  # nothing to contradict; the gate list handles a missing report
+
+    from manhwa2vid.qa import QAGateFailure
+
+    subject = (json.loads(report_path.read_text(encoding="utf-8")) or {}).get("subject") or {}
+    if not subject:
+        return  # written before subjects existed
+    stat = video.stat()
+    if subject.get("size") == stat.st_size:
+        return
+    message = (
+        f"qa.render.json describes {subject.get('video')} ({subject.get('size')} bytes), "
+        f"not the {video.name} being exported ({stat.st_size} bytes). "
+        "Re-run `run render` so the gates measure what you are publishing."
+    )
+    if not force_past_qa:
+        raise QAGateFailure(message)
+    console.print(f"[red]{message}[/]")
+
+
+def _guard_qa(
+    stage: str,
+    failed: list[str],
+    checkpoint: Any,
+    paths: dict[str, Path],
+    *,
+    force_past_qa: bool,
+    i_understand: bool,
+) -> None:
+    """Refuse to proceed over failed gates, and RECORD it when someone insists.
+
+    The override used to leave no trace: an in-memory flag, a console line, and the
+    console scrolls away. Both audited videos shipped over failing gates and nothing in
+    the project directory said so afterwards. Now every forced pass is written into the
+    checkpoint, where `status` prints it in red forever.
+    """
+    if not failed:
+        return
+
+    from manhwa2vid.qa import QAGateFailure
+
+    listing = "\n  ".join(failed)
+    if not force_past_qa:
+        raise QAGateFailure(
+            f"Refusing to {stage} over failed QA gates:\n  {listing}\n"
+            f"Fix them, or re-run with --force-past-qa"
+            + (" --i-understand" if stage == "export" else "")
+            + "."
+        )
+    if not i_understand:
+        # Publishing is the irreversible one, so the flag alone is not enough: the
+        # operator has to name what they are shipping over.
+        raise QAGateFailure(
+            f"--force-past-qa given, but {stage} publishes a video carrying these "
+            f"failures:\n  {listing}\n"
+            "Add --i-understand to proceed. It will be recorded in the checkpoint."
+        )
+
+    from datetime import datetime
+
+    from manhwa2vid.models import QAOverride, save_json
+
+    console.print(f"[red]FORCED {stage} over {len(failed)} failed gate(s):[/] {listing}")
+    checkpoint.qa_overrides.append(
+        QAOverride(
+            stage=stage,
+            at=datetime.now().isoformat(timespec="seconds"),
+            failed_gates=list(failed),
+        )
+    )
+    save_json(paths["checkpoint"], checkpoint)
 
 
 def run_all_until_review(project_dir: Path, force: bool = False, force_past_qa: bool = False) -> None:

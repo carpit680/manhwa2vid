@@ -282,10 +282,24 @@ class PipelineStage(str, Enum):
     EXPORT = "export"
 
 
+class QAOverride(BaseModel):
+    """A forced pass, recorded permanently.
+
+    `--force-past-qa` used to leave no trace at all: it set an in-memory config flag,
+    printed to the console, and the console scrolled away. Both audited videos shipped
+    over failing gates and nothing in the project directory said so afterwards.
+    """
+
+    stage: str
+    at: str
+    failed_gates: list[str] = Field(default_factory=list)
+
+
 class CheckpointState(BaseModel):
     completed_stages: list[PipelineStage] = Field(default_factory=list)
     script_approved: bool = False
     preview_approved: bool = False
+    qa_overrides: list[QAOverride] = Field(default_factory=list)
 
     @field_validator("completed_stages", mode="before")
     @classmethod

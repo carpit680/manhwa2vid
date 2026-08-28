@@ -173,8 +173,21 @@ def run_render(
 
 
 @run_app.command("export")
-def run_export(project: Path = typer.Option(..., "--project")) -> None:
-    run_stage(project.resolve(), PipelineStage.EXPORT)
+def run_export(
+    project: Path = typer.Option(..., "--project"),
+    # Export PUBLISHES. The visual and audio gates can only be measured on the finished
+    # file, so they gate here rather than at render — and forcing past them needs the
+    # operator to say out loud what they are shipping over.
+    force_past_qa: bool = typer.Option(False, "--force-past-qa", help="Continue despite failed QA gates"),
+    i_understand: bool = typer.Option(
+        False, "--i-understand",
+        help="Required with --force-past-qa: confirms you are publishing over named failures",
+    ),
+) -> None:
+    run_stage(
+        project.resolve(), PipelineStage.EXPORT,
+        force_past_qa=force_past_qa, i_understand=i_understand,
+    )
 
 
 @review_app.command("script")
@@ -242,9 +255,58 @@ def status(project: Path = typer.Option(..., "--project")) -> None:
     console.print(f"Completed stages: {', '.join(s.value for s in checkpoint.completed_stages) or 'none'}")
     console.print(f"Script approved: {checkpoint.script_approved}")
     console.print(f"Preview approved: {checkpoint.preview_approved}")
+    _print_gate_table(paths)
+    _print_overrides(checkpoint)
     for name, path in paths.items():
         if path.suffix in (".json", ".md") and path.exists():
             console.print(f"  [green]✓[/] {name}: {path}")
+
+
+def _print_gate_table(paths: dict[str, Path]) -> None:
+    """Every gate, per stage. QA was invisible from `status` — the reports were on disk
+    and nothing surfaced them, so a project could sit on a red gate indefinitely."""
+    import json as _json
+
+    from rich.table import Table
+
+    from manhwa2vid.qa import CURRENT_QA_STAGES
+
+    mark = {"pass": "[green]✓[/]", "warn": "[yellow]⚠[/]", "fail": "[red]✗[/]"}
+    table = Table(title="QA gates", show_lines=False)
+    table.add_column("stage"); table.add_column(""); table.add_column("gate")
+    table.add_column("details", overflow="fold", max_width=70)
+
+    rows = 0
+    for stage in sorted(CURRENT_QA_STAGES):
+        report = paths["root"] / f"qa.{stage}.json"
+        if not report.exists():
+            table.add_row(stage, "[dim]-[/]", "[dim]not run[/]", "")
+            continue
+        try:
+            data = _json.loads(report.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            table.add_row(stage, "[red]![/]", "[red]unreadable report[/]", str(report))
+            continue
+        for gate in data.get("gates") or []:
+            status_ = gate.get("status", "?")
+            table.add_row(stage, mark.get(status_, "?"), gate.get("name", "?"),
+                          (gate.get("details") or "").strip())
+            rows += 1
+    if rows:
+        console.print(table)
+
+
+def _print_overrides(checkpoint) -> None:
+    """A forced pass is permanent and loud. It used to be a console line that scrolled
+    away, which is how two videos shipped over failing gates with no record."""
+    overrides = getattr(checkpoint, "qa_overrides", None) or []
+    if not overrides:
+        return
+    console.print(f"\n[red bold]{len(overrides)} QA OVERRIDE(S) ON THIS PROJECT[/]")
+    for entry in overrides:
+        console.print(
+            f"  [red]{entry.stage}[/] at {entry.at} over: {', '.join(entry.failed_gates)}"
+        )
 
 
 if __name__ == "__main__":

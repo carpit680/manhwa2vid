@@ -46,8 +46,17 @@ CURRENT_QA_STAGES = frozenset(
 
 
 class QAReport(BaseModel):
+    """A stage's gate results.
+
+    `subject` records WHAT was measured, when that is not implied by the stage. The render
+    report describes one specific mp4, and a project directory accumulates dozens of them
+    — without this, export would gate on whichever preview last wrote the report rather
+    than the one being packaged.
+    """
+
     stage: str
     gates: list[GateResult] = Field(default_factory=list)
+    subject: dict[str, Any] = Field(default_factory=dict)
 
     def add(self, name: str, ok: bool | str, details: str = "", **data: Any) -> str:
         """ok may be a bool (pass/fail) or an explicit status string ('warn')."""
