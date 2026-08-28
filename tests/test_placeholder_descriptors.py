@@ -105,3 +105,35 @@ class TestNarrationStrip:
     def test_clean_narration_is_returned_byte_identical(self):
         text = "Jun-Ho grips his blade. He tells her they aren't the type to croak.\n\nShe laughs."
         assert strip_placeholder_descriptors(text) == text
+
+
+class TestReportingVerbsAreNotNounRepetition:
+    """`noun-repetition` and `dialogue-verb-density` were pulling against each other.
+
+    After the writer's prompt was changed to demand a reporting verb every ~32 words,
+    Frozen Player's script warned "tell x5 in a 200-word window". The reference channel
+    does far more of it: its worst window holds "says" NINE times, against this gate's
+    limit of four. The gate is for a bare repeated noun a pronoun should have replaced,
+    which a speech verb is not.
+    """
+
+    def test_a_repeated_reporting_verb_is_not_a_finding(self):
+        from manhwa2vid.measure.script_text import noun_repetition
+
+        text = " ".join(["He tells her and she tells him no."] * 12)
+        assert noun_repetition(text)["findings"] == []
+
+    def test_a_genuinely_repeated_noun_is_still_caught(self):
+        """The exemption must not blunt what the gate is actually for."""
+        from manhwa2vid.measure.script_text import noun_repetition
+
+        text = " ".join(["The warehouse burned beside the warehouse gate."] * 12)
+        words = [f["word"] for f in noun_repetition(text)["findings"]]
+        assert any("warehouse" in w for w in words)
+
+    def test_the_density_gate_still_counts_what_the_repetition_gate_now_ignores(self):
+        """Exempting a verb from one gate must not remove it from the other."""
+        from manhwa2vid.measure.script_text import dialogue_verb_density
+
+        text = " ".join(["He tells her and she tells him no."] * 12)
+        assert dialogue_verb_density(text)["dialogue_verbs"] == 24

@@ -26,6 +26,17 @@ from manhwa2vid.script.sentences import split_sentences
 # report-register verbs (expresses, converses, ...); this only counts the good ones.
 DIALOGUE_VERBS = ("says", "asks", "tells", "replies", "answers", "explains", "admits")
 
+# `DIALOGUE_VERBS` is fixed to the reference counter's exact list and must not grow — it
+# defines a RATE compared against the reference's own. These are the other inflections and
+# near-synonyms of the same act, needed only to exempt them from `noun_repetition`.
+_REPORTING_INFLECTIONS = (
+    "said", "say", "ask", "asked", "tell", "told", "warns", "warned", "warn",
+    "adds", "added", "add", "notes", "noted", "points", "pointed", "yells", "yelled",
+    "mutters", "muttered", "shouts", "shouted", "snaps", "snapped", "insists",
+    "demands", "demanded", "whispers", "whispered", "replied", "reply", "explained",
+    "admitted", "admit", "answered", "answer", "states", "stated",
+)
+
 _WORD_RE = re.compile(r"[A-Za-z']+")
 # DOUBLE quotes only, straight or curly. The ASCII apostrophe is excluded deliberately:
 # including it matched every contraction in the corpus and reported the reference channel
@@ -97,8 +108,17 @@ def noun_repetition(
     sync, and the defect viewers actually complain about is a bare repeated noun that a
     pronoun should have replaced. Character and place names are `exempt` — a recap must
     repeat the protagonist's name, and the reference channel does.
+
+    Reporting verbs are exempt for the same reason, measured rather than assumed: across
+    the reference SRTs the worst 200-word window holds "says" NINE times, against this
+    gate's limit of four, and every other overflow there is a name. Repeating a speech
+    verb is what the register sounds like — `dialogue_verb_density` exists to DEMAND
+    these — so counting them here would have the two gates pulling against each other,
+    and the writer's prompt was changed to ask for more of exactly this word.
     """
     exempt_stems = {_stem(w.lower()) for w in (exempt or set())}
+    exempt_stems.update(_stem(v) for v in DIALOGUE_VERBS)
+    exempt_stems.update(_stem(v) for v in _REPORTING_INFLECTIONS)
     for name in list(exempt or set()):
         for part in re.split(r"[\s\-]+", name.lower()):
             if part:
