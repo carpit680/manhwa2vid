@@ -367,7 +367,7 @@ def build_timeline(
     audio_dir: Path,
     config: dict[str, Any],
     salience: dict[str, float] | None = None,
-    shot_plan: dict[int, list[tuple[str, float]]] | None = None,
+    shot_plan: dict[int, list[tuple[str, float, list[int]]]] | None = None,
 ) -> Timeline:
     min_sec = float(get_nested(config, "video", "min_panel_seconds", default=2.0))
     max_sec = float(get_nested(config, "video", "max_panel_seconds", default=8.0))
@@ -398,10 +398,11 @@ def build_timeline(
         # from narration that compresses.
         planned = (shot_plan or {}).get(beat.beat_id)
         if planned:
-            planned = [(pid, sec) for pid, sec in planned if pid in panel_map]
+            planned = [row for row in planned if row[0] in panel_map]
         if planned:
-            panel_ids = [pid for pid, _sec in planned]
-            weights = [sec for _pid, sec in planned]
+            panel_ids = [row[0] for row in planned]
+            weights = [row[1] for row in planned]
+            numbers = [list(row[2]) if len(row) > 2 else [] for row in planned]
             # The plan's seconds ARE the intended dwell: plan_shots already enforced its
             # own floors (min_shot_seconds / accent_shot_seconds), and re-clamping here
             # with min/max_panel_seconds silently undid them — the lift pass stretched
@@ -412,11 +413,12 @@ def build_timeline(
             segs = split_beat_durations(
                 duration, len(panel_ids), min_sec=0.0, max_sec=float("inf"), weights=weights
             )
-            for pid, seg in zip(panel_ids, segs):
+            for pid, seg, nums in zip(panel_ids, segs, numbers):
                 panel = panel_map[pid]
                 entries.append(
                     TimelineEntry(
                         panel_id=pid,
+                        sentence_numbers=nums,
                         panel_path=panel.image_path,
                         start=cursor,
                         end=cursor + seg,

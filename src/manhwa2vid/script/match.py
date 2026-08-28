@@ -232,7 +232,36 @@ def plan_shots(
     accent_floor: float = 0.4,
     text_only: set[str] | None = None,
 ) -> dict[int, list[tuple[str, float]]] | None:
-    """Join claims with measured sentence seconds into per-beat (panel, seconds) shots.
+    """(panel, seconds) per beat. See `plan_shots_with_sentences` for the full result.
+
+    Kept at two elements because ~25 assertions across tests/test_match.py pin exact
+    tuples, and those assertions are the record of a dozen separately-earned invariants
+    (A/V totals preserved, accent floors, burst caps). Widening the tuple would have meant
+    rewriting all of them, which is how a suite quietly loses its teeth.
+    """
+    result = plan_shots_with_sentences(
+        shotlist, segments_by_beat, floor=floor, panel_order=panel_order,
+        accent_floor=accent_floor, text_only=text_only,
+    )
+    if result is None:
+        return None
+    return {beat: [(pid, sec) for pid, sec, _nums in shots] for beat, shots in result.items()}
+
+
+def plan_shots_with_sentences(
+    shotlist: dict[str, Any],
+    segments_by_beat: dict[int, list[dict[str, Any]]],
+    *,
+    floor: float = 1.0,
+    panel_order: list[str] | None = None,
+    accent_floor: float = 0.4,
+    text_only: set[str] | None = None,
+) -> dict[int, list[tuple[str, float, list[int]]]] | None:
+    """Join claims with measured sentence seconds into per-beat shots.
+
+    Returns (panel, seconds, sentence numbers) per shot. The sentence numbers are what
+    let the timeline record how much NARRATION a shot holds — counting entries instead
+    understates a hold, because one entry can carry several sentences.
 
     Pure code, runs at timeline time when sidecars exist. Rules (user decisions,
     2026-08-26 revision):
@@ -268,6 +297,10 @@ def plan_shots(
             flat.append(
                 {
                     "beat_id": beat_id,
+                    # Carried so the timeline can record WHICH sentences a shot holds.
+                    # Without it a hold's length can only be counted in entries, which
+                    # understates it: one entry can carry several sentences.
+                    "number": int(sent.get("number", 0)),
                     "seconds": max(float(seg.get("seconds", 0.0)), 0.0),
                     "panels": list(sent.get("panels") or []),
                 }
@@ -383,8 +416,8 @@ def plan_shots(
                 item["panels"][0] = nxt
                 claimed.add(nxt)
 
-    # Sentences -> raw shots: (panel, seconds, accent).
-    plan: dict[int, list[tuple[str, float]]] = {}
+    # Sentences -> raw shots: (panel, seconds, accent, sentence numbers).
+    plan: dict[int, list[tuple[str, float, list[int]]]] = {}
     current_panel: str | None = None
     pending_lead = 0.0
     shots_by_beat: dict[int, list[list[Any]]] = {}
@@ -393,11 +426,13 @@ def plan_shots(
         shots = shots_by_beat.setdefault(beat_id, [])
         seconds = item["seconds"]
         panels = item["panels"]
+        number = item["number"]
         if not panels:
             if shots:
                 shots[-1][1] += seconds
+                shots[-1][3].append(number)
             elif current_panel is not None:
-                shots.append([current_panel, seconds, False])
+                shots.append([current_panel, seconds, False, [number]])
             else:
                 pending_lead += seconds
             continue
@@ -405,10 +440,10 @@ def plan_shots(
         accent = len(panels) > 1
         for pid in panels:
             if pending_lead:
-                shots.append([pid, share + pending_lead, accent])
+                shots.append([pid, share + pending_lead, accent, [number]])
                 pending_lead = 0.0
             else:
-                shots.append([pid, share, accent])
+                shots.append([pid, share, accent, [number]])
             current_panel = pid
 
     for beat_id, shots in shots_by_beat.items():
@@ -418,22 +453,25 @@ def plan_shots(
         # their cut down to `accent_floor` — deleting them is how the pipeline ended
         # up with zero shots under 1.5s against the reference's 22%.
         folded: list[list[Any]] = []
-        for pid, sec, accent in shots:
+        for pid, sec, accent, nums in shots:
             if folded and folded[-1][0] == pid:
                 folded[-1][1] += sec
                 folded[-1][2] = folded[-1][2] or accent
+                folded[-1][3].extend(nums)
             else:
-                folded.append([pid, sec, accent])
+                folded.append([pid, sec, accent, list(nums)])
 
         merged: list[list[Any]] = []
-        for pid, sec, accent in folded:
+        for pid, sec, accent, nums in folded:
             limit = accent_floor if accent else floor
             if sec < limit and merged:
                 merged[-1][1] += sec          # too short: extend the previous shot
+                merged[-1][3].extend(nums)
             else:
-                merged.append([pid, sec, accent])
+                merged.append([pid, sec, accent, list(nums)])
         if len(merged) > 1 and merged[0][1] < (accent_floor if merged[0][2] else floor):
             merged[1][1] += merged[0][1]      # a short FIRST shot has no previous
+            merged[1][3] = merged[0][3] + merged[1][3]
             merged = merged[1:]
 
         # Burst guard: accent cuts are punctuation, not a texture. The reference channel
@@ -453,10 +491,13 @@ def plan_shots(
                 # merge the two shortest adjacent shots inside the run
                 k = min(range(i, i + run - 1), key=lambda x: merged[x][1] + merged[x + 1][1])
                 merged[k][1] += merged[k + 1][1]
+                merged[k][3].extend(merged[k + 1][3])
                 merged.pop(k + 1)
                 run -= 1
             i = max(j, i + 1)
 
         if merged:
-            plan[beat_id] = [(pid, sec) for pid, sec, _accent in merged]
+            plan[beat_id] = [
+                (pid, sec, sorted(set(nums))) for pid, sec, _accent, nums in merged
+            ]
     return plan or None

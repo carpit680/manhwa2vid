@@ -255,6 +255,12 @@ class TimelineEntry(BaseModel):
     audio_file: str | None = None
     subtitle_text: str = ""
     beat_id: int | None = None
+    # Which narration sentences this shot holds. Empty on timelines written before this
+    # existed, which is why every reader must check before trusting a sentence count —
+    # `measure.binding.hold_runs` reports which basis it measured on for exactly that
+    # reason. A hold is understated when counted in entries: one entry can carry several
+    # sentences.
+    sentence_numbers: list[int] = Field(default_factory=list)
 
 
 class Timeline(BaseModel):

@@ -140,3 +140,120 @@ def test_narration_pace_passes_when_delivered_rate_matches(tmp_path: Path) -> No
     gate = _pace_gate(tmp_path, words=100, seconds=25.5, target_wpm=235)
     assert gate["status"] == PASS
     assert gate["details"] == ""
+
+
+# --- binding, holds and timing (qa-hardening-brief Phase 3) ----------------------------
+
+def _gates(tmp_path: Path, beats, panels, timeline, config=None):
+    import json
+
+    from manhwa2vid.qa import QAGateFailure
+
+    paths = project_paths(tmp_path)
+    try:
+        _enforce_timeline_qa(beats, panels, timeline, paths, config or _config())
+    except QAGateFailure:
+        pass  # some fixtures deliberately fail a gate; we want the report either way
+    report = json.loads((tmp_path / "qa.timeline.json").read_text())
+    return {g["name"]: g for g in report["gates"]}
+
+
+def test_dwell_gate_reads_merged_runs_not_planned_entries(tmp_path: Path) -> None:
+    """Frozen Player's 18.6s hold was TWO entries of 7.4s and 11.2s on one panel, and
+    neither tripped a 12s limit. Consecutive entries on one panel are one shot to the
+    viewer, so the gate must measure the run."""
+    from manhwa2vid.models import Timeline, TimelineEntry
+
+    def entry(pid, start, dur, beat):
+        return TimelineEntry(panel_id=pid, panel_path=f"panels/{pid}.png", start=start,
+                             end=start + dur, duration=dur, beat_id=beat,
+                             subtitle_text="x")
+
+    timeline = Timeline(
+        entries=[entry("p0001_01", 0.0, 7.4, 1), entry("p0001_01", 7.4, 11.2, 2)],
+        total_duration=18.6,
+    )
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p0001_01"], narration="a b c"),
+             ScriptBeat(beat_id=2, panel_ids=["p0001_01"], narration="d e f")]
+    gates = _gates(tmp_path, beats, [_panel("p0001_01", 1)], timeline)
+    assert gates["dwell-over-limit"]["status"] == WARN
+    assert "18.6s" in gates["dwell-over-limit"]["details"]
+    assert gates["no-invisible-cuts"]["status"] == WARN
+
+
+def test_panel_utilisation_warns_when_most_art_never_airs(tmp_path: Path) -> None:
+    from manhwa2vid.models import Timeline, TimelineEntry
+
+    timeline = Timeline(
+        entries=[TimelineEntry(panel_id="p0001_01", panel_path="panels/p0001_01.png",
+                               start=0.0, end=3.0, duration=3.0, beat_id=1,
+                               subtitle_text="x")],
+        total_duration=3.0,
+    )
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p0001_01"], narration="a b c")]
+    panels = [_panel(f"p0001_{i:02d}", 1) for i in range(1, 6)]   # 1 of 5 shown = 20%
+    gates = _gates(tmp_path, beats, panels, timeline)
+    assert gates["panel-utilisation"]["status"] == WARN
+    assert gates["panel-utilisation"]["data"]["utilisation_pct"] == 20.0
+
+
+def test_hold_run_warns_only_when_sentence_numbers_exist(tmp_path: Path) -> None:
+    """Without TimelineEntry.sentence_numbers the honest answer is entries-per-run, which
+    UNDERSTATES the hold — so the gate reports 'not measured' instead of a false pass."""
+    from manhwa2vid.models import Timeline, TimelineEntry
+
+    def entry(nums):
+        return TimelineEntry(panel_id="p0001_01", panel_path="panels/p0001_01.png",
+                             start=0.0, end=9.0, duration=9.0, beat_id=1,
+                             subtitle_text="x", sentence_numbers=nums)
+
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p0001_01"], narration="a b c")]
+    panels = [_panel("p0001_01", 1)]
+
+    blind = Timeline(entries=[entry([])], total_duration=9.0)
+    gates = _gates(tmp_path, beats, panels, blind)
+    assert gates["hold-run"]["status"] == PASS
+    assert "not measured" in gates["hold-run"]["details"]
+
+    seeing = Timeline(entries=[entry([1, 2, 3, 4, 5])], total_duration=9.0)
+    gates = _gates(tmp_path, beats, panels, seeing)
+    assert gates["hold-run"]["status"] == WARN
+    assert gates["hold-run"]["data"]["longest_hold_sentences"] == 5
+
+
+def test_timing_measured_fails_on_a_regression_to_word_proration(tmp_path: Path) -> None:
+    """Kokoro synthesizes per sentence, so its sidecars are measured. Another provider
+    returns one clip per beat and timeline._subdivide_segments word-prorates it — a
+    plausible estimate that silently decouples every cut from the speech."""
+    import json
+
+    from manhwa2vid.models import Timeline, TimelineEntry
+
+    audio = tmp_path / "audio"
+    audio.mkdir()
+    (tmp_path / "script.shotlist.json").write_text(json.dumps(
+        {"sentences": [{"number": 1, "beat_id": 1, "text": "one", "panels": ["p0001_01"]},
+                       {"number": 2, "beat_id": 1, "text": "two", "panels": []}]}
+    ))
+    timeline = Timeline(
+        entries=[TimelineEntry(panel_id="p0001_01", panel_path="panels/p0001_01.png",
+                               start=0.0, end=4.0, duration=4.0, beat_id=1,
+                               subtitle_text="x")],
+        total_duration=4.0,
+    )
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p0001_01"], narration="one. two.")]
+    panels = [_panel("p0001_01", 1)]
+
+    # one sidecar entry for a two-sentence beat: the proration path
+    (audio / "beat_001.segments.json").write_text(json.dumps([{"text": "one two", "seconds": 4.0}]))
+    gates = _gates(tmp_path, beats, panels, timeline)
+    assert gates["timing-measured"]["status"] == FAIL
+    assert gates["timing-measured"]["data"]["mismatched_beats"] == [1]
+
+    # one per sentence: measured
+    (audio / "beat_001.segments.json").write_text(json.dumps(
+        [{"text": "one", "seconds": 2.0}, {"text": "two", "seconds": 2.0}]
+    ))
+    gates = _gates(tmp_path, beats, panels, timeline)
+    assert gates["timing-measured"]["status"] == PASS
+    assert gates["match-rate"]["status"] == WARN   # 50% bound, floor is 70%

@@ -68,7 +68,7 @@ def run_tts_and_timeline(
     # synthesis), which is why the shot list stores claims and the plan is built now.
     shot_plan = None
     if paths["script_shotlist_json"].exists():
-        from manhwa2vid.script.match import plan_shots
+        from manhwa2vid.script.match import plan_shots_with_sentences
         from manhwa2vid.video.timeline import _subdivide_segments, load_beat_segments
 
         shotlist = json.loads(paths["script_shotlist_json"].read_text(encoding="utf-8"))
@@ -109,7 +109,7 @@ def run_tts_and_timeline(
         # panels stay in the ORDER (so a swap can find its neighbour) but are excluded
         # from fill by the planner itself.
         fill_order = [p.id for p in panels if p.id not in empty]
-        shot_plan = plan_shots(
+        shot_plan = plan_shots_with_sentences(
             shotlist,
             segments_by_beat,
             floor=floor,
@@ -172,6 +172,15 @@ def _ensure_segments_sidecar(narration: str, wav_path: Path) -> None:
     )
 
 
+# Binding and timing bands. Sources in reports/render_audit_2026-08-28.md; the brief's
+# own proposals except where measurement contradicted them.
+_MATCH_MIN_PCT = 70.0          # brief; measured 61.1 (FP) / 48.7 (SL)
+_UTILISATION_MIN_PCT = 60.0    # brief; measured 58.8 / 71.5
+_HOLD_MAX_SENTENCES = 3        # brief
+_TIMING_MIN_PCT = 95.0         # replaces the brief's "80% measured": 100% today, so this
+                               # guards a REGRESSION to word-proration, not a deficit
+
+
 def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
     """Final-surface checks: what actually ships in the timeline, not what upstream
     stages intended. Catches blank entries, starved-into-static beats, and beats whose
@@ -202,11 +211,19 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
     limit = max_sec * multiplier
     words_by_beat = {b.beat_id: len(b.narration.split()) for b in beats}
     panels_by_beat = {b.beat_id: max(len(b.panel_ids), 1) for b in beats}
+    # Measured on MERGED runs, not planned entries. Consecutive entries on one panel are
+    # one shot to the viewer, so counting entries reports half a hold: Frozen Player's
+    # 18.6s hold on p0024_02 was two entries of 7.4s and 11.2s, and neither tripped a
+    # 12s limit.
+    from manhwa2vid.measure.shots import merged_runs
+
+    runs_all = merged_runs(timeline.entries)
     over = [
-        f"beat {e.beat_id}: {e.duration:.1f}s on {e.panel_id} "
-        f"({words_by_beat.get(e.beat_id, 0)}w / {panels_by_beat.get(e.beat_id, 1)} panel(s))"
-        for e in timeline.entries
-        if e.duration > limit
+        f"beat {run['beat_ids'][0]}: {run['seconds']:.1f}s on {run['panel_id']} "
+        f"({words_by_beat.get(run['beat_ids'][0], 0)}w / "
+        f"{panels_by_beat.get(run['beat_ids'][0], 1)} panel(s))"
+        for run in runs_all
+        if run["seconds"] > limit
     ]
     report.add(
         "dwell-over-limit",
@@ -219,13 +236,12 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
     # plan says. Holding across a beat boundary is a legitimate fallback, so this warns
     # rather than fails — but it must be visible, because the dwell limit above counts
     # planned entries and cannot see that it is really reporting half a hold.
-    runs: list[str] = []
-    for prev, cur in zip(timeline.entries, timeline.entries[1:]):
-        if prev.panel_id == cur.panel_id:
-            runs.append(
-                f"{cur.panel_id} across beats {prev.beat_id}->{cur.beat_id} "
-                f"({prev.duration + cur.duration:.1f}s seen as one shot)"
-            )
+    runs = [
+        f"{run['panel_id']} across beats {run['beat_ids'][0]}->{run['beat_ids'][-1]} "
+        f"({run['seconds']:.1f}s seen as one shot)"
+        for run in runs_all
+        if run["entries"] > 1
+    ]
     report.add(
         "no-invisible-cuts",
         "warn" if runs else True,
@@ -249,6 +265,61 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
             closing = f"the video ends on {last.panel_id}, which is lettering not art"
     report.add("closing-shot-is-art", not closing, closing)
 
+    # --- panel binding -----------------------------------------------------------------
+    #
+    # These read the PLANNED artifacts, so they can catch a bad edit before a render is
+    # paid for. Thresholds from docs/qa-hardening-brief.md, measured today at
+    # match 61.1% (FP) / 48.7% (SL) and utilisation 58.8% / 71.5%.
+    from manhwa2vid.measure.binding import hold_runs, match_rate, panel_utilisation
+
+    shotlist_path = paths["script_shotlist_json"]
+    if shotlist_path.exists():
+        import json as _json
+
+        shotlist = _json.loads(shotlist_path.read_text(encoding="utf-8"))
+        match = match_rate(shotlist)
+        report.add(
+            "match-rate",
+            True if match["match_rate_pct"] >= _MATCH_MIN_PCT else "warn",
+            f"{match['match_rate_pct']}% of sentences are bound to a panel of their own "
+            f"(floor {_MATCH_MIN_PCT}%) — the rest inherit the picture rather than choose it",
+            **match,
+        )
+
+    story_ids = [p.id for p in panels]
+    util = panel_utilisation(story_ids, timeline.entries)
+    unused = util.pop("unused", [])
+    report.add(
+        "panel-utilisation",
+        True if util["utilisation_pct"] >= _UTILISATION_MIN_PCT else "warn",
+        f"{util['utilisation_pct']}% of story panels reach the screen "
+        f"(floor {_UTILISATION_MIN_PCT}%); {len(unused)} never shown",
+        **util,
+    )
+
+    # How much NARRATION one image has to carry. Needs TimelineEntry.sentence_numbers;
+    # without it the honest answer is entries-per-run, which understates the hold, so
+    # hold_runs reports which basis it used and returns no verdict on the weaker one.
+    holds = hold_runs(timeline.entries, max_sentences=_HOLD_MAX_SENTENCES)
+    if holds["basis"] == "sentences":
+        worst = holds["over_limit"]
+        report.add(
+            "hold-run",
+            "warn" if worst else True,
+            (f"{len(worst)} panel(s) hold more than {_HOLD_MAX_SENTENCES} consecutive "
+             f"sentences: " + "; ".join(
+                 f"{w['panel_id']} ({w['sentences']} sentences, {w['seconds']}s)"
+                 for w in worst[:4]
+             )) if worst else "",
+            longest_hold_sentences=holds["longest_hold"], over_limit=worst,
+        )
+    else:
+        report.add(
+            "hold-run", True,
+            "not measured: this timeline predates TimelineEntry.sentence_numbers",
+            basis=holds["basis"],
+        )
+
     report.add(
         "panel-budget",
         "warn" if timeline.dropped_panels else True,
@@ -256,6 +327,31 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
         if timeline.dropped_panels else "",
         dropped=timeline.dropped_panels,
     )
+
+    # Sentence durations: MEASURED, or estimated? Kokoro synthesizes one clip per
+    # sentence, so its sidecar seconds are measured and sentence identity with the shot
+    # list holds by construction. Other providers return one opaque clip per beat and
+    # `timeline._subdivide_segments` word-prorates it — a plausible-looking estimate that
+    # silently decouples every cut from the speech. So this checks IDENTITY (per-beat
+    # sentence counts line up), not merely that a sidecar exists.
+    if shotlist_path.exists():
+        from manhwa2vid.measure.binding import timing_measured
+        from manhwa2vid.video.timeline import load_beat_segments
+
+        segments: dict[int, list[dict]] = {}
+        for entry in timeline.entries:
+            beat = int(entry.beat_id or 0)
+            if beat not in segments:
+                segments[beat] = load_beat_segments(paths["audio"], beat)
+        timing = timing_measured(shotlist, segments)
+        report.add(
+            "timing-measured",
+            timing["measured_pct"] >= _TIMING_MIN_PCT,
+            f"{timing['measured_pct']}% of sentences have a measured duration "
+            f"(floor {_TIMING_MIN_PCT}%); beats falling back to word-proration: "
+            f"{timing['mismatched_beats'][:8]}",
+            **timing,
+        )
 
     # Does the voice actually speak at the rate the script was PLANNED for?
     #
