@@ -61,11 +61,45 @@ def _window(items: list, size: int) -> list[list]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
+def _window_sentences(
+    sentences: list[tuple[int, str]],
+    batch: list[Panel],
+    sentence_pages: dict[int, tuple[int, int]] | None,
+    *,
+    page_margin: int = 1,
+) -> list[tuple[int, str]]:
+    """The sentences plausibly depicted by THIS window's panels.
+
+    Every window used to receive the ENTIRE block's sentence list — ~174 sentences
+    against 16 panels on Solo Leveling's first block — so distant windows independently
+    claimed the same sentences, and the monotonic filter then destroyed all but one of
+    each set: ~30% of raw claims died this way, and every death was a sentence that
+    reads as "unmatched" in the gate.
+
+    The scope comes from the aligner's advisory paragraph->page map (each sentence
+    inherits its paragraph's page range, pre-widened by ±1 paragraph upstream), further
+    widened by `page_margin` here. The map is advisory and can collapse — a sentence
+    with no entry is always included, and an empty scope falls back to the full list,
+    which is exactly the old behaviour.
+    """
+    if not sentence_pages:
+        return sentences
+    pages = [p.page_num for p in batch]
+    lo, hi = min(pages) - page_margin, max(pages) + page_margin
+    scoped = [
+        (n, t) for n, t in sentences
+        if n not in sentence_pages
+        or (sentence_pages[n][0] <= hi and sentence_pages[n][1] >= lo)
+    ]
+    return scoped or sentences
+
+
 def collect_claims(
     sentences: list[tuple[int, str]],
     panels: list[Panel],
     paths: dict[str, Path],
     config: dict[str, Any],
+    sentence_pages: dict[int, tuple[int, int]] | None = None,
 ) -> list[tuple[int, str]]:
     """(sentence_number, panel_id) claims from windowed vision calls. Raw, unfiltered."""
     from manhwa2vid.llm.provider import get_llm_provider
@@ -77,12 +111,13 @@ def collect_claims(
     provider.temperature = 0.0
 
     window_size = int(get_nested(config, "align", "match_window_panels", default=16))
-    numbered = "\n".join(f"[{n}] {t}" for n, t in sentences)
     valid_ids = {p.id for p in panels}
     valid_numbers = {n for n, _ in sentences}
 
     claims: list[tuple[int, str]] = []
     for batch in _window(panels, window_size):
+        scoped = _window_sentences(sentences, batch, sentence_pages)
+        numbered = "\n".join(f"[{n}] {t}" for n, t in scoped)
         raw = provider.describe_labeled_panels(
             [(f"[{p.id}]", paths["root"] / p.image_path) for p in batch],
             f"{_SYSTEM}\n\nSENTENCES:\n{numbered}",
@@ -108,11 +143,23 @@ def filter_monotonic(
 ) -> list[tuple[int, str]]:
     """Largest consistent claim set: sentence order and panel order must agree.
 
-    Longest-increasing-subsequence over (sentence, panel_position): panel positions
-    strictly increase (each panel shown once), sentence numbers never decrease. A claim
-    that contradicts the story's forward motion — the model matching a late panel to an
-    early sentence — is dropped rather than negotiated with. O(n^2), n is a block's
-    claims (tens), chosen over the O(n log n) version because it is obviously correct.
+    Chain constraint unchanged: panel positions strictly increase (each panel shown
+    once), sentence numbers never decrease. A claim that contradicts the story's
+    forward motion — the model matching a late panel to an early sentence — is dropped
+    rather than negotiated with.
+
+    The OBJECTIVE changed on 2026-08-28, measured from the persisted raw claims. The
+    original longest-chain DP maximised total CLAIMS, so a sentence's second and third
+    accent panels outcompeted another sentence's only panel: on Solo Leveling's first
+    block the model claimed 136 distinct sentences and the longest chain kept 87 — 49
+    sentences lost entirely, every one reading as "unmatched" in the gate while its
+    panel budget went to someone's accent shot. The product counts sentences with a
+    picture of their own, so the DP now maximises (distinct sentences, then total
+    claims). Distinctness is a valid per-step increment because claims are sorted by
+    sentence and the chain is non-decreasing in sentence, so all of a sentence's kept
+    claims sit consecutively — whether claim i starts a new sentence depends only on
+    the element before it. O(n^2), n is a block's claims (low hundreds), chosen over
+    cleverer forms because it is obviously correct.
     """
     pos = {pid: i for i, pid in enumerate(panel_order)}
     items = sorted(
@@ -121,15 +168,18 @@ def filter_monotonic(
     )
     if not items:
         return []
-    best_len = [1] * len(items)
+    # score = (distinct sentences in chain, total claims in chain)
+    best = [(1, 1)] * len(items)
     parent = [-1] * len(items)
     for i, (sent_i, pid_i) in enumerate(items):
         for j in range(i):
             sent_j, pid_j = items[j]
-            if sent_j <= sent_i and pos[pid_j] < pos[pid_i] and best_len[j] + 1 > best_len[i]:
-                best_len[i] = best_len[j] + 1
-                parent[i] = j
-    end = max(range(len(items)), key=lambda i: best_len[i])
+            if sent_j <= sent_i and pos[pid_j] < pos[pid_i]:
+                cand = (best[j][0] + (1 if sent_i != sent_j else 0), best[j][1] + 1)
+                if cand > best[i]:
+                    best[i] = cand
+                    parent[i] = j
+    end = max(range(len(items)), key=lambda i: best[i])
     chain: list[tuple[int, str]] = []
     while end != -1:
         chain.append(items[end])
@@ -143,6 +193,7 @@ def build_shotlist(
     block_of_sentence: list[int],
     paths: dict[str, Path],
     config: dict[str, Any],
+    sentence_pages: dict[int, tuple[int, int]] | None = None,
 ) -> dict[str, Any]:
     """Match every block, save the claims artifact, return it.
 
@@ -166,7 +217,7 @@ def build_shotlist(
         ]
         if not block_sents or not panels:
             continue
-        raw = collect_claims(block_sents, panels, paths, config)
+        raw = collect_claims(block_sents, panels, paths, config, sentence_pages)
         kept = filter_monotonic(raw, [p.id for p in panels])
         console.print(
             f"[dim]Match: block {block_idx} — {len(raw)} claim(s), "

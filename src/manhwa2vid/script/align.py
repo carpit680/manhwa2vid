@@ -469,6 +469,39 @@ def split_long_paragraphs(paras: list[str], max_words: int = 90) -> list[str]:
     return out
 
 
+def _sentence_page_ranges(
+    para_texts: list[str], alignment_map: list[dict[str, Any]]
+) -> dict[int, tuple[int, int]]:
+    """Global sentence number -> plausible page range, from the advisory paragraph map.
+
+    Each sentence inherits its paragraph's page range widened by ±1 PARAGRAPH — the
+    map's per-paragraph boundaries are the least trustworthy thing about it, so a
+    sentence is allowed to sit in its neighbours' pages too. Feeds the matcher's
+    window scoping (`match._window_sentences`); a paragraph the map does not cover
+    contributes nothing, and its sentences are then always in scope everywhere.
+    """
+    from manhwa2vid.script.sentences import split_sentences
+
+    by_para: dict[int, tuple[int, int]] = {}
+    for entry in alignment_map or []:
+        try:
+            n = int(entry["paragraph"])
+            by_para[n] = (int(entry["first_page"]), int(entry["last_page"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    ranges: dict[int, tuple[int, int]] = {}
+    no = 0
+    for i, text in enumerate(para_texts):
+        para_no = i + 1
+        spans = [by_para[p] for p in (para_no - 1, para_no, para_no + 1) if p in by_para]
+        for _ in split_sentences(text):
+            no += 1
+            if para_no in by_para and spans:
+                ranges[no] = (min(s[0] for s in spans), max(s[1] for s in spans))
+    return ranges
+
+
 def _build_shotlist_for(
     para_texts: list[str],
     panel_lists: list[list[str]],
@@ -478,6 +511,7 @@ def _build_shotlist_for(
     panels: list[Panel],
     paths: dict[str, Path],
     config: dict[str, Any],
+    alignment_map: list[dict[str, Any]] | None = None,
 ) -> None:
     """Run the matcher over each time block and persist the shot list.
 
@@ -498,7 +532,10 @@ def _build_shotlist_for(
     blocks_panels = [
         [by_id[pid] for pid in ordered_ids[lo:hi] if pid in by_id] for lo, hi in blocks
     ]
-    build_shotlist(beats_sentences, blocks_panels, block_of_sentence, paths, config)
+    build_shotlist(
+        beats_sentences, blocks_panels, block_of_sentence, paths, config,
+        sentence_pages=_sentence_page_ranges(para_texts, alignment_map or []),
+    )
 
 
 def align_script(
@@ -588,7 +625,8 @@ def align_script(
     if get_nested(config, "align", "match_enabled", default=True):
         try:
             _build_shotlist_for(
-                para_texts, panel_lists, ordered_ids, block_of, blocks, panels, paths, config
+                para_texts, panel_lists, ordered_ids, block_of, blocks, panels, paths,
+                config, alignment_map=entries,
             )
         except Exception as exc:  # matching is an improvement, never a hard dependency
             console.print(f"[yellow]Shot matching skipped ({exc})[/]")

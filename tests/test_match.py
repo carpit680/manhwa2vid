@@ -514,3 +514,112 @@ class TestShotlistArtifacts:
         block = data["blocks"][0]
         assert set(block) >= {"block", "sentences", "panels", "raw", "kept"}
         assert len(block["kept"]) <= len(block["raw"])
+
+
+class TestWindowScoping:
+    """Every window used to see the ENTIRE block's sentence list (~174 sentences against
+    16 panels on Solo Leveling's block 0), so distant windows claimed the same sentences
+    and the monotonic filter destroyed all but one of each set — ~30% of raw claims died
+    as duplicates, and every death read as an unmatched sentence in the gate."""
+
+    @staticmethod
+    def _panel(pid, page):
+        from manhwa2vid.models import Panel, PanelBBox
+
+        return Panel(id=pid, page_num=page, bbox=PanelBBox(x=0, y=0, width=10, height=10),
+                     image_path=f"panels/{pid}.png")
+
+    SENTS = [(1, "One."), (2, "Two."), (3, "Three."), (4, "Four.")]
+
+    def test_a_window_only_sees_sentences_near_its_pages(self):
+        from manhwa2vid.script.match import _window_sentences
+
+        batch = [self._panel("a", 10), self._panel("b", 11)]
+        pages = {1: (1, 2), 2: (9, 12), 3: (10, 11), 4: (30, 33)}
+        scoped = _window_sentences(self.SENTS, batch, pages)
+        assert [n for n, _ in scoped] == [2, 3]
+
+    def test_no_map_means_the_old_behaviour(self):
+        from manhwa2vid.script.match import _window_sentences
+
+        batch = [self._panel("a", 10)]
+        assert _window_sentences(self.SENTS, batch, None) == self.SENTS
+        assert _window_sentences(self.SENTS, batch, {}) == self.SENTS
+
+    def test_a_sentence_the_map_missed_is_in_scope_everywhere(self):
+        from manhwa2vid.script.match import _window_sentences
+
+        batch = [self._panel("a", 10)]
+        pages = {1: (1, 2), 2: (9, 12)}  # 3 and 4 unmapped
+        scoped = _window_sentences(self.SENTS, batch, pages)
+        assert [n for n, _ in scoped] == [2, 3, 4]
+
+    def test_a_collapsed_map_falls_back_to_the_full_list(self):
+        """If the advisory map maps everything far from this window, excluding all
+        sentences would silence the window entirely — worse than the duplicates."""
+        from manhwa2vid.script.match import _window_sentences
+
+        batch = [self._panel("a", 50)]
+        pages = {n: (1, 2) for n, _ in self.SENTS}
+        assert _window_sentences(self.SENTS, batch, pages) == self.SENTS
+
+
+class TestSentencePageRanges:
+    def test_ranges_widen_by_one_paragraph_each_side(self):
+        from manhwa2vid.script.align import _sentence_page_ranges
+
+        paras = ["First one. Second one.", "Third one."]
+        amap = [
+            {"paragraph": 1, "first_page": 1, "last_page": 3},
+            {"paragraph": 2, "first_page": 4, "last_page": 6},
+        ]
+        r = _sentence_page_ranges(paras, amap)
+        # paragraph 1's sentences may also sit in paragraph 2's pages, and vice versa
+        assert r[1] == (1, 6) and r[2] == (1, 6) and r[3] == (1, 6)
+
+    def test_interior_paragraph_does_not_inherit_distant_pages(self):
+        from manhwa2vid.script.align import _sentence_page_ranges
+
+        paras = ["A one.", "B one.", "C one.", "D one."]
+        amap = [{"paragraph": i, "first_page": i * 10, "last_page": i * 10 + 5}
+                for i in range(1, 5)]
+        r = _sentence_page_ranges(paras, amap)
+        assert r[2] == (10, 35)   # paragraphs 1..3
+        assert r[3] == (20, 45)   # paragraphs 2..4
+
+    def test_an_unmapped_paragraph_contributes_no_range(self):
+        from manhwa2vid.script.align import _sentence_page_ranges
+
+        paras = ["A one.", "B one."]
+        amap = [{"paragraph": 1, "first_page": 1, "last_page": 2}]
+        r = _sentence_page_ranges(paras, amap)
+        assert 1 in r and 2 not in r
+
+    def test_garbage_map_entries_are_skipped(self):
+        from manhwa2vid.script.align import _sentence_page_ranges
+
+        paras = ["A one."]
+        amap = [{"paragraph": "x"}, {"first_page": 1}, None if False else {}]
+        assert _sentence_page_ranges(paras, amap) == {}
+
+
+def test_filter_prefers_distinct_sentences_over_one_sentences_accent_pile():
+    """The longest-chain objective let one sentence's accent panels outcompete other
+    sentences' ONLY panels: Solo Leveling's first block claimed 136 distinct sentences
+    and the longest chain kept 87. The DP now maximises distinct sentences first."""
+    from manhwa2vid.script.match import filter_monotonic
+
+    order = ["pa", "pb", "pc", "pd"]
+    claims = [(1, "pa"), (1, "pb"), (1, "pc"), (1, "pd"),  # one sentence, four panels
+              (2, "pb"), (3, "pc")]                          # two sentences, one each
+    kept = filter_monotonic(claims, order)
+    assert {n for n, _ in kept} == {1, 2, 3}, "two sentences were starved for accents"
+
+
+def test_filter_still_keeps_accents_when_they_cost_nothing():
+    from manhwa2vid.script.match import filter_monotonic
+
+    order = ["pa", "pb", "pc"]
+    claims = [(1, "pa"), (1, "pb"), (2, "pc")]
+    kept = filter_monotonic(claims, order)
+    assert kept == [(1, "pa"), (1, "pb"), (2, "pc")]
