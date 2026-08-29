@@ -121,3 +121,17 @@ def test_the_gate_floor_is_the_pass_floor():
     from manhwa2vid.script import story_first
 
     assert story_first._VERBS_MIN_PER_1K is VERBS_MIN_PER_1K
+
+
+def test_the_outro_is_never_a_rewrite_target(paths):
+    """On a cached run script.freeform.md already carries its outro; 40+ words, zero
+    reporting verbs — a target by every other rule. The narrator's ask to the viewer
+    must not be re-voiced as reported speech."""
+    outro = (
+        "Whether this desperate gamble will decode the temple's deadly rules remains "
+        "to be seen, and subscribing with notifications turned on ensures you are "
+        "there the moment the dust settles and the next part of his struggle lands."
+    )
+    out, record = apply_density_pass(f"{DRY}\n\n{outro}", paths, {})
+    assert record["targets"] == [0]
+    assert out.endswith(outro)

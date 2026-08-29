@@ -106,6 +106,11 @@ def apply_density_pass(
         i: p for i, p in enumerate(paras)
         if len(p.split()) >= _MIN_WORDS
         and dialogue_verb_density(p)["per_1k"] < VERBS_MIN_PER_1K
+        # The outro is the narrator talking to the viewer — no dialogue to report. The
+        # pass runs before append_outro on a fresh run, but a CACHED freeform already
+        # carries its outro, so the exclusion must be explicit (same signature as the
+        # outro's own idempotency guard).
+        and "subscri" not in p.lower()
     }
     record: dict[str, Any] = {
         "targets": sorted(targets), "accepted": [], "rejected": {},
