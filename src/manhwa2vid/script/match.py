@@ -158,6 +158,7 @@ def build_shotlist(
             numbered.append((n, text, beat_id))
 
     all_claims: list[tuple[int, str]] = []
+    claims_debug: list[dict[str, Any]] = []
     for block_idx, panels in enumerate(blocks_panels):
         block_sents = [
             (no, text) for (no, text, _b) in numbered
@@ -171,11 +172,41 @@ def build_shotlist(
             f"[dim]Match: block {block_idx} — {len(raw)} claim(s), "
             f"{len(kept)} after monotonic filter[/]"
         )
+        claims_debug.append({
+            "block": block_idx,
+            "sentences": [no for no, _ in block_sents],
+            "panels": [p.id for p in panels],
+            "raw": [[no, pid] for no, pid in raw],
+            "kept": [[no, pid] for no, pid in kept],
+        })
         all_claims.extend(kept)
+
+    # The raw claims are the only evidence of WHY a sentence went unmatched — whether the
+    # model never claimed it or the monotonic filter destroyed the claim — and until this
+    # file existed, answering that question meant re-paying every vision call.
+    debug_dir = paths["debug"]
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    (debug_dir / "match_claims.json").write_text(
+        json.dumps({"blocks": claims_debug}, indent=1), encoding="utf-8"
+    )
 
     claims_by_number: dict[int, list[str]] = {}
     for number, pid in all_claims:
         claims_by_number.setdefault(number, []).append(pid)
+
+    # The outro is the narrator talking to the VIEWER — deliberately not panel-grounded
+    # (script/outro.py) — so its sentences are marked and excluded from the match-rate
+    # denominator rather than counted as matcher misses. Same signature outro.py's own
+    # idempotency guard uses.
+    outro_beat = None
+    if numbered:
+        last_beat = numbered[-1][2]
+        if any(
+            "subscri" in text.lower()
+            for (_no, text, beat_id) in numbered
+            if beat_id == last_beat
+        ):
+            outro_beat = last_beat
 
     shotlist = {
         "sentences": [
@@ -184,6 +215,7 @@ def build_shotlist(
                 "beat_id": beat_id,
                 "text": text,
                 "panels": claims_by_number.get(no, []),
+                **({"outro": True} if beat_id == outro_beat else {}),
             }
             for (no, text, beat_id) in numbered
         ]

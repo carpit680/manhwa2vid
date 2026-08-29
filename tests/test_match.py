@@ -460,3 +460,57 @@ def test_a_hold_spanning_two_beats_is_broken_up():
     assert plan is not None
     assert plan[1][0][0] != plan[2][0][0], "the viewer must see a cut between the beats"
     assert abs(plan[1][0][1] + plan[2][0][1] - 14.4) < 1e-6, "A/V total preserved"
+
+
+class TestShotlistArtifacts:
+    """build_shotlist's two side artifacts: the outro marker and the claims debug file."""
+
+    @staticmethod
+    def _panel(pid):
+        from manhwa2vid.models import Panel, PanelBBox
+
+        return Panel(id=pid, page_num=1, bbox=PanelBBox(x=0, y=0, width=10, height=10),
+                     image_path=f"panels/{pid}.png")
+
+    def _run(self, tmp_path, beats):
+        from manhwa2vid.script.match import build_shotlist
+
+        panels = [self._panel(f"p{i:02d}") for i in range(6)]
+        n = sum(len(s) for _b, s in beats)
+        paths = {
+            "root": tmp_path,
+            "debug": tmp_path / "debug",
+            "script_shotlist_json": tmp_path / "script.shotlist.json",
+        }
+        return build_shotlist(beats, [panels], [0] * n, paths, {}), paths
+
+    def test_outro_sentences_are_marked(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        shotlist, _ = self._run(tmp_path, [
+            (1, ["He draws his blade.", "She nods once."]),
+            (2, ["Subscribe and turn notifications on.", "Every second counts."]),
+        ])
+        flags = [s.get("outro", False) for s in shotlist["sentences"]]
+        assert flags == [False, False, True, True]
+
+    def test_a_final_beat_without_an_ask_is_not_an_outro(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        shotlist, _ = self._run(tmp_path, [
+            (1, ["He draws his blade."]),
+            (2, ["The gate slams shut."]),
+        ])
+        assert not any(s.get("outro") for s in shotlist["sentences"])
+
+    def test_raw_claims_are_persisted_for_diagnosis(self, tmp_path, monkeypatch):
+        """Until this file existed, the only trace of what the model claimed before the
+        monotonic filter was a console line — diagnosing a drop meant re-paying every
+        vision call."""
+        import json as _json
+
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        _, paths = self._run(tmp_path, [(1, ["One.", "Two.", "Three.", "Four."])])
+        data = _json.loads((paths["debug"] / "match_claims.json").read_text())
+        assert data["blocks"], "no block record written"
+        block = data["blocks"][0]
+        assert set(block) >= {"block", "sentences", "panels", "raw", "kept"}
+        assert len(block["kept"]) <= len(block["raw"])

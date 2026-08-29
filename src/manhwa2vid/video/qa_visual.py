@@ -64,7 +64,21 @@ _TRUE_PEAK_MAX_DBTP = -1.0
 _BED_FLOOR_MIN_DBFS = -40.0
 _BED_TONALITY_MIN = 5.0
 _DUCK_MIN_DB, _DUCK_MAX_DB = 12.0, 15.0
-_LRA_MIN_LU, _LRA_MAX_LU = 5.0, 9.0
+# Measured off the reference channel's OWN audio, 2026-08-28: the full 5h17m track of
+# the Mamoru Frozen Player video (reference/frozen_player/mamoru_fp_audio.wav, pulled
+# audio-only from the same video id the visual profile used) measures LRA 2.50 LU by
+# loudnorm and 2.6 LU by ebur128 — the two meters agree. The spec's 5-9 band was an
+# unsourced proposals-table row that no single-voice TTS-plus-bed chain can reach: raw
+# Kokoro narration measures 2.0 LU before ANY processing, and loudnorm linear=true
+# cannot create range. The channel this pipeline imitates delivers a flat wall on
+# purpose. Floor 1.5 catches the real failure this gate can see — a dynamic-mode
+# loudnorm fallback or a runaway compressor crushing what little range exists; ceiling
+# 4.5 catches dynamics this format never legitimately produces.
+#
+# Same measurement, for the record: reference integrated -17.5 LUFS (we target -14,
+# which is the platform normalization point — theirs plays quieter, not better) and
+# true peak -0.77 dBTP, which would FAIL our own -1.0 gate. Ours stays stricter.
+_LRA_MIN_LU, _LRA_MAX_LU = 1.5, 4.5
 
 # Rhythm bands. Derived from the reference channel measured with THIS scene detector over
 # three windows (reference/mamoru_metrics_2026-08-28.json), not from the hardening brief's
@@ -360,20 +374,39 @@ def enforce_render_qa(
         report.add(
             "audio-duck-depth",
             True if _DUCK_MIN_DB <= duck <= _DUCK_MAX_DB else "warn",
-            f"narration sits {duck} dB over the bed (want {_DUCK_MIN_DB}-{_DUCK_MAX_DB}); "
-            f"promotes to FAIL when the mastering chain lands",
+            f"narration sits {duck} dB over the bed (want {_DUCK_MIN_DB}-{_DUCK_MAX_DB})",
             duck_depth_db=duck,
         )
 
-    # Loudness range. 2.0-2.3 LU is a flat wall — the delivery has no dynamics at all.
+    # Loudness range, judged against the reference channel's measured 2.5-2.6 LU — a
+    # flat delivery is this format's actual sound, and the failure worth catching is
+    # range being CRUSHED (a dynamic-mode loudnorm fallback), not range being small.
+    # `stem_lra_lu` / `premaster_lra_lu` say where any loss happened: the stem is what
+    # the synthesizer produced, premaster is what the chain handed loudnorm.
     lra = metrics.get("loudness_range_lu")
     if lra is not None:
+        provenance = {
+            k: v for k, v in (
+                ("stem_lra_lu", metrics.get("stem_lra_lu")),
+                ("premaster_lra_lu", metrics.get("premaster_lra_lu")),
+            ) if v is not None
+        }
         report.add(
             "audio-lra",
-            True if _LRA_MIN_LU <= lra <= _LRA_MAX_LU else "warn",
-            f"loudness range {lra} LU (want {_LRA_MIN_LU}-{_LRA_MAX_LU}); "
-            f"promotes to FAIL when the mastering chain lands",
+            _LRA_MIN_LU <= lra <= _LRA_MAX_LU,
+            f"loudness range {lra} LU (reference-derived band "
+            f"{_LRA_MIN_LU}-{_LRA_MAX_LU}; the channel itself measures 2.5)",
             lra_lu=lra,
+            **provenance,
+        )
+    if metrics.get("loudnorm_fallback"):
+        report.add(
+            "audio-two-pass",
+            "warn",
+            "loudnorm measurement pass failed to parse — the mix was normalized in "
+            "single-pass DYNAMIC mode, which compresses loudness range; if audio-lra "
+            "failed, this is why",
+            fallback=True,
         )
 
     # --- editing rhythm ----------------------------------------------------------------

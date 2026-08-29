@@ -310,3 +310,32 @@ def test_pitch_shift_is_disableable_and_preserves_formants():
     off = build_filter({"video": {"voice_pitch_semitones": 0}}, pad_seconds=0.0,
                        with_bed=False, loudnorm=measure_pass(-14, 7))
     assert "rubberband" not in off
+
+
+def test_match_rate_excludes_the_outro_from_the_denominator():
+    """The outro is the narrator addressing the VIEWER — deliberately not panel-grounded
+    (script/outro.py) — so its guaranteed misses are a design decision, not matcher
+    misses. Frozen Player's outro alone cost the metric 1.7 points."""
+    from manhwa2vid.measure.binding import match_rate
+
+    shotlist = {"sentences": [
+        {"number": 1, "beat_id": 1, "text": "He draws.", "panels": ["p1"]},
+        {"number": 2, "beat_id": 1, "text": "She nods.", "panels": []},
+        {"number": 3, "beat_id": 2, "text": "Subscribe now.", "panels": [], "outro": True},
+        {"number": 4, "beat_id": 2, "text": "Alerts on.", "panels": [], "outro": True},
+    ]}
+    r = match_rate(shotlist)
+    assert r["sentences"] == 2 and r["matched"] == 1
+    assert r["outro_excluded"] == 2
+    assert r["match_rate_pct"] == 50.0
+
+
+def test_match_rate_without_an_outro_is_unchanged():
+    from manhwa2vid.measure.binding import match_rate
+
+    shotlist = {"sentences": [
+        {"number": 1, "beat_id": 1, "text": "He draws.", "panels": ["p1"]},
+        {"number": 2, "beat_id": 1, "text": "She nods.", "panels": []},
+    ]}
+    r = match_rate(shotlist)
+    assert r["sentences"] == 2 and r["match_rate_pct"] == 50.0 and r["outro_excluded"] == 0

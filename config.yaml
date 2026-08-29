@@ -161,6 +161,11 @@ align:
   max_content_free_fraction: 0.5
   accent_shot_seconds: 0.4  # intra-sentence multi-panel cuts survive down to this;
                             # the reference channel runs 22% of its cuts under 1.5s
+  # Paragraph split ceiling for alignment beats. NOT script.max_beat_words (60, an old
+  # lint-path knob): align.py has always read THIS key and silently used its default of
+  # 90 because the key was absent — the config-defaults trap, recorded here so the value
+  # the code runs with is the value the file shows.
+  max_beat_words: 90
 
 script:
   # The writer. Pro tier: arm B vs arm C showed identical CONTENT at both tiers and

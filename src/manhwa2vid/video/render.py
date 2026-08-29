@@ -197,6 +197,9 @@ def _mix_audio(
         else master.measure_pass(target, lra).replace(":print_format=json", "")
     )
     if not measured:
+        # Not a cosmetic fallback: the single pass runs loudnorm in DYNAMIC mode, which
+        # compresses loudness range on top of normalizing. It must be visible in the QA
+        # record, not just a console line that scrolls away.
         console.print("[yellow]loudnorm measurement failed — falling back to single pass[/]")
 
     _run_ffmpeg([
@@ -214,11 +217,29 @@ def _mix_audio(
     ])
     # Measure the duck against the STEM before it is deleted — this is the only moment
     # both signals exist, and the mix alone cannot recover it.
-    from manhwa2vid.measure.audio import duck_depth_from_stem
+    from manhwa2vid.measure.audio import duck_depth_from_stem, loudness_metrics
 
     duck = duck_depth_from_stem(narration, output)
+    # LRA provenance: the gate measures the finished mix, five stages downstream of
+    # where range is created or destroyed. These two upstream numbers say which it was —
+    # `stem_lra_lu` is what Kokoro produced (measured 2.0 on raw narration: the source
+    # has almost no range to lose), `premaster_lra_lu` is the full chain's input to
+    # loudnorm (pass 1 already computed it; it was being thrown away).
+    stem_lra = loudness_metrics(narration).get("loudness_range_lu")
+    extra: dict[str, Any] = {}
+    if duck is not None:
+        extra["duck_depth_db"] = duck
+    if stem_lra is not None:
+        extra["stem_lra_lu"] = stem_lra
+    if measured:
+        try:
+            extra["premaster_lra_lu"] = float(measured["input_lra"])
+        except (KeyError, ValueError):
+            pass
+    else:
+        extra["loudnorm_fallback"] = True
     narration.unlink(missing_ok=True)
-    return {"duck_depth_db": duck} if duck is not None else {}
+    return extra
 
 
 def _parse_loudnorm(text: str) -> dict[str, str] | None:

@@ -23,15 +23,22 @@ def match_rate(shotlist: dict[str, Any]) -> dict[str, Any]:
     or it holds the current shot. So this measures how often the picture is CHOSEN for
     the line rather than inherited, which is the difference between a recap and a
     slideshow with a voice over it.
+
+    Outro sentences are excluded from the denominator: the outro is the narrator
+    addressing the VIEWER and is deliberately not panel-grounded (script/outro.py), so
+    counting its guaranteed misses would penalise the matcher for a design decision.
     """
     sentences = shotlist.get("sentences") or []
-    if not sentences:
-        return {"sentences": 0, "matched": 0, "match_rate_pct": 0.0}
-    matched = sum(1 for s in sentences if s.get("panels"))
+    scored = [s for s in sentences if not s.get("outro")]
+    if not scored:
+        return {"sentences": 0, "matched": 0, "outro_excluded": len(sentences),
+                "match_rate_pct": 0.0}
+    matched = sum(1 for s in scored if s.get("panels"))
     return {
-        "sentences": len(sentences),
+        "sentences": len(scored),
         "matched": matched,
-        "match_rate_pct": round(100.0 * matched / len(sentences), 1),
+        "outro_excluded": len(sentences) - len(scored),
+        "match_rate_pct": round(100.0 * matched / len(scored), 1),
     }
 
 

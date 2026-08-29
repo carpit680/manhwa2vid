@@ -34,7 +34,7 @@ def _metrics(**over):
         "dead_over_50pct_frames_pct": 50.0,
         "true_peak_dbtp": -1.4,
         "loudness_lufs": -14.5,
-        "loudness_range_lu": 7.0,
+        "loudness_range_lu": 2.5,
         "quiet_floor_dbfs": -30.0,
         "tonality_ratio": 7.0,
         "duck_depth_db": 13.5,
@@ -269,10 +269,40 @@ def test_duck_depth_outside_the_band_warns(monkeypatch, tmp_path):
     assert _run(monkeypatch, tmp_path, duck_depth_db=13.0)["audio-duck-depth"] == "pass"
 
 
-def test_flat_loudness_range_warns(monkeypatch, tmp_path):
-    """2.0-2.3 LU is a wall with no dynamics."""
-    assert _run(monkeypatch, tmp_path, loudness_range_lu=2.0)["audio-lra"] == "warn"
-    assert _run(monkeypatch, tmp_path, loudness_range_lu=7.0)["audio-lra"] == "pass"
+def test_loudness_range_band_is_reference_derived(monkeypatch, tmp_path):
+    """The 5-9 LU band was an unsourced spec row no TTS chain could reach. The real
+    channel's full 5h17m audio track measures 2.5 LU (loudnorm) / 2.6 (ebur128), so the
+    band is now centred on reality: a flat delivery PASSES, and the gate fails on the
+    defect it can actually catch — range crushed by a dynamic-loudnorm fallback — or on
+    dynamics this format never legitimately produces."""
+    assert _run(monkeypatch, tmp_path, loudness_range_lu=2.0)["audio-lra"] == "pass"
+    assert _run(monkeypatch, tmp_path, loudness_range_lu=2.6)["audio-lra"] == "pass"
+    assert _run(monkeypatch, tmp_path, loudness_range_lu=1.0)["audio-lra"] == "fail"
+    assert _run(monkeypatch, tmp_path, loudness_range_lu=7.0)["audio-lra"] == "fail"
+
+
+def test_loudnorm_fallback_is_visible_in_the_qa_record(monkeypatch, tmp_path):
+    """The single-pass fallback runs loudnorm in DYNAMIC mode, which compresses range.
+    It used to be one console line that scrolled away."""
+    assert _run(monkeypatch, tmp_path, loudnorm_fallback=True)["audio-two-pass"] == "warn"
+    assert "audio-two-pass" not in _run(monkeypatch, tmp_path)
+
+
+def test_lra_provenance_reaches_the_gate_data(monkeypatch, tmp_path):
+    """stem/premaster LRA say WHERE range was lost; they ride the audio-lra gate."""
+    import json as _json
+
+    import manhwa2vid.video.qa_visual as qa
+    from manhwa2vid.video.qa_visual import enforce_render_qa
+    from pathlib import Path
+
+    monkeypatch.setattr(qa, "measure_video",
+                        lambda _v: _metrics(stem_lra_lu=2.0, premaster_lra_lu=2.2))
+    enforce_render_qa(Path("dummy.mp4"), {"root": tmp_path}, {"_qa_force": True})
+    gates = {g["name"]: g for g in
+             _json.loads((tmp_path / "qa.render.json").read_text())["gates"]}
+    assert gates["audio-lra"]["data"]["stem_lra_lu"] == 2.0
+    assert gates["audio-lra"]["data"]["premaster_lra_lu"] == 2.2
 
 
 def test_audio_gates_are_absent_rather_than_passing_when_unmeasurable(monkeypatch, tmp_path):

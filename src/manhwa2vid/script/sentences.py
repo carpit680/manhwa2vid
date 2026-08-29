@@ -8,17 +8,24 @@ seconds — verified exact across 54/54 real beats precisely BECAUSE the splitte
 An edit to one copy that missed the others would silently desynchronise picture from
 sound.
 
-Deliberately not honorific-aware (this is NOT lint._SENTENCE_SPLIT_RE): the TTS sidecar
-text comes back from Kokoro, and both sides of the sentence-identity contract must split
-the same way. Changing the pattern means changing it for the writer's text and the
-sidecar text together, and re-verifying the 54-beat identity check.
+Honorific-aware since 2026-08-28: the naive lookbehind-only split turned "Mr. Song
+checks his watch" into "Mr." + "Song checks his watch" — Solo Leveling's shipped script
+carried EIGHT phantom "Mr." sentences, each synthesized by Kokoro as its own utterance
+with full terminal prosody (0.975s of "MISTER." followed by a pause, verified in
+beat_004.segments.json), and each a permanent miss in the match-rate denominator. The
+abbreviation list is fixed and short, mirroring lint's — every consumer imports THIS
+pattern, so the writer's text and the TTS sidecar text move together and sentence
+identity is preserved by construction. Each lookbehind is fixed-width, which is what
+Python's re requires.
 """
 
 from __future__ import annotations
 
 import re
 
-SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+SENTENCE_SPLIT_RE = re.compile(
+    r"(?<=[.!?])(?<!Mr\.)(?<!Ms\.)(?<!Dr\.)(?<!St\.)(?<!Jr\.)(?<!Sr\.)(?<!Mrs\.)\s+"
+)
 
 
 def split_sentences(text: str) -> list[str]:

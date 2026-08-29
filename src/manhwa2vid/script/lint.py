@@ -435,9 +435,9 @@ _BODY_INVENTORY_RE = re.compile(
 # dedupe passes about where a sentence begins, and made repair_broken_sentences delete the
 # wrong half and emit "Mr. Jin-Woo laughs nervously". Each lookbehind is fixed-width,
 # which is what Python's re requires.
-_SENTENCE_SPLIT_RE = re.compile(
-    r"(?<=[.!?])(?<!Mr\.)(?<!Ms\.)(?<!Dr\.)(?<!St\.)(?<!Jr\.)(?<!Sr\.)(?<!Mrs\.)\s+"
-)
+# The shared splitter adopted lint's honorific handling on 2026-08-28, so the private
+# copy that used to live here is now an alias — the two can never drift again.
+from manhwa2vid.script.sentences import SENTENCE_SPLIT_RE as _SENTENCE_SPLIT_RE  # noqa: E402
 _PRONOUN_START_RE = re.compile(r"^(?:He|She|They|His|Her|Their)\b")
 
 

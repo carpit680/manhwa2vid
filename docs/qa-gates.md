@@ -55,7 +55,7 @@ measuring the wrong thing. Print the matches, not just the count.
 | `closing-shot-is-art` | fail | last shot is not a text-dominant panel | 2026-08-27 |
 | `dwell-over-limit` | warn | no **merged run** over `max_panel_seconds × dwell_warn_multiplier` | reads runs, not entries — an 18.6s hold was two entries of 7.4s and 11.2s |
 | `no-invisible-cuts` | warn | no consecutive entries on one panel | 2026-08-27 |
-| `match-rate` | warn | ≥ 70% of sentences bound to their own panel | brief |
+| `match-rate` | warn | ≥ 70% of non-outro sentences bound to their own panel | brief; floor re-derivation pending the window-scoped matcher (2026-08-28). Outro sentences are excluded from the denominator — the outro is deliberately not panel-grounded (script/outro.py), so its misses were a design decision scored as matcher failures |
 | `panel-utilisation` | warn | ≥ 60% of story panels reach the screen | brief |
 | `hold-run` | warn | ≤ 3 consecutive sentences on one panel | brief. Reports "not measured" when `sentence_numbers` is absent rather than passing |
 | `timing-measured` | **fail** | ≥ 95% of sentences identity-matched to a measured sidecar | replaces the brief's "≥80% measured"; it is 100% today, so this guards a regression to word-proration |
@@ -70,7 +70,8 @@ measuring the wrong thing. Print the matches, not just the count.
 | `audio-loudness` | fail outside [target−3, +2], warn outside ±1 | vs `export.loudness_target` | **not** the spec's −16±1, which codifies the current undershoot |
 | `audio-music-present` | **fail** | bed floor > −40 dBFS **and** tonality > 5 | audio spec §6; catches an empty `assets/bgm/` |
 | `audio-duck-depth` | warn → fail | 12–15 dB | audio spec §6. Measured from the narration STEM at mix time — the mix alone overstates the duck by 2–7 dB, so the gate is absent rather than wrong when the stem is unavailable |
-| `audio-lra` | warn | 5–9 LU | audio spec §6, **unverified**: the reference video in this repo has no audio stream, so there is no like-for-like value, and the spec's own chain compresses at 2.5:1 which reduces range. Stays a warn — see render_audit_2026-08-28 §9 |
+| `audio-lra` | FAIL | 1.5–4.5 LU | **measured off the reference channel's own audio** (2026-08-28): the full 5h17m track of the Mamoru Frozen Player video (`reference/frozen_player/mamoru_fp_audio.wav`, audio-only pull of the same video id the visual profile used) measures **2.50 LU** by loudnorm and **2.6 LU** by ebur128. The spec's 5–9 was an unsourced proposals-table row no single-voice TTS chain can reach — raw Kokoro narration measures 2.0 LU before any processing. Floor 1.5 catches range being CRUSHED (dynamic-loudnorm fallback); ceiling 4.5 catches dynamics this format never produces. Same measurement: reference integrated −17.5 LUFS (plays quieter than the −14 platform point; not copied) and true peak −0.77 dBTP, which would fail our own −1.0 gate — ours stays stricter |
+| `audio-two-pass` | warn | absent unless the loudnorm measurement pass failed to parse | the fallback runs loudnorm in single-pass DYNAMIC mode, which compresses loudness range — it used to be a console line that scrolled away. If `audio-lra` failed, this gate says why |
 | `shot-median` | warn | 2.0–3.5s | reference 2.30–2.87s |
 | `shot-accent-share` | warn | ≥ 15% under 1.5s | reference 21.8–23.6% |
 | `shot-cadence` | warn | 12–22 cuts/min | reference 16.2–**20.08**; the brief's 12–20 would fail W1 |
