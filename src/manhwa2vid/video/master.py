@@ -39,9 +39,14 @@ _VOICE_CHAIN = (
     # 15 ms attack keeps consonant transients, 220 ms release avoids pumping.
     "acompressor=threshold=-20dB:ratio=2.5:attack=15:release=220:knee=4:makeup=1.6:detection=rms",
     "deesser=i=0.12:m=0.4:f=0.6:s=o",
-    # TTS is unnaturally dry; 7% wet early reflection reads as "recorded in a place".
-    "aecho=in_gain=0.92:out_gain=0.07:delays=23|37:decays=0.11|0.07",
+    "{echo}",
 )
+
+# The spec's reasoning was "TTS is unnaturally dry; 7% wet early reflection reads as
+# recorded in a place". A/B'd against a dry chain on 2026-08-29, the user chose dry:
+# a synthetic room on an already-synthetic voice reads as an artifact, not a place.
+# Kept as a number rather than deleted, so it is one config edit to try again.
+_ECHO_FILTER = "aecho=in_gain=0.92:out_gain={wet}:delays=23|37:decays=0.11|0.07,"
 
 # -1.5 semitones with formants preserved: 2^(-1.5/12) = 0.917. This is where depth comes
 # from, and unlike a voice blend it is one reversible number. asetrate+atempo would shift
@@ -70,9 +75,11 @@ def build_filter(
     `loudnorm` is the only part that differs between the measuring pass and the rendering
     pass, which is the whole point of building the graph in one place.
     """
-    semitones = float(get_nested(config, "video", "voice_pitch_semitones", default=-1.5))
+    semitones = float(get_nested(config, "video", "voice_pitch_semitones", default=0.0))
     pitch = _PITCH_FILTER.format(pitch=round(2 ** (semitones / 12.0), 4)) if semitones else ""
-    voice = ",".join(_VOICE_CHAIN).format(pitch=pitch)
+    wet = float(get_nested(config, "video", "voice_echo_wet", default=0.0))
+    echo = _ECHO_FILTER.format(wet=round(wet, 3)) if wet > 0 else ""
+    voice = ",".join(_VOICE_CHAIN).format(pitch=pitch, echo=echo).replace(",,", ",").rstrip(",")
     pad = f",apad=pad_dur={max(pad_seconds, 0.0)}" if pad_seconds > 0 else ""
 
     if not with_bed:

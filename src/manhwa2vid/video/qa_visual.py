@@ -63,7 +63,15 @@ _REF_CLIPPED_PCT = 43.9
 _TRUE_PEAK_MAX_DBTP = -1.0
 _BED_FLOOR_MIN_DBFS = -40.0
 _BED_TONALITY_MIN = 5.0
-_DUCK_MIN_DB, _DUCK_MAX_DB = 12.0, 15.0
+# 12-15 came from docs/audio-quality-spec.md §6 and was never measured against the
+# reference. Two things moved it on 2026-08-29: the user asked for a quieter bed after
+# hearing the shipped renders, and a like-for-like measurement (same window-RMS
+# estimator on both mixes) put the reference's own bed HOTTER than ours, so the band was
+# not describing the target either. `bgm_gain_db` went -30 -> -36 by ear; this band
+# widens to admit that choice and still catch the failures worth catching — a bed so
+# loud it competes with the voice (under 10) or so quiet it may as well be absent (over
+# 24, which is where the pre-mastering renders sat at 19.5 and sounded empty).
+_DUCK_MIN_DB, _DUCK_MAX_DB = 10.0, 24.0
 # Measured off the reference channel's OWN audio, 2026-08-28: the full 5h17m track of
 # the Mamoru Frozen Player video (reference/frozen_player/mamoru_fp_audio.wav, pulled
 # audio-only from the same video id the visual profile used) measures LRA 2.50 LU by

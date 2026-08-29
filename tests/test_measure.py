@@ -339,3 +339,22 @@ def test_match_rate_without_an_outro_is_unchanged():
     ]}
     r = match_rate(shotlist)
     assert r["sentences"] == 2 and r["match_rate_pct"] == 50.0 and r["outro_excluded"] == 0
+
+
+def test_voice_chain_honours_the_listening_decisions():
+    """Pitch shift and echo were both rejected by ear on a 5s A/B (2026-08-29). Each is
+    off via ONE config number, and each must actually leave the graph."""
+    import yaml
+    from manhwa2vid.video import master
+
+    cfg = yaml.safe_load(open("config.yaml"))
+    g = master.build_filter(cfg, pad_seconds=0.0, with_bed=True, loudnorm="loudnorm=I=-14")
+    assert "rubberband" not in g, "pitch shift is back in the shipped chain"
+    assert "aecho" not in g, "echo is back in the shipped chain"
+    assert ",," not in g, "an empty stage left a double comma"
+
+    # ...and both are still reachable, so the decision is reversible, not deleted.
+    cfg["video"]["voice_pitch_semitones"] = -1.5
+    cfg["video"]["voice_echo_wet"] = 0.07
+    g2 = master.build_filter(cfg, pad_seconds=0.0, with_bed=True, loudnorm="loudnorm=I=-14")
+    assert "rubberband" in g2 and "aecho" in g2

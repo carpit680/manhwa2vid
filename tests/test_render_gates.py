@@ -263,9 +263,13 @@ def test_missing_music_bed_fails(monkeypatch, tmp_path):
 
 
 def test_duck_depth_outside_the_band_warns(monkeypatch, tmp_path):
-    """19.5 dB today — the bed is so far under the voice it barely registers."""
-    assert _run(monkeypatch, tmp_path, duck_depth_db=19.5)["audio-duck-depth"] == "warn"
+    """Band widened to 10-24 on 2026-08-29: the user asked for a quieter bed by ear, and
+    the spec's 12-15 was never measured against the reference (which in fact runs a
+    HOTTER bed than we do). It still catches a bed competing with the voice, and one so
+    far under that it may as well be absent."""
+    assert _run(monkeypatch, tmp_path, duck_depth_db=19.5)["audio-duck-depth"] == "pass"
     assert _run(monkeypatch, tmp_path, duck_depth_db=4.0)["audio-duck-depth"] == "warn"
+    assert _run(monkeypatch, tmp_path, duck_depth_db=27.0)["audio-duck-depth"] == "warn"
     assert _run(monkeypatch, tmp_path, duck_depth_db=13.0)["audio-duck-depth"] == "pass"
 
 
