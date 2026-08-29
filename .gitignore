@@ -22,6 +22,12 @@ reference/*.wav
 reference/*.log
 reference/preview_page.html
 reference/voice_lab*/
+# Competitor corpus: downloaded third-party video/audio for measurement only.
+# The rules above are top-level globs and do not reach reference/corpus/<label>/,
+# so an unqualified `git add -A` would sweep in hundreds of MB of other people's
+# video. The derived numbers live in reports/ and are what we actually keep.
+reference/corpus/
+
 
 # BGM audio is fetched, not versioned (see assets/bgm/ATTRIBUTION.md)
 assets/bgm/*.mp3
