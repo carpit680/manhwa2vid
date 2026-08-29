@@ -82,6 +82,19 @@ def _accept(original: str, candidate: str) -> tuple[bool, str]:
     w0, w1 = len(original.split()), len(candidate.split())
     if abs(w1 - w0) > _LENGTH_TOLERANCE * w0:
         return False, f"length moved {w0} -> {w1} words (>±{_LENGTH_TOLERANCE:.0%})"
+    # Both of these were caught by READING the first live output, not by any metric.
+    # "The narrator explains that a magical core…" — the pass describing itself, read
+    # aloud to the viewer. And a rewrite that converts a verbatim quote into reported
+    # speech ("shouts, \"I'm going!\"" -> "tells the group that he is going") trades
+    # one gate's currency for another's; quotes are rarer and worth more.
+    if "the narrat" in candidate.lower():
+        return False, "meta: candidate mentions the narrator"
+    from manhwa2vid.measure.script_text import quoted_span_rate
+
+    q0 = quoted_span_rate(original)["quoted_spans"]
+    q1 = quoted_span_rate(candidate)["quoted_spans"]
+    if q1 < q0:
+        return False, f"quotes lost ({q0} -> {q1})"
     from manhwa2vid.models import ScriptBeat
     from manhwa2vid.script.lint import lint_broken_sentences
 
@@ -142,12 +155,19 @@ def apply_density_pass(
             get_nested(config, "script", "provider", default=None), config
         )
         raw = provider.complete(_SYSTEM, payload) or ""
+        # Real providers fence their JSON in markdown and may append prose after it —
+        # json.loads on the tail raises "Extra data" and the whole pass silently
+        # no-ops (it did, on both titles, first live run). raw_decode reads the first
+        # complete JSON value and ignores whatever follows.
         start = raw.find("{")
-        revised = json.loads(raw[start:]) if start != -1 else {}
-        revised = revised.get("paragraphs") or {}
+        revised = (
+            json.JSONDecoder().raw_decode(raw[start:])[0] if start != -1 else {}
+        )
+        revised = (revised or {}).get("paragraphs") or {}
     except Exception as exc:  # noqa: BLE001 — a density pass is never worth failing a run
         console.print(f"[yellow]Density pass skipped ({exc})[/]")
         record["error"] = str(exc)
+        _persist(paths, record)
         return text, record
 
     out = list(paras)
@@ -165,10 +185,14 @@ def apply_density_pass(
             f"[dim]Density pass: {len(record['accepted'])}/{len(targets)} dry "
             f"paragraph(s) re-voiced ({sorted(record['accepted'])})[/]"
         )
+    _persist(paths, record)
+    return "\n\n".join(out), record
+
+
+def _persist(paths: dict[str, Path], record: dict[str, Any]) -> None:
     debug_dir = paths.get("debug")
     if debug_dir:
         Path(debug_dir).mkdir(parents=True, exist_ok=True)
         (Path(debug_dir) / "density_pass.json").write_text(
             json.dumps(record, indent=1), encoding="utf-8"
         )
-    return "\n\n".join(out), record

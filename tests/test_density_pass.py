@@ -135,3 +135,52 @@ def test_the_outro_is_never_a_rewrite_target(paths):
     out, record = apply_density_pass(f"{DRY}\n\n{outro}", paths, {})
     assert record["targets"] == [0]
     assert out.endswith(outro)
+
+
+def test_fenced_json_with_trailing_text_still_parses(paths, monkeypatch):
+    """The first live run: Gemini returned ```json {...}``` and json.loads raised
+    "Extra data" on the closing fence — the pass silently no-opped on both titles."""
+    from manhwa2vid.llm import provider as provider_mod
+
+    class _Fenced:
+        def complete(self, system, user):
+            return "```json\n" + json.dumps({"paragraphs": {"0": WET}}) + "\n```\nDone!"
+
+    monkeypatch.setattr(provider_mod, "get_llm_provider", lambda *a, **k: _Fenced())
+    out, record = apply_density_pass(DRY, paths, {})
+    assert record["accepted"] == [0]
+    assert out == WET
+
+
+class TestGuardsFromReadingTheFirstLiveOutput:
+    """Both caught by eye on the first real run, not by any metric."""
+
+    def test_a_candidate_mentioning_the_narrator_is_rejected(self):
+        """SL beat 6 came back as "The narrator explains that a magical core…" — the
+        pass describing itself, read aloud to the viewer."""
+        meta = WET.replace(
+            "Song admits one of the healers is attacked",
+            "The narrator explains one of the healers is attacked",
+        )
+        ok, reason = _accept(DRY, meta)
+        assert not ok and "narrat" in reason
+
+    def test_a_rewrite_that_loses_a_verbatim_quote_is_rejected(self):
+        """SL beat 9: 'shouts, "I'm going!"' became 'tells the group that he is going'
+        — density up, quotes down. Quotes are rarer and worth more."""
+        original = DRY + ' He shouts, "I am going!"'
+        candidate = WET + " He tells the group that he is going."
+        ok, reason = _accept(original, candidate)
+        assert not ok and "quotes" in reason
+
+    def test_provider_failure_still_writes_the_record(self, paths, monkeypatch):
+        """The first live failure left no debug file: the error return path skipped
+        the persist. Diagnosing it meant rerunning the pass."""
+        from manhwa2vid.llm import provider as provider_mod
+
+        def _boom(*a, **k):
+            raise RuntimeError("no key")
+
+        monkeypatch.setattr(provider_mod, "get_llm_provider", _boom)
+        apply_density_pass(DRY, paths, {})
+        assert (paths["debug"] / "density_pass.json").exists()
