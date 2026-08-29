@@ -1,0 +1,169 @@
+"""Targeted dialogue-density pass: turn narrated summary back into reported speech.
+
+The prompt asks the writer for a reporting verb every ~32 words, and long titles ignore
+it wherever they compress: Solo Leveling packs five chapters at ~16 words per page and
+delivered 15 paragraphs with literally ZERO reporting verbs (~1160 of 2669 words), while
+Frozen Player at ~47 words per page mostly complied. The failure is local — identifiable
+dry paragraphs — so the repair is local too: one text-only call carrying only the dry
+paragraphs, not a regeneration that re-pays every vision call and re-rolls everything
+the audit already fixed.
+
+This is a prose-mutating pass, and this project's dominant defect class is a later pass
+undoing an earlier one (see script/audit.py's history note). Hence the same doctrine
+`revise_once` uses, applied per paragraph: a rewrite is accepted only if it strictly
+improves the thing this pass exists for and breaks nothing measurable —
+
+  - reported-speech density strictly rises,
+  - word count stays within ±15% (word count IS runtime),
+  - the paragraph still lints clean (no fragments, no mixed-number pronouns),
+
+otherwise the original paragraph ships verbatim. The worst possible outcome is the text
+unchanged; the pass can only converge toward the register the gate measures.
+
+The raw material is `chapter_facts.json["key_dialogue"]` — verbatim on-page lines the
+read pass already extracted — so the model is converting summary into speech the pages
+actually contain, not inventing conversations. Feeding it here is consistent with the
+"writer never sees panel descriptions" principle: these are printed WORDS, not artwork.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from rich.console import Console
+
+from manhwa2vid.config import get_nested
+from manhwa2vid.measure.script_text import dialogue_verb_density
+
+console = Console()
+
+#: Gate floor, owned here so the pass and the gate can never disagree. 18/1k is the
+#: hardening brief's number, kept because it sits well under the reference's
+#: like-for-like 31.34 — the pass aims at the reference rate, the gate forgives more.
+VERBS_MIN_PER_1K = 18.0
+
+#: Only paragraphs with room to actually hold dialogue; a two-line beat with zero verbs
+#: is often legitimately visual ("He steps into the light.").
+_MIN_WORDS = 40
+
+#: Word-count tolerance for an accepted rewrite. Narration is audio-locked, so word
+#: count is runtime; ±15% on a ~70-word paragraph is a couple of seconds.
+_LENGTH_TOLERANCE = 0.15
+
+_SYSTEM = """You convert narrated summary into reported speech, in place.
+
+You are given numbered paragraphs from a manhwa recap narration, plus verbatim lines
+the manhwa's pages actually print. The paragraphs SUMMARIZE conversations instead of
+letting people speak. Rewrite each paragraph so the same events are told through
+reported speech.
+
+Rules:
+- Use these reporting verbs, present tense: says, asks, tells, explains, admits,
+  replies, answers. They are the register. ("He tells Song there has to be a rule.")
+- NO new events, no new speakers, no invented facts. Only re-voice what the paragraph
+  already says, using the printed lines as raw material where they fit.
+- Keep each paragraph within about 10% of its current length.
+- Keep the narrator's asides and tone exactly as they are.
+- Return JSON only: {"paragraphs": {"<number>": "<rewritten paragraph>", ...}}.
+  Every number you were given must appear. No other keys, no commentary."""
+
+
+def _accept(original: str, candidate: str) -> tuple[bool, str]:
+    """The strictly-improves guard. Returns (accepted, reason)."""
+    candidate = " ".join((candidate or "").split())
+    if not candidate:
+        return False, "empty"
+    d0 = dialogue_verb_density(original)["per_1k"]
+    d1 = dialogue_verb_density(candidate)["per_1k"]
+    if d1 <= d0:
+        return False, f"density did not rise ({d0} -> {d1})"
+    w0, w1 = len(original.split()), len(candidate.split())
+    if abs(w1 - w0) > _LENGTH_TOLERANCE * w0:
+        return False, f"length moved {w0} -> {w1} words (>±{_LENGTH_TOLERANCE:.0%})"
+    from manhwa2vid.models import ScriptBeat
+    from manhwa2vid.script.lint import lint_broken_sentences
+
+    broken = lint_broken_sentences(
+        [ScriptBeat(beat_id=1, panel_ids=[], narration=candidate)]
+    )
+    if broken:
+        return False, f"lint: {broken[1][0]}"
+    return True, ""
+
+
+def apply_density_pass(
+    text: str,
+    paths: dict[str, Path],
+    config: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """Return (possibly revised text, record). Never raises; never worsens the text."""
+    from manhwa2vid.script.freeform import paragraphs
+
+    paras = paragraphs(text)
+    targets = {
+        i: p for i, p in enumerate(paras)
+        if len(p.split()) >= _MIN_WORDS
+        and dialogue_verb_density(p)["per_1k"] < VERBS_MIN_PER_1K
+    }
+    record: dict[str, Any] = {
+        "targets": sorted(targets), "accepted": [], "rejected": {},
+    }
+    if not targets:
+        return text, record
+
+    lines = []
+    facts_path = paths.get("chapter_facts_json")
+    if facts_path and Path(facts_path).exists():
+        facts = json.loads(Path(facts_path).read_text(encoding="utf-8"))
+        lines = [
+            f'- {d.get("speaker", "?")}: "{d.get("line", "")}"'
+            for d in (facts.get("key_dialogue") or [])
+            if d.get("line")
+        ]
+
+    numbered = "\n\n".join(f"PARAGRAPH {i}:\n{p}" for i, p in sorted(targets.items()))
+    printed = "\n".join(lines) if lines else "(none extracted)"
+    payload = (
+        f"PRINTED LINES FROM THE PAGES:\n{printed}\n\n"
+        f"PARAGRAPHS TO REWRITE:\n\n{numbered}"
+    )
+
+    try:
+        from manhwa2vid.llm.provider import get_llm_provider
+
+        provider = get_llm_provider(
+            get_nested(config, "script", "provider", default=None), config
+        )
+        raw = provider.complete(_SYSTEM, payload) or ""
+        start = raw.find("{")
+        revised = json.loads(raw[start:]) if start != -1 else {}
+        revised = revised.get("paragraphs") or {}
+    except Exception as exc:  # noqa: BLE001 — a density pass is never worth failing a run
+        console.print(f"[yellow]Density pass skipped ({exc})[/]")
+        record["error"] = str(exc)
+        return text, record
+
+    out = list(paras)
+    for i in sorted(targets):
+        candidate = revised.get(str(i)) or revised.get(i) or ""
+        ok, reason = _accept(paras[i], str(candidate))
+        if ok:
+            out[i] = " ".join(str(candidate).split())
+            record["accepted"].append(i)
+        else:
+            record["rejected"][i] = reason
+
+    if record["accepted"]:
+        console.print(
+            f"[dim]Density pass: {len(record['accepted'])}/{len(targets)} dry "
+            f"paragraph(s) re-voiced ({sorted(record['accepted'])})[/]"
+        )
+    debug_dir = paths.get("debug")
+    if debug_dir:
+        Path(debug_dir).mkdir(parents=True, exist_ok=True)
+        (Path(debug_dir) / "density_pass.json").write_text(
+            json.dumps(record, indent=1), encoding="utf-8"
+        )
+    return "\n\n".join(out), record

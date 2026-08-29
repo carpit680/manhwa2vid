@@ -716,6 +716,20 @@ class MockLLMProvider(LLMProvider):
         ):
             if "Original narration:" in user:
                 return user.split("Original narration:")[-1].strip()
+        # Density pass (script/density.py): echo every numbered paragraph back
+        # unchanged, as valid JSON. Offline, the pass then runs its full parse-and-guard
+        # path and rejects every candidate ("density did not rise"), leaving the text
+        # byte-identical — the accept path is unit-tested against fabricated output.
+        if "convert narrated summary into reported speech" in system:
+            import re as _re
+
+            paras = {
+                m.group(1): m.group(2).strip()
+                for m in _re.finditer(
+                    r"PARAGRAPH (\d+):\n(.*?)(?=\n\nPARAGRAPH \d+:|\Z)", user, _re.S
+                )
+            }
+            return json.dumps({"paragraphs": paras})
         return "Mock recap narration."
 
     def describe_labeled_panels_text(

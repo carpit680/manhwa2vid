@@ -34,7 +34,10 @@ _REF_VERBS_PER_1K = 31.34
 _REF_QUOTED_PER_1K = 1.16
 _REF_SHORT_PCT = 21.5
 _REF_MEAN_WORDS = 12.76
-_VERBS_MIN_PER_1K = 18.0   # brief's number, now justified against a like-for-like 31.34
+# Floor lives in script/density.py, which repairs against the same number — the pass
+# and the gate can never disagree. 18/1k is the brief's number, justified against the
+# reference's like-for-like 31.34.
+from manhwa2vid.script.density import VERBS_MIN_PER_1K as _VERBS_MIN_PER_1K  # noqa: E402
 _QUOTED_MIN_PER_1K = 0.5   # brief's number; reference 1.16 re-measured
 # The brief proposed 25%. The reference is 21.5%, so 25% would fail the channel being
 # imitated -- and Solo Leveling at 23.7% would fail while being MORE reference-like than
@@ -180,6 +183,13 @@ def generate_story_first_script(
     # The closing ask, written as a continuation of the last thing said about the
     # story. Appended AFTER the audit so it sees the final sentence it must follow,
     # and so the audit never tries to ground it against panels.
+    # Targeted dialogue-density repair: re-voice paragraphs that summarize instead of
+    # letting people speak (script/density.py). Before the outro, so the closing ask is
+    # never a rewrite target; guarded per paragraph, so the worst outcome is no change.
+    from manhwa2vid.script.density import apply_density_pass
+
+    text, _density_record = apply_density_pass(text, paths, config)
+
     text = append_outro(text, meta, paths, config)
 
     # Cast-labelling placeholders read aloud as prose ("the unnamed man in a cowboy

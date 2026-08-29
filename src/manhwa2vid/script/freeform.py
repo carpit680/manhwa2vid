@@ -52,9 +52,11 @@ VOICE — wry, confident, gen-Z-coded. Measured targets from the reference chann
 - Present tense, third person. Past tense only for genuine backstory.
 - Mean sentence ~12 words; about 1 in 4 sentences under 7 words. Vary the rhythm.
 - LET PEOPLE SPEAK. This is the single biggest gap between this channel and the
-  reference. Mostly reported speech ("he asks whether…", "she warns him that…") — one
-  says/asks/tells/warns-class verb every 32 words, which is roughly one per two
-  sentences, not one per paragraph. Count them as you write.
+  reference. Mostly reported speech ("he asks whether…", "she tells him that…",
+  "he admits he…") — one says/asks/tells/explains/admits/replies-class verb every 32
+  words, which is roughly one per two sentences, not one per paragraph. Count them as
+  you write. Prefer those exact verbs: they ARE the register, and colourful synonyms
+  (warns, yells, demands) should season them, not replace them.
 - QUOTE THE PUNCHY LINES VERBATIM, in double quotes, about once per 900 words. The
   reference does this and it lands: "That's right.", "This can't be happening.",
   "I'll kill you and end this nightmare." Short, sharp, a line a character actually
