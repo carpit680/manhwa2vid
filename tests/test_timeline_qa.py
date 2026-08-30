@@ -268,3 +268,53 @@ def test_match_rate_floor_is_reachable_given_the_matchers_own_instructions():
 
     assert _MATCH_MIN_PCT <= 57.1, "floor exceeds the worse measured title"
     assert _MATCH_MIN_PCT >= 45.0, "floor so low it would not catch a collapsed matcher"
+
+
+def test_a_panel_returning_later_is_caught(tmp_path: Path) -> None:
+    """Solo Leveling showed a hunter's leg at 605.2s and again at 627.3s, the second
+    time being the line that describes it. `no-invisible-cuts` cannot see this: it fuses
+    ADJACENT entries, and a non-adjacent repeat has another panel in between."""
+    from manhwa2vid.models import Timeline, TimelineEntry
+
+    def entry(pid, start, dur, beat):
+        return TimelineEntry(panel_id=pid, panel_path=f"panels/{pid}.png", start=start,
+                             end=start + dur, duration=dur, beat_id=beat,
+                             subtitle_text="x")
+
+    timeline = Timeline(
+        entries=[entry("p0001_01", 0.0, 3.0, 1),
+                 entry("p0001_02", 3.0, 3.0, 1),
+                 entry("p0001_01", 6.0, 3.0, 2)],       # the same picture, 6s later
+        total_duration=9.0,
+    )
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p0001_01", "p0001_02"], narration="a b"),
+             ScriptBeat(beat_id=2, panel_ids=["p0001_01"], narration="c d")]
+    panels = [_panel("p0001_01", 1), _panel("p0001_02", 1)]
+    gates = _gates(tmp_path, beats, panels, timeline)
+
+    assert gates["no-repeated-panels"]["status"] == WARN
+    assert "p0001_01" in gates["no-repeated-panels"]["details"]
+    assert "0.0s, 6.0s" in gates["no-repeated-panels"]["details"]
+    # The gate that already existed is blind to it — which is why this one exists.
+    assert gates["no-invisible-cuts"]["status"] == PASS
+
+
+def test_a_hold_across_a_beat_boundary_is_not_a_repeat(tmp_path: Path) -> None:
+    """One shot split over two entries is a HOLD, already reported by
+    `no-invisible-cuts`. Counting it twice here would fire on every render."""
+    from manhwa2vid.models import Timeline, TimelineEntry
+
+    def entry(pid, start, dur, beat):
+        return TimelineEntry(panel_id=pid, panel_path=f"panels/{pid}.png", start=start,
+                             end=start + dur, duration=dur, beat_id=beat,
+                             subtitle_text="x")
+
+    timeline = Timeline(
+        entries=[entry("p0001_01", 0.0, 3.0, 1), entry("p0001_01", 3.0, 3.0, 2)],
+        total_duration=6.0,
+    )
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p0001_01"], narration="a b"),
+             ScriptBeat(beat_id=2, panel_ids=["p0001_01"], narration="c d")]
+    gates = _gates(tmp_path, beats, [_panel("p0001_01", 1)], timeline)
+    assert gates["no-repeated-panels"]["status"] == PASS
+    assert gates["no-invisible-cuts"]["status"] == WARN

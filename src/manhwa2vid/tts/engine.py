@@ -261,6 +261,37 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
         runs=runs,
     )
 
+    # The same picture twice, MINUTES apart — which `no-invisible-cuts` cannot see,
+    # because it fuses adjacent entries and a non-adjacent repeat has something else in
+    # between. Reported from watching Solo Leveling: a hunter's leg close-up appeared at
+    # 605.2s and again at 627.3s, the second time being the line that actually describes
+    # it. The cause was a borrow in the shot planner's split pass (fixed, and pinned by
+    # tests/test_premature_panel.py) — but nothing in the render could tell us, so this
+    # exists to notice the next one however it arrives.
+    #
+    # Warn, not fail, for the same reason as the gate above: with 28-41% of story panels
+    # never reaching the screen a repeat is always avoidable, but it is an editing
+    # smell, not a broken artifact.
+    seen_at: dict[str, list[float]] = {}
+    clock = 0.0
+    for run in runs_all:
+        seen_at.setdefault(run["panel_id"], []).append(clock)
+        clock += run["seconds"]
+    repeats = [
+        f"{pid} shown {len(times)}x at " + ", ".join(f"{t:.1f}s" for t in times[:3])
+        for pid, times in seen_at.items()
+        if len(times) > 1
+    ]
+    report.add(
+        "no-repeated-panels",
+        "warn" if repeats else True,
+        "; ".join(repeats[:4]) + " — the same panel returns later in the video"
+        if repeats
+        else "",
+        repeats=repeats,
+        repeated_panels=len(repeats),
+    )
+
     # The last thing on screen. Frozen Player ch1-2 closed on a "WHAT?!" starburst held
     # 18.6s: the 2026-08-26 audit filed it as defect A2, the end card hid it rather than
     # fixing it, and removing the card brought it straight back. A recap must not end on

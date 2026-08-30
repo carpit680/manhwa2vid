@@ -597,7 +597,23 @@ def plan_shots_with_sentences(
         # so this pays the same debt twice.
         if panel_order and max_shot > 0:
             order_pos = {pid: idx for idx, pid in enumerate(panel_order)}
-            used = {row[0] for rows in plan.values() for row in rows}
+            # Every panel any sentence resolved to, in EVERY beat — not just the beats
+            # already emitted into `plan` plus this one.
+            #
+            # `plan[beat_id]` is written at the end of each iteration, so a `used` built
+            # from `plan` + `merged` is blind to every LATER beat, even though `flat`
+            # resolved them before this loop began. The split then borrowed a panel a
+            # later sentence claims, showed it early, and that sentence showed it again
+            # when the narration actually arrived. Measured on Solo Leveling: p0134_02
+            # (the hunter's leg) appeared at 605.2 s while its sentence speaks at
+            # 627.3 s — 22.1 s early — and p0136_01 16.4 s early. Frozen Player had two
+            # more. Toggling max_shot on/off isolated this pass as the sole cause.
+            #
+            # Worse than a duplicate: when the borrow lands adjacent to the real shot,
+            # the final assembled pass rewrites the CLAIMING shot rather than the
+            # borrow, so the sentence that earned the panel loses it.
+            used = {pid for item in flat for pid in item["panels"]}
+            used.update(row[0] for rows in plan.values() for row in rows)
             used.update(row[0] for row in merged)
             i = 0
             while i < len(merged):
