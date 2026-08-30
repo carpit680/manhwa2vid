@@ -159,3 +159,55 @@ def test_render_video_runs_end_to_end(tmp_path) -> None:
                                "export": {"preview_scale": 0.25}},
                        preview=True, final=False, force=True)
     assert out.exists() and out.stat().st_size > 1000, "render produced no video"
+
+
+class TestLongHoldSegments:
+    """The shot planner's gap rule keeps a long dwell rather than showing an
+    out-of-order panel — right call, but it moved the defect into the render: 27s of
+    one letterbox treatment measured 38.23s on screen and FAILED shot-max-duration.
+    The renderer now cuts any hold that outlives ~0.75x the shot cap into alternating
+    close/wide treatments of the same panel. Same panel adjacent = order-safe and
+    repeat-safe by construction."""
+
+    def test_a_short_entry_is_one_piece(self):
+        from manhwa2vid.video.render import _long_hold_segments
+
+        assert _long_hold_segments(5.0, 0.0, 7.5) == [(5.0, 0)]
+
+    def test_a_long_entry_is_cut_at_the_segment_length(self):
+        from manhwa2vid.video.render import _long_hold_segments
+
+        pieces = _long_hold_segments(14.3, 0.0, 7.5)
+        assert [i for _s, i in pieces] == [0, 1]
+        assert abs(sum(sec for sec, _i in pieces) - 14.3) < 1e-9
+        assert pieces[0][0] == 7.5
+
+    def test_consecutive_entries_on_one_panel_share_the_run_clock(self):
+        """Two 7s entries on one panel are a 14s shot to the viewer. The second entry
+        must continue the run's segmentation, not restart at segment 0 and render the
+        identical treatment again."""
+        from manhwa2vid.video.render import _long_hold_segments
+
+        first = _long_hold_segments(7.0, 0.0, 7.5)
+        second = _long_hold_segments(7.0, 7.0, 7.5)
+        assert first == [(7.0, 0)]
+        assert [i for _s, i in second] == [0, 1], "the run clock was ignored"
+        assert second[0][0] == 0.5
+
+    def test_a_tiny_tail_merges_instead_of_flash_cutting(self):
+        from manhwa2vid.video.render import _long_hold_segments
+
+        pieces = _long_hold_segments(8.0, 0.0, 7.5)
+        assert pieces == [(8.0, 0)], f"0.5s flash cut survived: {pieces}"
+
+    def test_the_27s_hold_shape(self):
+        """The real FP case: 12.7s + 14.3s consecutive entries on p0017_09."""
+        from manhwa2vid.video.render import _long_hold_segments
+
+        a = _long_hold_segments(12.7, 0.0, 7.5)
+        b = _long_hold_segments(14.3, 12.7, 7.5)
+        indices = [i for _s, i in a] + [i for _s, i in b]
+        assert indices == sorted(indices)
+        assert len(set(indices)) >= 3, "a 27s hold must land at least 3 distinct segments"
+        longest = max(sec for sec, _i in a + b)
+        assert longest <= 9.0, f"a continuous piece is still {longest}s"

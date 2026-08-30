@@ -47,6 +47,48 @@ def _run_ffmpeg(args: list[str]) -> None:
     subprocess.run(cmd, check=True)
 
 
+def _long_hold_segments(
+    duration: float,
+    run_clock: float,
+    seg_len: float,
+    *,
+    min_piece: float = 1.5,
+) -> list[tuple[float, int]]:
+    """Split one entry's seconds into (seconds, segment_index) pieces so that no
+    CONTINUOUS camera treatment of a panel outlives `seg_len`.
+
+    `run_clock` is how long this panel has already been on screen continuously
+    (consecutive entries on one panel are one shot to the viewer). Segment indices are
+    global to the run, so the caller can alternate camera styles across pieces AND
+    across entry boundaries — two 7s entries on one panel become segments 0 and 1, not
+    two segment-0s that render identically and fuse into a 14s shot on screen.
+
+    Why the renderer owns this: the shot planner's gap rule (script/match.py) keeps a
+    long dwell rather than showing an out-of-order panel, which is right — but it moved
+    the defect into the render, where 27s of one letterbox treatment measured as a
+    38.23s shot and failed `shot-max-duration`. A human editor with one relevant image
+    and 30 seconds of narration cuts between framings of that image; that is what the
+    alternating segments are.
+
+    A trailing piece shorter than `min_piece` merges into its predecessor — a flash
+    cut on the tail reads worse than a slightly long segment.
+    """
+    pieces: list[tuple[float, int]] = []
+    remaining = duration
+    clock = run_clock
+    while remaining > 1e-9:
+        boundary = seg_len - (clock % seg_len)
+        take = min(remaining, boundary)
+        pieces.append((take, int(clock // seg_len)))
+        clock += take
+        remaining -= take
+    if len(pieces) > 1 and pieces[-1][0] < min_piece:
+        last_sec, _last_idx = pieces.pop()
+        sec, idx = pieces[-1]
+        pieces[-1] = (sec + last_sec, idx)
+    return pieces
+
+
 def _render_panel_clip(
     entry: TimelineEntry,
     panel: Panel,
@@ -60,6 +102,8 @@ def _render_panel_clip(
     upscale_map: dict[str, Path] | None = None,
     num_frames: int | None = None,
     prefer_art: bool = False,
+    style: str | None = None,
+    clip_tag: str = "",
 ) -> Path:
     panel_path = project_root / entry.panel_path
     upscaled = upscale_map.get(panel_path.name) if upscale_map else None
@@ -73,13 +117,14 @@ def _render_panel_clip(
     # with a different duration. Both slots in `clips` then pointed at one file, so
     # every entry after the reuse played the wrong length and the audio desynced for
     # the rest of the video. Silent, and worse the more the narration calls back.
-    clip_path = frames_dir / f"{entry_index:05d}_{entry.panel_id}.mp4"
-    clip_dir = frames_dir / f"{entry_index:05d}_{entry.panel_id}"
+    clip_path = frames_dir / f"{entry_index:05d}{clip_tag}_{entry.panel_id}.mp4"
+    clip_dir = frames_dir / f"{entry_index:05d}{clip_tag}_{entry.panel_id}"
     clip_dir.mkdir(parents=True, exist_ok=True)
 
     motion_frames = render_panel_motion_frames(
-        panel_path, panel, width, height, num_frames, config, seed_salt=entry_index,
-        prefer_art=prefer_art,
+        panel_path, panel, width, height, num_frames, config,
+        seed_salt=f"{entry_index}{clip_tag}",
+        prefer_art=prefer_art, style=style,
     )
     for i, frame in enumerate(motion_frames):
         frame.save(clip_dir / f"{i:05d}.png")
@@ -332,6 +377,13 @@ def render_video(
         # toward the end of every render (measured 2.0s short on a 128-shot cut).
         acc_time = 0.0
         acc_frames = 0
+        # A long HOLD is cut into alternating camera treatments of the same panel —
+        # see _long_hold_segments. The run clock spans consecutive same-panel entries,
+        # because they are one shot to the viewer whatever the plan says.
+        max_shot_s = float(get_nested(config, "video", "max_shot_seconds", default=10.0))
+        seg_len = max(3.0, 0.75 * max_shot_s)
+        run_panel: str | None = None
+        run_clock = 0.0
         with Progress() as progress:
             task = progress.add_task("Rendering panels", total=len(timeline.entries))
             for i, entry in enumerate(timeline.entries):
@@ -343,30 +395,44 @@ def render_video(
                         bbox=PanelBBox(x=0, y=0, width=1, height=1),
                         image_path=entry.panel_path,
                     )
-                acc_time += entry.duration
-                target_frames = round(acc_time * fps)
-                num_frames = max(target_frames - acc_frames, 1)
-                acc_frames += num_frames
-                clip = _render_panel_clip(
-                    entry,
-                    panel,
-                    paths["root"],
-                    frames_dir,
-                    i,
-                    width,
-                    height,
-                    fps,
-                    config,
-                    upscale_map,
-                    # A viewer decides in the first ten seconds, so the opening shots are
-                    # framed for artwork rather than for contrast. Judged on the shot's
-                    # START: `acc_time` is already its END here, and testing that excluded
-                    # the shot STRADDLING the boundary — which is precisely the one that
-                    # kept Solo Leveling's opening failing, at 74% lettering on t=14.5s.
-                    prefer_art=(acc_time - entry.duration) < opening_art_seconds,
-                    num_frames=num_frames,
-                )
-                clips.append(clip)
+                if entry.panel_id != run_panel:
+                    run_panel, run_clock = entry.panel_id, 0.0
+                # A viewer decides in the first ten seconds, so the opening shots are
+                # framed for artwork rather than for contrast. Judged on the shot's
+                # START; testing the END excluded the shot STRADDLING the boundary —
+                # which kept Solo Leveling's opening failing at 74% lettering.
+                prefer_art = acc_time < opening_art_seconds
+
+                if getattr(panel, "split_method", None) == "strip":
+                    pieces = [(entry.duration, 0)]     # a scroll is already motion
+                else:
+                    pieces = _long_hold_segments(entry.duration, run_clock, seg_len)
+                for take, seg_idx in pieces:
+                    acc_time += take
+                    target_frames = round(acc_time * fps)
+                    num_frames = max(target_frames - acc_frames, 1)
+                    acc_frames += num_frames
+                    # Segment 0 keeps the router's own choice; later segments alternate
+                    # close/wide so each cut lands on a genuinely different framing.
+                    style = None if seg_idx == 0 else ("fill" if seg_idx % 2 else "letterbox")
+                    clip = _render_panel_clip(
+                        entry,
+                        panel,
+                        paths["root"],
+                        frames_dir,
+                        i,
+                        width,
+                        height,
+                        fps,
+                        config,
+                        upscale_map,
+                        prefer_art=prefer_art,
+                        num_frames=num_frames,
+                        style=style,
+                        clip_tag=f"s{seg_idx}" if seg_idx else "",
+                    )
+                    clips.append(clip)
+                run_clock += entry.duration
                 progress.advance(task)
 
 

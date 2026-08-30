@@ -766,8 +766,9 @@ def render_panel_motion_frames(
     num_frames: int,
     config: dict[str, Any],
     *,
-    seed_salt: int | None = None,
+    seed_salt: int | str | None = None,
     prefer_art: bool = False,
+    style: str | None = None,
 ) -> list[Image.Image]:
     if panel.split_method == "strip":
         # A genuine continuous strip: the classic full-width crawl reads best.
@@ -807,6 +808,24 @@ def render_panel_motion_frames(
     )
     fits_frame = 0.85 * frame_aspect <= aspect <= 1.15 * frame_aspect
     letterbox_width_frac = frame_aspect / aspect if aspect > 0 else 1.0
+
+    # `style` overrides the routing for LONG-HOLD segments (render.py cuts a hold
+    # that outlives the shot cap into alternating close/wide treatments of the same
+    # panel). "fill" is always honourable; "letterbox" falls back to fill when the
+    # panel is too tall for a readable whole-panel fit — the same guard the router
+    # applies to its own choice.
+    if style == "fill":
+        return render_fill_frame_frames(
+            panel_path, width, height, num_frames, config, seed=seed, prefer_art=prefer_art
+        )
+    if style == "letterbox" and letterbox_width_frac >= min_width_frac:
+        return render_letterbox_frames(
+            panel_path, width, height, num_frames, config, seed=seed
+        )
+    if style == "letterbox":
+        return render_fill_frame_frames(
+            panel_path, width, height, num_frames, config, seed=seed, prefer_art=prefer_art
+        )
 
     if not fits_frame and letterbox_width_frac >= min_width_frac:
         return render_letterbox_frames(
