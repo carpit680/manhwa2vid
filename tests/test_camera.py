@@ -521,6 +521,12 @@ def test_opening_framing_prefers_art_over_contrast(tmp_path: Path) -> None:
     art. An earlier version used blurred noise for the art, which already beats a flat
     ellipse on gradient energy, so both cameras picked the same window and the test proved
     nothing. Measured on the real panel p0002_03: lettering 0.210 -> 0.031.
+
+    2026-08-30: bubble and art must sit in ONE content mass (small gap). With a long
+    background gap between them, `_dominant_mass_crop` removes the bubble before the
+    camera chooses at all — both modes then see only art and the strict `<` proves
+    nothing. The camera-level preference is for the common case where the lettering
+    shares the mass with the art.
     """
     import cv2
     import numpy as np
@@ -540,10 +546,11 @@ def test_opening_framing_prefers_art_over_contrast(tmp_path: Path) -> None:
     for i in range(6):
         cv2.putText(arr, "A", (185 + i * 62, 320), cv2.FONT_HERSHEY_SIMPLEX,
                     1.5, (0, 0, 0), 4)
-    # Bottom: smooth art — plenty of CONTENT, very little gradient energy.
+    # Below, ADJACENT (30px gap, under the mass separator threshold): smooth art —
+    # plenty of CONTENT, very little gradient energy.
     grad = np.linspace(60, 200, 600, dtype=np.uint8)
-    arr[900:1500, 60:660] = np.repeat(grad[:, None], 600, axis=1)[:, :, None]
-    cv2.circle(arr, (360, 1200), 190, (120, 90, 70), -1)
+    arr[520:1120, 60:660] = np.repeat(grad[:, None], 600, axis=1)[:, :, None]
+    cv2.circle(arr, (360, 820), 190, (120, 90, 70), -1)
 
     path = tmp_path / "panel.png"
     PILImage.fromarray(arr).save(path)
