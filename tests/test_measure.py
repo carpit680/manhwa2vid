@@ -281,12 +281,19 @@ def test_the_limiter_sits_before_loudnorm_not_after():
     assert g.index("alimiter") < g.index("loudnorm"), "limit inter-sample peaks first"
 
 
-def test_the_bed_is_ducked_off_the_voice_not_just_turned_down():
-    """A flat bed under a voice measured 19.5 dB down and inaudible. The key is an
-    asplit of the PROCESSED narration, so the duck follows the delivered voice."""
+def test_when_ducking_is_enabled_the_key_is_the_processed_voice():
+    """Ducking is opt-in now (see test_bed_ducking_is_off_by_default_and_cannot_pump),
+    but when it IS on the key must still be an asplit of the PROCESSED narration, so
+    the duck follows the delivered voice rather than the raw stem.
+
+    This test used to assert the sidechain unconditionally. It was right about the
+    wiring and wrong about the default: with kokoro_trim_ms shortening inter-sentence
+    silence below the sidechain's release, the duck became audible as the bed pumping
+    on every sentence, and no-duck won the A/B."""
     from manhwa2vid.video.master import build_filter, measure_pass
 
-    g = build_filter({}, pad_seconds=0.0, with_bed=True, loudnorm=measure_pass(-14, 7))
+    cfg = {"video": {"bgm_duck": True}}
+    g = build_filter(cfg, pad_seconds=0.0, with_bed=True, loudnorm=measure_pass(-14, 7))
     assert "sidechaincompress" in g and "asplit=2[v_mix][v_key]" in g
     assert g.index("asplit") < g.index("sidechaincompress")
 
@@ -358,3 +365,43 @@ def test_voice_chain_honours_the_listening_decisions():
     cfg["video"]["voice_echo_wet"] = 0.07
     g2 = master.build_filter(cfg, pad_seconds=0.0, with_bed=True, loudnorm="loudnorm=I=-14")
     assert "rubberband" in g2 and "aecho" in g2
+
+
+def test_bed_ducking_is_off_by_default_and_cannot_pump():
+    """The sidechain became audible as the bed "coming and going" with every sentence
+    once kokoro_trim_ms cut inter-sentence silence to ~210 ms against its 350 ms
+    release. With no sidechain the bed sits at one level and pumping is impossible by
+    construction; bgm_gain_db alone decides how far under the voice it sits."""
+    import copy
+
+    import yaml
+
+    from manhwa2vid.video import master
+
+    cfg = yaml.safe_load(open("config.yaml"))
+    g = master.build_filter(cfg, pad_seconds=0.0, with_bed=True, loudnorm="LN")
+    assert "sidechaincompress" not in g, "ducking is back on in the shipped config"
+    assert "asplit" not in g, "asplit only exists to feed the sidechain key"
+    assert "[v_mix][bed]amix" in g, "bed must reach the mix directly"
+    assert ";;" not in g and "[bed_duck]" not in g, "dangling label from the rewire"
+
+    # ...and it is one flag away, not deleted.
+    on = copy.deepcopy(cfg)
+    on["video"]["bgm_duck"] = True
+    g2 = master.build_filter(on, pad_seconds=0.0, with_bed=True, loudnorm="LN")
+    assert "sidechaincompress" in g2 and "asplit=2[v_mix][v_key]" in g2
+
+
+def test_no_bed_path_is_unaffected_by_the_duck_flag():
+    import copy
+
+    import yaml
+
+    from manhwa2vid.video import master
+
+    cfg = yaml.safe_load(open("config.yaml"))
+    off = master.build_filter(cfg, pad_seconds=0.0, with_bed=False, loudnorm="LN")
+    on = copy.deepcopy(cfg)
+    on["video"]["bgm_duck"] = True
+    assert off == master.build_filter(on, pad_seconds=0.0, with_bed=False, loudnorm="LN")
+    assert "amix" not in off

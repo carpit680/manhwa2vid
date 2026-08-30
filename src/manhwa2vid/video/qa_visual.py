@@ -61,7 +61,14 @@ _REF_CLIPPED_PCT = 43.9
 # reports/render_audit_2026-08-28.md. Loudness has no constant here on purpose: it is
 # judged against `export.loudness_target` so the gate cannot codify the current undershoot.
 _TRUE_PEAK_MAX_DBTP = -1.0
-_BED_FLOOR_MIN_DBFS = -40.0
+# -60, not -40: re-derived 2026-08-30 against the competitor corpus. A bed-less render
+# measures -64.7 dBFS and the quietest real field video -57.4, so -60 separates genuine
+# absence from a legitimately quiet bed — which is all this gate can honestly claim. The
+# old -40 failed nine of twelve field videos, Mamoru's 5.2M among them.
+_BED_FLOOR_MIN_DBFS = -60.0
+# Reported only. An absent bed scores 2.87 and the quietest field video 2.71 — tonality
+# cannot distinguish silence from music, so gating on it fails real videos and catches
+# nothing. Kept in the report because the number is still worth seeing.
 _BED_TONALITY_MIN = 5.0
 # 12-15 came from docs/audio-quality-spec.md §6 and was never measured against the
 # reference. Two things moved it on 2026-08-29: the user asked for a quieter bed after
@@ -71,7 +78,11 @@ _BED_TONALITY_MIN = 5.0
 # widens to admit that choice and still catch the failures worth catching — a bed so
 # loud it competes with the voice (under 10) or so quiet it may as well be absent (over
 # 24, which is where the pre-mastering renders sat at 19.5 and sounded empty).
-_DUCK_MIN_DB, _DUCK_MAX_DB = 10.0, 24.0
+# Voice-to-bed separation, measured on the corpus with the estimate metric (the only one
+# computable without a narration stem): 13.0-35.7 dB across twelve competitor videos,
+# median 21.9. The previous 10-24 was reasoned, not measured, and the 12-15 before that
+# came from the audio spec. Ours measures 26.2 — inside the field.
+_SEPARATION_MIN_DB, _SEPARATION_MAX_DB = 13.0, 36.0
 # Measured off the reference channel's OWN audio, 2026-08-28: the full 5h17m track of
 # the Mamoru Frozen Player video (reference/frozen_player/mamoru_fp_audio.wav, pulled
 # audio-only from the same video id the visual profile used) measures LRA 2.50 LU by
@@ -356,34 +367,57 @@ def enforce_render_qa(
             lufs=lufs, target=target, offset=round(off, 2),
         )
 
-    # Is there music under this at all? The bed is chosen by globbing assets/bgm/ and
-    # taking the first file, so an empty directory ships a silent bed and no level check
-    # can tell that from a quiet mix. Tonality (peak/mean of the quiet-window spectrum)
-    # can: music is peaky, room tone is not. Measured 6.26/6.58 against a floor of 5.
+    # Is there music under this at all? The bed is globbed from assets/bgm/, so an empty
+    # directory ships a silent bed that no level check distinguishes from a quiet mix.
+    #
+    # Re-derived 2026-08-30 against the competitor corpus and against a deliberately
+    # bed-less render, because the old -40 dBFS floor failed NINE of twelve field videos
+    # — including Mamoru's 5.2M (-44.2) and Tobs' 1.6M (-42.2). It was codifying our own
+    # mix, not the format.
+    #
+    #     no bed at all      -64.7 dBFS      tonality 2.87
+    #     field minimum      -57.4           tonality 2.71
+    #     field median       -42.2           tonality 5.51
+    #
+    # Tonality is REPORTED, not gated: an absent bed scores 2.87 and the quietest real
+    # field video scores 2.71, so it cannot tell silence from music and the old ">5"
+    # would have failed three more field videos. The claim it was added on ("music is
+    # peaky, room tone is not") was only ever checked against our own renders.
     floor = metrics.get("quiet_floor_dbfs")
     tonality = metrics.get("tonality_ratio")
-    if floor is not None and tonality is not None:
-        ok = floor > _BED_FLOOR_MIN_DBFS and tonality > _BED_TONALITY_MIN
+    if floor is not None:
         report.add(
             "audio-music-present",
-            ok,
-            f"bed floor {floor} dBFS (min {_BED_FLOOR_MIN_DBFS}), tonality {tonality} "
-            f"(min {_BED_TONALITY_MIN}) — is there actually music under the narration?",
+            floor > _BED_FLOOR_MIN_DBFS,
+            f"bed floor {floor} dBFS (min {_BED_FLOOR_MIN_DBFS}; a bed-less render "
+            f"measures -64.7, the quietest field video -57.4) — is there music under "
+            f"the narration at all?",
             floor_dbfs=floor, tonality=tonality,
         )
 
-    # How far the bed drops under the voice. 19.5/19.7 dB today: the bed is so far down it
-    # barely registers. WARN until the sidechain chain lands (audio-quality-spec §5).
-    # Only the stem-derived value, never the estimate. The estimate overstates the duck
-    # by 2-7 dB on long material, and acting on it would mean mixing the bed far too loud
-    # while this gate reported it was fine.
-    duck = metrics.get("duck_depth_db")
-    if duck is not None:
+    # How far the bed sits under the voice. Renamed from audio-duck-depth on 2026-08-30:
+    # sidechain ducking is off by default (it pumped once kokoro_trim_ms shortened the
+    # inter-sentence gaps below its release), so "duck depth" no longer describes the
+    # chain. The quantity that matters either way is the SEPARATION between voice and
+    # bed, which a constant bed has just as much as a ducked one.
+    #
+    # Judged on the ESTIMATE, not the stem value, because the estimate is the only one
+    # computable for the field: competitors ship no narration stem. Its bias is real —
+    # it overstates by 2-7 dB on long material — but it is applied identically to both
+    # sides, which is the same like-for-like argument the composition gates use. The
+    # stem value stays in the report as the more accurate number.
+    #
+    # Band from the corpus (mid sections): 13.0-35.7 dB, median 21.9. Ours measures
+    # 26.2 — inside it. See reports/field_measurement_2026-08-29.md.
+    separation = metrics.get("duck_depth_estimate_db")
+    if separation is not None:
         report.add(
-            "audio-duck-depth",
-            True if _DUCK_MIN_DB <= duck <= _DUCK_MAX_DB else "warn",
-            f"narration sits {duck} dB over the bed (want {_DUCK_MIN_DB}-{_DUCK_MAX_DB})",
-            duck_depth_db=duck,
+            "audio-bed-separation",
+            True if _SEPARATION_MIN_DB <= separation <= _SEPARATION_MAX_DB else "warn",
+            f"narration sits {separation} dB over the bed "
+            f"(field {_SEPARATION_MIN_DB}-{_SEPARATION_MAX_DB}, median 21.9)",
+            bed_separation_db=separation,
+            duck_depth_stem_db=metrics.get("duck_depth_db"),
         )
 
     # Loudness range, judged against the reference channel's measured 2.5-2.6 LU — a

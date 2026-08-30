@@ -38,6 +38,7 @@ def _metrics(**over):
         "quiet_floor_dbfs": -30.0,
         "tonality_ratio": 7.0,
         "duck_depth_db": 13.5,
+        "duck_depth_estimate_db": 21.9,
         "shots": 100,
         "cuts_per_min": 16.0,
         "shot_median_s": 2.5,
@@ -253,24 +254,36 @@ def test_loudness_is_judged_against_the_configured_target_not_a_constant(monkeyp
     assert _run(monkeypatch, tmp_path, loudness_lufs=-11.0)["audio-loudness"] == "fail"
 
 
-def test_missing_music_bed_fails(monkeypatch, tmp_path):
-    """The bed is whatever sorts first in assets/bgm/. An empty directory ships silence,
-    and level alone cannot tell that from a quiet mix — tonality can."""
-    assert _run(monkeypatch, tmp_path, quiet_floor_dbfs=-55.0)["audio-music-present"] == "fail"
-    assert _run(monkeypatch, tmp_path, tonality_ratio=1.5)["audio-music-present"] == "fail"
-    assert _run(monkeypatch, tmp_path, quiet_floor_dbfs=-34.2,
-                tonality_ratio=6.3)["audio-music-present"] == "pass"
+def test_bed_separation_band_is_field_derived(monkeypatch, tmp_path):
+    """Renamed from audio-duck-depth: sidechain ducking is off by default now, so
+    "duck depth" no longer describes the chain — but voice-to-bed SEPARATION matters
+    either way, and a constant bed has it too.
+
+    Band is the corpus: 13.0-35.7 dB across twelve competitor videos, median 21.9.
+    Judged on the estimate metric because competitors ship no narration stem, so it is
+    the only value computable on both sides."""
+    run = lambda **kw: _run(monkeypatch, tmp_path, **kw)["audio-bed-separation"]  # noqa: E731
+    assert run(duck_depth_estimate_db=21.9) == "pass", "field median must pass"
+    assert run(duck_depth_estimate_db=26.2) == "pass", "our own render must pass"
+    assert run(duck_depth_estimate_db=13.0) == "pass", "field minimum must pass"
+    assert run(duck_depth_estimate_db=35.7) == "pass", "field maximum must pass"
+    assert run(duck_depth_estimate_db=6.0) == "warn", "bed competing with the voice"
+    assert run(duck_depth_estimate_db=45.0) == "warn", "bed effectively absent"
 
 
-def test_duck_depth_outside_the_band_warns(monkeypatch, tmp_path):
-    """Band widened to 10-24 on 2026-08-29: the user asked for a quieter bed by ear, and
-    the spec's 12-15 was never measured against the reference (which in fact runs a
-    HOTTER bed than we do). It still catches a bed competing with the voice, and one so
-    far under that it may as well be absent."""
-    assert _run(monkeypatch, tmp_path, duck_depth_db=19.5)["audio-duck-depth"] == "pass"
-    assert _run(monkeypatch, tmp_path, duck_depth_db=4.0)["audio-duck-depth"] == "warn"
-    assert _run(monkeypatch, tmp_path, duck_depth_db=27.0)["audio-duck-depth"] == "warn"
-    assert _run(monkeypatch, tmp_path, duck_depth_db=13.0)["audio-duck-depth"] == "pass"
+def test_music_present_floor_accepts_the_field_and_still_catches_absence(monkeypatch, tmp_path):
+    """The old -40 dBFS floor failed NINE of twelve field videos, Mamoru's 5.2M among
+    them — it codified our own mix rather than the format. A bed-less render measures
+    -64.7 and the quietest field video -57.4, so -60 is what honestly separates them.
+
+    Tonality is reported but not gated: absence scores 2.87 against the quietest field
+    video's 2.71, so it cannot tell silence from music."""
+    run = lambda **kw: _run(monkeypatch, tmp_path, **kw)["audio-music-present"]  # noqa: E731
+    assert run(quiet_floor_dbfs=-44.2) == "pass", "Mamoru's 5.2M video must not fail"
+    assert run(quiet_floor_dbfs=-57.4) == "pass", "quietest real field video"
+    assert run(quiet_floor_dbfs=-64.7) == "fail", "a genuinely bed-less render"
+    # tonality no longer decides the verdict, either way
+    assert run(quiet_floor_dbfs=-44.2, tonality_ratio=2.7) == "pass"
 
 
 def test_loudness_range_band_is_reference_derived(monkeypatch, tmp_path):
@@ -316,12 +329,13 @@ def test_audio_gates_are_absent_rather_than_passing_when_unmeasurable(monkeypatc
 
     metrics = {k: v for k, v in _metrics().items()
                if k not in {"true_peak_dbtp", "loudness_lufs", "loudness_range_lu",
-                            "quiet_floor_dbfs", "tonality_ratio", "duck_depth_db"}}
+                            "quiet_floor_dbfs", "tonality_ratio", "duck_depth_db",
+                            "duck_depth_estimate_db"}}
     monkeypatch.setattr(qa, "measure_video", lambda _v: metrics)
     enforce_render_qa(Path("dummy.mp4"), {"root": tmp_path}, {"_qa_force": True})
     names = {g["name"] for g in json.loads((tmp_path / "qa.render.json").read_text())["gates"]}
     assert not (names & {"true-peak", "audio-loudness", "audio-music-present",
-                         "audio-duck-depth", "audio-lra"})
+                         "audio-bed-separation", "audio-lra"})
 
 
 # --- export gating (qa-hardening-brief Phase 4) ----------------------------------------

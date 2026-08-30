@@ -86,19 +86,37 @@ def build_filter(
         return f"[1:a]{voice}{pad},{loudnorm}[aout]"
 
     bed_db = float(get_nested(config, "video", "bgm_gain_db", default=-30.0))
-    # Ducking is measured, not eyeballed: `bgm_gain_db` is the one number to turn until
-    # the audio-duck-depth gate reads 12-15 dB. The old linear `bgm_volume` is gone —
-    # two controls fighting over the same level is how it ended up 19.5 dB down.
-    return (
-        f"[1:a]{voice}{pad},asplit=2[v_mix][v_key];"
-        f"[2:a]{','.join(_BED_CHAIN)},volume={bed_db}dB,aloop=loop=-1:size=2e+09[bed];"
-        f"[bed][v_key]sidechaincompress=threshold=0.01:ratio=10:attack=20:release=350"
-        f":makeup=1:knee=2.83:detection=rms[bed_duck];"
-        f"[v_mix][bed_duck]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
-        # Catch inter-sample peaks BEFORE loudnorm, not after: alimiter after normalization
-        # re-introduces exactly the overshoot loudnorm just removed.
+    bed = f"[2:a]{','.join(_BED_CHAIN)},volume={bed_db}dB,aloop=loop=-1:size=2e+09"
+    # Catch inter-sample peaks BEFORE loudnorm, not after: alimiter after normalization
+    # re-introduces exactly the overshoot loudnorm just removed.
+    tail = (
+        f"amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
         f"alimiter=limit=0.9:attack=5:release=60:asc=1,"
         f"{loudnorm}[aout]"
+    )
+
+    if not bool(get_nested(config, "video", "bgm_duck", default=False)):
+        # No sidechain: the bed sits at one level and cannot pump by construction.
+        #
+        # Chosen by ear 2026-08-29 after the duck became audible as the bed "coming and
+        # going" with every sentence. The cause was an interaction, not a bad setting:
+        # `tts.kokoro_trim_ms` cut inter-sentence silence to ~210 ms while the sidechain's
+        # release was 350 ms, so the bed began recovering in each gap and was slammed
+        # down again at the next sentence. Shortening the release did not fix it
+        # (measured: 350 -> 50 ms moved the bed floor 2.5 dB); the swing itself was the
+        # problem, and four variants were A/B'd — no-duck won on ears and on the
+        # bed-level-swing proxy (24.7 dB vs 31.2 current, 40.3 for a slower release).
+        #
+        # `bgm_gain_db` alone now decides how far under the voice the bed sits, which is
+        # one control instead of two fighting over the same level.
+        return f"[1:a]{voice}{pad}[v_mix];{bed}[bed];[v_mix][bed]{tail}"
+
+    return (
+        f"[1:a]{voice}{pad},asplit=2[v_mix][v_key];"
+        f"{bed}[bed];"
+        f"[bed][v_key]sidechaincompress=threshold=0.01:ratio=10:attack=20:release=350"
+        f":makeup=1:knee=2.83:detection=rms[bed_duck];"
+        f"[v_mix][bed_duck]{tail}"
     )
 
 

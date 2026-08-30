@@ -321,10 +321,35 @@ video:
   # overstates the duck by 2-7 dB on long material. That would have shipped a bed sitting
   # 3 dB under the narration while a gate reported 13. Tune this against
   # measure.audio.duck_depth_from_stem, never the estimate.
-  # -36, not -30: chosen by ear on a 5s A/B (2026-08-29). The old value was tuned to
-  # land inside the audio-duck-depth 12-15 dB band, which came from the audio spec and
-  # not from any measurement of the reference — so it was a number serving a number.
-  bgm_gain_db: -36.0
+  # -24, chosen by ear 2026-08-29 on a clean single-variable A/B (-24 / -30 / -36,
+  # same passage, same voice, nothing else changed).
+  #
+  # Note this REVERSES an earlier "the bed is too loud" judgement made at -30. That
+  # judgement came from an A/B that changed three things at once — pitch shift off,
+  # echo off, bed quieter — so it could not attribute the preference, and the muddy
+  # rubberband-plus-echo chain was almost certainly what sounded wrong. With the voice
+  # chain clean, the bed can sit HIGHER, not lower. One variable per comparison.
+  #
+  # Field context: across 12 competitor videos the speech-to-floor gap runs
+  # 10.6-25.8 dB (median 17.4) — see reports/field_measurement_2026-08-29.md. A louder
+  # bed moves us toward that band, not away from it; -36 measured 37.0 dB on a full
+  # render and failed audio-music-present with the bed effectively inaudible.
+  #
+  # This number is only measurable on a FULL render. Excerpt measurements of the
+  # speech-to-floor gap gave 28.8-37.9 dB for every value from -24 to -36, including
+  # ones a full render proves are fine.
+  bgm_gain_db: -24.0
+  # Sidechain ducking, OFF by default. It was audible as the bed "coming and going"
+  # with every sentence — a trim interaction, not a bad setting: kokoro_trim_ms cut
+  # inter-sentence silence to ~210 ms against a 350 ms sidechain release, so the bed
+  # part-recovered in each gap and was slammed down again at the next sentence.
+  # Shortening the release did not help (350 -> 50 ms moved the bed floor 2.5 dB);
+  # the per-sentence swing itself was the defect. Four variants were A/B'd and no-duck
+  # won by ear and on a bed-swing proxy (24.7 dB vs 31.2 ducked, 40.3 for a slower
+  # release). With it off, bgm_gain_db alone sets how far under the voice the bed
+  # sits — one control rather than two fighting over the same level.
+  # true restores the previous sidechain exactly.
+  bgm_duck: false
   # Voice depth, in semitones, formants preserved (rubberband). Set 0 to disable.
   # Beyond -2 the artefacts accumulate over a long passage.
   # 0.0, not -1.5: the rubberband shift was A/B'd against a flat chain and rejected by
