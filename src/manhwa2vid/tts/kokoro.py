@@ -95,6 +95,75 @@ def _trim_silence(audio: Any, keep_ms: float) -> Any:
     return audio[max(0, int(loud[0]) - keep) : min(audio.size, int(loud[-1]) + keep)]
 
 
+def _compress_pauses(audio: Any, max_ms: float) -> Any:
+    """Cap the silences INSIDE one sentence — the pauses at commas and dashes.
+
+    `_trim_silence` only touches each sentence's lead and trail, so tightening the
+    boundaries left Kokoro's internal pauses untouched and therefore relatively longer.
+    Measured on Frozen Player beat_010 (9 sentences, 33.6 s), the prosody came out
+    inverted: internal silences ran to 516 ms with 10 of 55 over 150 ms, against a
+    ~210 ms gap between whole sentences. Nine comma pauses in one beat were longer than
+    the breaks between the sentences around them, which is what "the pause after a comma
+    is longer than it should be" sounds like.
+
+    Over the whole FP script (112 sentences, 406.2 s) a 120 ms cap recovers 26.4 s —
+    6.5% of runtime — and lifts delivered pace without the voice articulating any faster.
+
+    The cut is taken from the MIDDLE of each pause, keeping `max_ms/2` a side, so the
+    decay of the word before and the onset ramp of the word after both survive; slicing
+    off one end clips them. Silence is detected at 2% of the segment's own peak, the same
+    relative threshold `_trim_silence` uses, so a quietly-read sentence is not mistaken
+    for silence.
+
+    The cap is a floor on what may be shortened, which is what keeps it safe: a plosive
+    closure (the held /t/ or /k/ inside a word) runs well under 120 ms, so at that
+    setting only phrase-boundary pauses are touched. Lowering it far below 100 ms starts
+    to risk clipping those closures and slurring the consonant.
+
+    0 disables it. Applied per segment BEFORE the sidecar is measured, so picture and
+    sound stay joined — the shot planner reads those durations.
+    """
+    import numpy as np
+
+    if max_ms <= 0 or audio.size == 0:
+        return audio
+    envelope = np.abs(audio)
+    peak = float(envelope.max())
+    if peak <= 0:
+        return audio
+
+    limit = int(SAMPLE_RATE * max_ms / 1000.0)
+    if limit <= 0:
+        return audio
+
+    # Silence is judged on a FRAMED envelope, not on raw samples. Any waveform crosses
+    # zero on the way through every cycle, so a per-sample threshold marks each crossing
+    # as its own one-sample "silence" and the run lengths it reports are meaningless.
+    # 5 ms frames are short against the 120 ms being capped and long enough to span a
+    # glottal period at any speaking pitch.
+    frame = max(1, int(SAMPLE_RATE * 0.005))
+    n_frames = (audio.size + frame - 1) // frame
+    padded = np.zeros(n_frames * frame, dtype="float32")
+    padded[: audio.size] = envelope
+    quiet = padded.reshape(n_frames, frame).max(axis=1) <= peak * 0.02
+
+    # Boundaries of every quiet run, via the transitions of the boolean mask.
+    edges = np.flatnonzero(np.diff(quiet.astype(np.int8)))
+    starts = np.concatenate(([0], edges + 1))
+    ends = np.concatenate((edges + 1, [n_frames]))
+
+    keep: list[Any] = []
+    for f0, f1 in zip(starts.tolist(), ends.tolist()):
+        start, end = f0 * frame, min(f1 * frame, audio.size)
+        if not quiet[f0] or (end - start) <= limit:
+            keep.append(audio[start:end])
+            continue
+        half = limit // 2
+        keep.append(audio[start : start + half])
+        keep.append(audio[end - (limit - half) : end])
+    return np.concatenate(keep) if keep else audio
+
+
 class KokoroTTSProvider(TTSProvider):
     """
     Preset-voice synthesis. Kokoro cannot clone a reference voice — tts.voice_prompt is
@@ -114,7 +183,10 @@ class KokoroTTSProvider(TTSProvider):
             pipeline, str(get_nested(config, "tts", "kokoro_voice", default="am_adam"))
         )
         speed = float(get_nested(config, "tts", "kokoro_speed", default=1.0))
-        trim_ms = float(get_nested(config, "tts", "kokoro_trim_ms", default=0.0))
+        trim_ms = float(get_nested(config, "tts", "kokoro_trim_ms", default=150.0))
+        max_pause_ms = float(
+            get_nested(config, "tts", "kokoro_max_pause_ms", default=120.0)
+        )
 
         out_wav = out_path.with_suffix(".wav")
         out_wav.parent.mkdir(parents=True, exist_ok=True)
@@ -139,7 +211,11 @@ class KokoroTTSProvider(TTSProvider):
                 if len(pieces) == 1
                 else np.concatenate([np.asarray(p, dtype="float32") for p in pieces])
             )
-            segments.append((sentence, _trim_silence(merged, trim_ms)))
+            # Trim the edges first, then the interior: the trail silence is not a
+            # pause the listener hears as punctuation, and compressing it first would
+            # leave _trim_silence a shorter tail to work from.
+            trimmed = _trim_silence(merged, trim_ms)
+            segments.append((sentence, _compress_pauses(trimmed, max_pause_ms)))
         chunks = [audio for _g, audio in segments]
         if not chunks:
             raise RuntimeError(f"Kokoro returned no audio for: {text[:60]!r}")

@@ -40,3 +40,6 @@ skills-lock.json
 
 # Human-review artifacts (A/B audio, listening tests) — not source
 _review/
+
+# A/B listening samples — regenerable, and mp3s do not belong in the repo.
+samples/

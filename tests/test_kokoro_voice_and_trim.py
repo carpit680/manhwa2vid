@@ -101,3 +101,34 @@ class TestResolveVoice:
         v = _resolve_voice(_FakePipeline(), spec)
         assert not isinstance(v, str), "shipped config should be a blend"
         assert v.shape == _FakePipeline.SHAPE
+
+
+class TestDefaultsMatchTheShippedConfig:
+    """CLAUDE.md's standing trap: "Config defaults must match config.yaml. Keys are read
+    where used, so a default that differs from the file changes behaviour silently the
+    moment the key is absent."
+
+    `kokoro_trim_ms` was read with `default=0.0` against 150 in the file, so a config
+    missing the key silently restored the untrimmed read that `kokoro_speed: 1.30` was
+    calibrated against — a ~24 wpm swing with nothing to show for it. These are the
+    audio-shaping keys where an absent key changes what the listener hears.
+    """
+
+    import pytest as _pytest
+
+    @_pytest.mark.parametrize("key", ["kokoro_trim_ms", "kokoro_max_pause_ms"])
+    def test_the_code_default_equals_the_file(self, key):
+        import inspect
+        import re
+
+        import yaml
+
+        from manhwa2vid.tts import kokoro
+
+        shipped = yaml.safe_load(open("config.yaml"))["tts"][key]
+        src = inspect.getsource(kokoro.KokoroTTSProvider.synthesize)
+        found = re.search(rf'"{key}", default=([0-9.]+)', src)
+        assert found, f"{key} is not read in synthesize() — did the call site move?"
+        assert float(found.group(1)) == float(shipped), (
+            f"{key}: code default {found.group(1)} != config.yaml {shipped}"
+        )
