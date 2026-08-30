@@ -298,9 +298,10 @@ def test_a_panel_returning_later_is_caught(tmp_path: Path) -> None:
     assert gates["no-repeated-panels"]["status"] == FAIL
     assert "p0001_01" in gates["no-repeated-panels"]["details"]
     assert "0.0s, 6.0s" in gates["no-repeated-panels"]["details"]
-    # The same fixture rewinds (p0001_01 after p0001_02), so reading-order fails too.
-    assert gates["reading-order"]["status"] == FAIL
-    assert "p0001_01" in gates["reading-order"]["details"]
+    # The one-panel rewind is inside SCENE_RADIUS, so reading-order alone tolerates it
+    # (same-scene editing, user decision later the same day) — the REPEAT is what
+    # fails this fixture. Cross-scene rewinds are pinned separately below.
+    assert gates["reading-order"]["status"] == PASS
     # The gate that already existed is blind to it — which is why this one exists.
     assert gates["no-invisible-cuts"]["status"] == PASS
 
@@ -345,3 +346,26 @@ def test_an_in_order_timeline_passes_the_reading_order_gate(tmp_path: Path) -> N
     gates = _gates(tmp_path, beats, panels, timeline)
     assert gates["reading-order"]["status"] == PASS
     assert gates["no-repeated-panels"]["status"] == PASS
+
+
+def test_a_cross_scene_rewind_still_fails_reading_order(tmp_path: Path) -> None:
+    """SCENE_RADIUS tolerates the close-up -> establishing-shot cut; the 26-71 panel
+    jumps the user originally reported are another scene entirely and stay FAIL."""
+    from manhwa2vid.models import Timeline, TimelineEntry
+
+    def entry(pid, start, dur, beat):
+        return TimelineEntry(panel_id=pid, panel_path=f"panels/{pid}.png", start=start,
+                             end=start + dur, duration=dur, beat_id=beat,
+                             subtitle_text="x")
+
+    panels = [_panel(f"p{i:04d}_01", 1) for i in range(1, 21)]
+    timeline = Timeline(
+        entries=[entry("p0018_01", 0.0, 3.0, 1),
+                 entry("p0002_01", 3.0, 3.0, 2)],     # 16 panels back: another scene
+        total_duration=6.0,
+    )
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p0018_01"], narration="a b"),
+             ScriptBeat(beat_id=2, panel_ids=["p0002_01"], narration="c d")]
+    gates = _gates(tmp_path, beats, panels, timeline)
+    assert gates["reading-order"]["status"] == FAIL
+    assert "p0002_01" in gates["reading-order"]["details"]

@@ -301,13 +301,22 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
     # an unconstrained borrow in the shot planner. The planner now takes every
     # substitute from the reading-order gap (script/match.py::_gap_spare); this gate is
     # what notices the next unconstrained search however it arrives.
+    from manhwa2vid.script.match import SCENE_RADIUS
+
+    # Tolerance matches the matcher's (user decision 2026-08-30): a backward cut of up
+    # to SCENE_RADIUS panels is same-scene editing — close-up, then the establishing
+    # shot. Measured against the HIGH-WATER position, so small steps cannot compound
+    # into a rewind. The 26-71 panel jumps originally reported stay inversions.
     order_of = {p.id: i for i, p in enumerate(panels)}
     inversions = []
     clock = 0.0
+    high = -1
     for prev_run, run in zip(runs_all, runs_all[1:]):
         clock += prev_run["seconds"]
         a, b = order_of.get(prev_run["panel_id"]), order_of.get(run["panel_id"])
-        if a is not None and b is not None and b < a:
+        if a is not None:
+            high = max(high, a)
+        if a is not None and b is not None and b < high - SCENE_RADIUS + 1 and b < a:
             inversions.append(
                 f"{prev_run['panel_id']}(#{a}) -> {run['panel_id']}(#{b}) at {clock:.1f}s"
             )

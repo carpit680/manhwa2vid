@@ -13,29 +13,47 @@ from manhwa2vid.script.match import filter_monotonic, plan_shots
 
 # --- the monotonic filter -----------------------------------------------------------
 
-def test_monotonic_filter_drops_backward_claims():
-    """A model claim that runs against the story's forward motion is dropped, not
-    negotiated with: sentences advance, so the panels they claim must advance too."""
+def test_monotonic_filter_never_claims_one_panel_twice():
+    """Sentence 3 reaching back to sentence 1's panel is a REPEAT on screen, and
+    no-repeated-panels fails the render only after the TTS money is spent. The
+    zero-tolerance chain forbade this by construction; the scene radius reopened it,
+    so the reconstruction dedups — first claim wins."""
     order = ["p1", "p2", "p3", "p4", "p5"]
-    claims = [
-        (1, "p1"),
-        (2, "p2"),
-        (3, "p1"),   # sentence 3 reaching BACK to panel 1 — contradiction
-        (4, "p4"),
-        (5, "p5"),
-    ]
+    claims = [(1, "p1"), (2, "p2"), (3, "p1"), (4, "p4"), (5, "p5")]
     kept = filter_monotonic(claims, order)
     assert (3, "p1") not in kept
     assert [c for c in kept] == [(1, "p1"), (2, "p2"), (4, "p4"), (5, "p5")]
 
 
-def test_monotonic_filter_keeps_the_largest_consistent_set():
-    """When claims conflict, keep the most that CAN be true together — a single early
-    outlier must not cost us the whole chain behind it."""
-    order = [f"p{i}" for i in range(1, 8)]
-    claims = [(1, "p7"), (2, "p2"), (3, "p3"), (4, "p4"), (5, "p5")]
+def test_a_small_backward_step_is_kept_within_the_scene_radius():
+    """The 2:43-2:57 defect: s62's claim to the cave-mouth panel — literally the party
+    staring into a tunnel — sat two panels behind the chain and zero tolerance dropped
+    it. The fill then parked six sentences on a fireball. Close-up, then the
+    establishing shot two panels back, is how the reference channel actually cuts."""
+    order = [f"p{i}" for i in range(1, 12)]
+    claims = [(1, "p3"), (2, "p5"), (3, "p4"), (4, "p8")]
     kept = filter_monotonic(claims, order)
-    assert len(kept) == 4 and (1, "p7") not in kept
+    assert (3, "p4") in kept, "a same-scene backward claim was destroyed"
+    assert len(kept) == 4
+
+
+def test_a_backward_step_beyond_the_radius_is_still_dropped():
+    """26-71 panel jumps — other scenes entirely — were the original watched defect
+    and stay illegal. Radius is measured against the chain's HIGH-WATER mark so small
+    steps cannot compound into one large rewind."""
+    order = [f"p{i}" for i in range(1, 30)]
+    claims = [(1, "p2"), (2, "p25"), (3, "p5"), (4, "p26")]
+    kept = filter_monotonic(claims, order)
+    assert (3, "p5") not in kept, "a cross-scene rewind survived the filter"
+
+
+def test_monotonic_filter_keeps_the_largest_consistent_set():
+    """When claims conflict beyond scene scale, keep the most that CAN be true
+    together — a single early outlier must not cost us the whole chain behind it."""
+    order = [f"p{i}" for i in range(1, 25)]
+    claims = [(1, "p24"), (2, "p2"), (3, "p3"), (4, "p4"), (5, "p5")]
+    kept = filter_monotonic(claims, order)
+    assert len(kept) == 4 and (1, "p24") not in kept
 
 
 def test_monotonic_filter_ignores_unknown_panels():
@@ -705,3 +723,56 @@ def test_a_single_over_long_sentence_is_never_split_by_donation():
     )
     assert plan is not None
     assert plan[1][0][1] == 14.0, "a mid-sentence split crept in"
+
+
+def test_second_pass_targets_only_long_unclaimed_runs():
+    """The 2:43-2:57 stretch: six consecutive unclaimed sentences on a fireball.
+    The second pass re-asks ONLY about runs of 3+ unclaimed sentences, against unused
+    panels, and its claims go back through the monotonic filter like everything else."""
+    from manhwa2vid.script import match as M
+
+    calls = []
+
+    def fake_collect(sents, panels, paths, config, pages=None, system=None):
+        calls.append(([n for n, _ in sents], [p.id for p in panels], system is not None))
+        return [(sents[0][0], panels[0].id)]
+
+    class _P:
+        def __init__(self, pid):
+            self.id = pid
+            self.image_path = f"panels/{pid}.png"
+
+    orig = M.collect_claims
+    M.collect_claims = fake_collect
+    try:
+        kept = [(1, "pa"), (6, "pf")]
+        out = M._second_pass_claims(
+            [(1, "s"), (2, "s"), (3, "s"), (4, "s"), (5, "s"), (6, "s"), (7, "s")],
+            [_P("pa"), _P("pb"), _P("pc"), _P("pf")],
+            kept, {}, {},
+        )
+    finally:
+        M.collect_claims = orig
+    # one run qualifies: sentences 2-5 (4 long); sentence 7 alone is too short
+    assert len(calls) == 1
+    run_nums, spare_ids, used_second_prompt = calls[0]
+    assert run_nums == [2, 3, 4, 5]
+    assert "pa" not in spare_ids and "pf" not in spare_ids, "used panels were re-offered"
+    assert used_second_prompt
+    assert out == [(2, "pb")]
+
+
+def test_second_pass_stays_quiet_when_coverage_is_good():
+    from manhwa2vid.script import match as M
+
+    called = []
+    orig = M.collect_claims
+    M.collect_claims = lambda *a, **k: called.append(1) or []
+    try:
+        out = M._second_pass_claims(
+            [(1, "s"), (2, "s"), (3, "s")],
+            [], [(1, "pa"), (3, "pb")], {}, {},
+        )
+    finally:
+        M.collect_claims = orig
+    assert out == [] and not called

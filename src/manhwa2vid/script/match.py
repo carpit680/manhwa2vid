@@ -100,8 +100,12 @@ def collect_claims(
     paths: dict[str, Path],
     config: dict[str, Any],
     sentence_pages: dict[int, tuple[int, int]] | None = None,
+    system: str | None = None,
 ) -> list[tuple[int, str]]:
-    """(sentence_number, panel_id) claims from windowed vision calls. Raw, unfiltered."""
+    """(sentence_number, panel_id) claims from windowed vision calls. Raw, unfiltered.
+
+    `system` overrides the prompt — the second pass (`_second_pass_claims`) asks with a
+    more willing framing than the conservative first pass."""
     from manhwa2vid.llm.provider import get_llm_provider
 
     provider = get_llm_provider(get_nested(config, "align", "provider", default=None), config)
@@ -120,7 +124,7 @@ def collect_claims(
         numbered = "\n".join(f"[{n}] {t}" for n, t in scoped)
         raw = provider.describe_labeled_panels(
             [(f"[{p.id}]", paths["root"] / p.image_path) for p in batch],
-            f"{_SYSTEM}\n\nSENTENCES:\n{numbered}",
+            f"{system or _SYSTEM}\n\nSENTENCES:\n{numbered}",
         )
         try:
             data = json.loads(raw) if isinstance(raw, str) else raw
@@ -150,15 +154,31 @@ def collect_claims(
     return claims
 
 
+#: How far BACK a claim, spare, or on-screen cut may legally step, in panels.
+#: A recap's narration order and the page's panel order disagree at fine scale all the
+#: time — the writer describes the close-up, then the establishing shot two panels
+#: earlier, and the reference channel cuts exactly that way. Measured cost of zero
+#: tolerance on Solo Leveling: s62 ("the party wanders over and stares into a dark,
+#: winding tunnel") was correctly claimed to p0042_01 — literally the party staring
+#: into a cave mouth — and dropped because another sentence had claimed a panel two
+#: positions later. The fill then parked six sentences on a fireball for 16.5s, the
+#: 2:43-2:57 stretch the user reported as "narration on unrelated frames".
+#:
+#: 8 panels ≈ one page: within a scene. The jumps the user originally reported were
+#: 26-71 panels — other scenes entirely — and stay illegal. User decision 2026-08-30.
+SCENE_RADIUS = 8
+
+
 def filter_monotonic(
     claims: list[tuple[int, str]], panel_order: list[str]
 ) -> list[tuple[int, str]]:
-    """Largest consistent claim set: sentence order and panel order must agree.
+    """Largest consistent claim set: sentence and panel order must agree TO SCENE SCALE.
 
-    Chain constraint unchanged: panel positions strictly increase (each panel shown
-    once), sentence numbers never decrease. A claim that contradicts the story's
-    forward motion — the model matching a late panel to an early sentence — is dropped
-    rather than negotiated with.
+    Chain constraint since 2026-08-30: each panel shown once, sentence numbers never
+    decrease, and a later sentence's panel may sit up to SCENE_RADIUS panels BEHIND the
+    chain's furthest point — the close-up-then-establishing-shot cut. Beyond that, a
+    claim contradicts the story's forward motion and is dropped rather than negotiated
+    with.
 
     The OBJECTIVE changed on 2026-08-28, measured from the persisted raw claims. The
     original longest-chain DP maximised total CLAIMS, so a sentence's second and third
@@ -180,6 +200,9 @@ def filter_monotonic(
     )
     if not items:
         return []
+    # Phase 1 — the strict chain, exactly as before 2026-08-30: positions strictly
+    # increase, so it is repeat-free by construction and the distinct-sentence
+    # objective keeps its proof.
     # score = (distinct sentences in chain, total claims in chain)
     best = [(1, 1)] * len(items)
     parent = [-1] * len(items)
@@ -196,7 +219,88 @@ def filter_monotonic(
     while end != -1:
         chain.append(items[end])
         end = parent[end]
-    return list(reversed(chain))
+    chain.reverse()
+
+    # Phase 2 — scene-radius recovery. A dropped claim rejoins when it steps backward
+    # by at most SCENE_RADIUS from the chain's high-water position, onto a panel the
+    # chain does not already use. Doing recovery as a separate pass (rather than
+    # loosening the DP) keeps three properties at once: no repeats (a tolerant DP
+    # happily chained p1, p2, back-to-p1, and a post-hoc dedup then gutted the chain),
+    # no compounding (high-water comes from the strict chain, which an inserted
+    # backward claim never raises), and the distinct-sentence objective untouched.
+    chain_set = set(chain)
+    used_pids = {pid for _n, pid in chain}
+    recovered: list[tuple[int, str]] = []
+    high = -1
+    for item in items:
+        number, pid = item
+        if item in chain_set:
+            recovered.append(item)
+            high = max(high, pos[pid])
+            continue
+        if pid not in used_pids and high - SCENE_RADIUS <= pos[pid] < high:
+            recovered.append(item)
+            used_pids.add(pid)
+    return recovered
+
+
+
+_SECOND_PASS_SYSTEM = """You are matching recap narration to manhwa panels — a
+SECOND pass over sentences a first pass left without any panel. These sentences will
+otherwise share one unrelated image for many seconds, so a defensible claim now is
+worth more than silence: claim a panel whenever one plausibly DEPICTS the sentence's
+moment — the character, the object, the action, or the place it describes. Do not
+claim for pure narrator commentary with nothing to show.
+
+Return JSON only: {"claims": [{"sentence": <number>, "panels": ["<panel id>"]}]}"""
+
+
+def _second_pass_claims(
+    block_sents: list[tuple[int, str]],
+    panels: list[Panel],
+    kept: list[tuple[int, str]],
+    paths: dict[str, Path],
+    config: dict[str, Any],
+) -> list[tuple[int, str]]:
+    """Re-ask the model about LONG unclaimed runs only, against unused panels.
+
+    Measured need (Solo Leveling, 2:43-2:57): the first pass claimed nothing for six
+    consecutive sentences — Jin-Woo's palm, the tiny core, the money — and the fill
+    parked all of them on a fireball for 16.5 seconds. Match rate 48.6% means half the
+    video rides on fill guesswork; the expensive stretches are exactly these runs.
+
+    Bounded: only runs of 3+ consecutive unclaimed sentences, only the block's unused
+    panels, one vision call per run. Its output joins the RAW claims and re-runs
+    through `filter_monotonic`, so a wild second-pass claim is subject to the same
+    order discipline as everything else.
+    """
+    claimed_nums = {no for no, _pid in kept}
+    used_pids = {pid for _no, pid in kept}
+    runs: list[list[tuple[int, str]]] = []
+    cur: list[tuple[int, str]] = []
+    for no, text in block_sents:
+        if no in claimed_nums:
+            if len(cur) >= 3:
+                runs.append(cur)
+            cur = []
+        else:
+            cur.append((no, text))
+    if len(cur) >= 3:
+        runs.append(cur)
+    if not runs:
+        return []
+
+    spare_panels = [p for p in panels if p.id not in used_pids]
+    if not spare_panels:
+        return []
+
+    out: list[tuple[int, str]] = []
+    for run in runs:
+        found = collect_claims(
+            run, spare_panels, paths, config, None, system=_SECOND_PASS_SYSTEM
+        )
+        out.extend(found)
+    return out
 
 
 def build_shotlist(
@@ -235,11 +339,19 @@ def build_shotlist(
             f"[dim]Match: block {block_idx} — {len(raw)} claim(s), "
             f"{len(kept)} after monotonic filter[/]"
         )
+        second = _second_pass_claims(block_sents, panels, kept, paths, config)
+        if second:
+            kept = filter_monotonic(raw + second, [p.id for p in panels])
+            console.print(
+                f"[dim]Match: block {block_idx} — second pass added "
+                f"{len(second)} claim(s), {len(kept)} kept[/]"
+            )
         claims_debug.append({
             "block": block_idx,
             "sentences": [no for no, _ in block_sents],
             "panels": [p.id for p in panels],
             "raw": [[no, pid] for no, pid in raw],
+            "second": [[no, pid] for no, pid in second],
             "kept": [[no, pid] for no, pid in kept],
         })
         all_claims.extend(kept)
@@ -372,7 +484,14 @@ def _gap_spare(
     """
     lo = order_pos.get(prev_pid, -1) if prev_pid is not None else -1
     hi = order_pos.get(next_pid, len(panel_order)) if next_pid is not None else len(panel_order)
+    # Forward first — the natural continuation. Failing that, up to SCENE_RADIUS panels
+    # behind the previous shown panel (2026-08-30, with the matcher and the gate):
+    # unused same-scene art beats holding one image, and the radius keeps it a cut
+    # within the scene rather than the cross-scene rewind the gate still fails.
     for pid in panel_order[lo + 1 : hi]:
+        if pid not in used and pid not in (text_only or ()):
+            return pid
+    for pid in reversed(panel_order[max(0, lo - SCENE_RADIUS) : lo + 1]):
         if pid not in used and pid not in (text_only or ()):
             return pid
     return None
