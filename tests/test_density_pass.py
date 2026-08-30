@@ -184,3 +184,28 @@ class TestGuardsFromReadingTheFirstLiveOutput:
         monkeypatch.setattr(provider_mod, "get_llm_provider", _boom)
         apply_density_pass(DRY, paths, {})
         assert (paths["debug"] / "density_pass.json").exists()
+
+
+def test_the_pass_never_runs_twice(tmp_path, monkeypatch):
+    """Measured on Solo Leveling: the second application turned "He explains that it
+    is a Double Lair. They actually found a secondary dungeon hidden inside the first."
+    into "...the double lair looks like it is actually real" — denser, same length,
+    lints clean, and tells the viewer less. The acceptance checks density, words and
+    lint, not meaning, so repeat applications ratchet meaning away."""
+    import json as _json
+
+    from manhwa2vid.script.density import apply_density_pass
+
+    debug = tmp_path / "debug"
+    debug.mkdir()
+    (debug / "density_pass.json").write_text(_json.dumps({"targets": []}))
+    called = {"n": 0}
+    monkeypatch.setattr(
+        "manhwa2vid.llm.provider.get_llm_provider",
+        lambda *a, **k: called.__setitem__("n", called["n"] + 1),
+    )
+    text = "A dry paragraph with plenty of words to qualify as a target. " * 5
+    out, record = apply_density_pass(text, {"debug": debug}, {})
+    assert out == text
+    assert record.get("skipped") == "already applied"
+    assert called["n"] == 0, "the provider must not even be constructed"

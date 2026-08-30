@@ -114,6 +114,20 @@ def apply_density_pass(
     """Return (possibly revised text, record). Never raises; never worsens the text."""
     from manhwa2vid.script.freeform import paragraphs
 
+    # Idempotency: this pass runs ONCE per script. Its record survives in debug/, and
+    # a stage re-run (rebuilding gates, re-aligning) must not apply it a second time —
+    # measured on Solo Leveling, the second application turned "He explains that it is
+    # a Double Lair. They actually found a secondary dungeon hidden inside the first."
+    # into "He explains to the group that the double lair looks like it is actually
+    # real": denser, same length, lints clean, and tells the viewer less. The per-
+    # paragraph acceptance checks density, words and lint — not meaning — so repeat
+    # applications ratchet meaning away. A fresh script (--force upstream) clears
+    # debug/ with the other artifacts.
+    debug_dir = paths.get("debug")
+    if debug_dir and (Path(debug_dir) / "density_pass.json").exists():
+        console.print("[dim]Density pass already applied — skipping[/]")
+        return text, {"skipped": "already applied"}
+
     paras = paragraphs(text)
     targets = {
         i: p for i, p in enumerate(paras)
