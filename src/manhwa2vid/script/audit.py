@@ -55,7 +55,16 @@ a stylistic aside, casual or profane register — is NOT a finding. A recap is a
 leave things out, to editorialise, and to be crude; it is not allowed to be wrong.
 
 Do not report a claim as unsupported merely because a detail is small or off-page-centre.
-Report only what you can see is WRONG."""
+Report only what you can see is WRONG.
+
+You may also be given CHAPTER FACTS: short statements a separate pass extracted from
+these same pages before the recap was written. Use them as a CHECKLIST for who did what
+— attributing one character's injury, kill, line or decision to another is the single
+most common way this recap goes wrong, and artwork of a wounded figure rarely names its
+owner. Where the narration and a chapter fact disagree about WHO, look at the pages and
+report the one the pages support. The facts are corroboration, not scripture: if the
+pages contradict a fact, trust the pages and do not raise a finding against the
+narration for agreeing with them."""
 
 _REVISE_SYSTEM = """You are correcting specific factual errors in a finished recap.
 
@@ -105,6 +114,46 @@ def _undelivered_spine(text: str, facts: dict[str, Any]) -> list[str]:
     return missing
 
 
+def _facts_block(facts: dict[str, Any] | None) -> str:
+    """The read pass's own account of these pages, as a who-did-what checklist.
+
+    Keys are `plot_spine` and `cast`, not `spine` — `key_dialogue` and `cast` hold dicts,
+    so they are formatted rather than str()-ed, which would have put Python repr into the
+    prompt.
+
+    Bounded deliberately: the spine, the cast notes and the printed lines are what carry
+    attribution, and a wall of facts would drown the pages themselves in the prompt.
+    """
+    if not facts:
+        return ""
+
+    spine = [str(x).strip() for x in (facts.get("plot_spine") or []) if str(x).strip()][:30]
+    cast = [c for c in (facts.get("cast") or []) if isinstance(c, dict)][:15]
+    lines = [d for d in (facts.get("key_dialogue") or []) if isinstance(d, dict)][:15]
+    if not (spine or cast or lines):
+        return ""
+
+    out = ["\n\nCHAPTER FACTS (extracted from these pages before the recap was written):"]
+    if cast:
+        out.append("Who is who:")
+        for c in cast:
+            alias = ", ".join(str(a) for a in (c.get("aliases") or []))
+            note = str(c.get("note") or "").strip()
+            tail = " — ".join(x for x in (note, f"also called {alias}" if alias else "") if x)
+            out.append(f"- {c.get('name', '?')}{': ' + tail if tail else ''}")
+    if spine:
+        out.append("What happens, in order:")
+        out += [f"- {x}" for x in spine]
+    if lines:
+        out.append("Lines the pages actually print:")
+        for d in lines:
+            speaker = str(d.get("speaker") or "?").strip()
+            line = str(d.get("line") or "").strip()
+            if line:
+                out.append(f'- {speaker}: "{line}"')
+    return "\n".join(out)
+
+
 def audit_script(
     text: str,
     paths: dict[str, Path],
@@ -121,9 +170,15 @@ def audit_script(
         provider.vision_model = model
     provider.temperature = 0.0
 
+    # The read pass already extracted what happens on these pages, and the auditor was
+    # never shown it — `facts` reached only `_undelivered_spine`. That is how "He is
+    # missing his right arm below the elbow" survived into Solo Leveling's opening line
+    # while chapter_facts.json plainly said "Song Chi-Yul loses his arm in the initial
+    # attack". Re-deriving from a drawing of a bloodied figure is exactly the judgement
+    # the read pass already made, with more context than the auditor has.
     raw = provider.describe_labeled_panels(
         [(f"[page {p.stem}]", p) for p in pages],
-        f"{_AUDIT_SYSTEM}\n\nRECAP NARRATION:\n\n{text}",
+        f"{_AUDIT_SYSTEM}{_facts_block(facts)}\n\nRECAP NARRATION:\n\n{text}",
         max_width=page_max_width(config),
     )
     data = json.loads(raw) if isinstance(raw, str) else raw
