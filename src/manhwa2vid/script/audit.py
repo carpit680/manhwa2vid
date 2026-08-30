@@ -191,6 +191,71 @@ def audit_script(
     }
 
 
+def acceptance_failures(
+    original: str,
+    revised: str,
+    majors: list[dict[str, Any]],
+    glossary_names: set[str],
+) -> list[str]:
+    """Why a revision must be rejected; empty means acceptable.
+
+    Replaces the finding-count comparison, which failed in BOTH directions in one day:
+    it rejected a correct Mr. Kim -> Mr. Song fix because the re-audit's own noise went
+    1 -> 2, and it accepted a text that went 8 -> 7 while replacing the correct name
+    "Mr. Song" with "the hunter with orange hair" in four places — seven "wrong name"
+    findings become zero findings if nobody is named. The count measures the auditor's
+    noise floor, not the revision's quality, so it is no longer consulted at all (which
+    also saves the re-audit vision call).
+
+    Checks, all deterministic:
+    - every targeted quote actually changed — an untouched quote means the finding was
+      ignored, however good the rest looks;
+    - TOTAL glossary-name occurrences do not decrease. Total, not per-name: a correct
+      wrong-name fix lowers one name's count while raising another's, but a
+      name -> descriptor swap lowers the total, which is exactly the regression that
+      shipped;
+    - no new placeholder descriptors (the `strip_placeholder_descriptors` class);
+    - word count within ±15% — narration is audio-locked, so word count IS runtime.
+    """
+    import re as _re
+
+    from manhwa2vid.script.lint import _PLACEHOLDER_ADJ_RE
+
+    failures: list[str] = []
+
+    for f in majors:
+        quote = str(f.get("quote") or "").strip()
+        if quote and quote in original and quote in revised:
+            failures.append(f"finding ignored — quote unchanged: {quote[:60]!r}")
+
+    def _name_total(text: str) -> int:
+        return sum(
+            len(_re.findall(rf"\b{_re.escape(n)}\b", text)) for n in glossary_names
+        )
+
+    if glossary_names:
+        before_n, after_n = _name_total(original), _name_total(revised)
+        if after_n < before_n:
+            failures.append(
+                f"glossary names dropped {before_n} -> {after_n} — a name was replaced "
+                "with a description"
+            )
+
+    before_p = len(_PLACEHOLDER_ADJ_RE.findall(original))
+    after_p = len(_PLACEHOLDER_ADJ_RE.findall(revised))
+    if after_p > before_p:
+        failures.append(f"placeholder descriptors grew {before_p} -> {after_p}")
+
+    # ±15%, with a 40-word absolute grace: word count IS runtime, but a repair that
+    # delivers five missing system messages legitimately ADDS sentences, and on a
+    # short text a pure percentage rejects any real fix.
+    wc_before, wc_after = len(original.split()), len(revised.split())
+    if wc_before and abs(wc_after - wc_before) > max(0.15 * wc_before, 40):
+        failures.append(f"length moved {wc_before} -> {wc_after} words (±15% budget)")
+
+    return failures
+
+
 def revise_once(
     text: str,
     audit: dict[str, Any],
@@ -234,31 +299,30 @@ def revise_once(
     if not revised:
         return text, {"revised": False, "reason": "empty revision", "before": before, "after": before}
 
-    recheck = audit_script(revised, paths, config, facts)
-    after = len(recheck.get("majors") or []) + len(recheck.get("undelivered_system_messages") or [])
+    from manhwa2vid.script.read import glossary_names
 
-    if after >= before:
-        # The revision did not improve. Keeping it anyway is how "a later pass undoes an
-        # earlier pass's work" became this project's most repeated defect; the original
-        # stands and the human is told what is still wrong.
+    failures = acceptance_failures(text, revised, majors, glossary_names(paths))
+    if failures:
+        # Keeping a bad revision is how "a later pass undoes an earlier pass's work"
+        # became this project's most repeated defect; the original stands and the
+        # human is told exactly why.
         console.print(
-            f"[yellow]Revision rejected[/] — findings {before} → {after}, keeping the original"
+            "[yellow]Revision rejected[/] — " + "; ".join(failures[:3])
         )
         return text, {
             "revised": False,
-            "reason": "no improvement",
+            "reason": "acceptance failed",
+            "failures": failures,
             "before": before,
-            "after": after,
             "residual": majors + [{"missing": m} for m in missing],
         }
 
-    console.print(f"[green]Revision accepted[/] — findings {before} → {after}")
+    console.print(f"[green]Revision accepted[/] — {before} finding(s) addressed")
     return revised, {
         "revised": True,
         "before": before,
-        "after": after,
-        "residual": (recheck.get("majors") or [])
-        + [{"missing": m} for m in recheck.get("undelivered_system_messages") or []],
+        "failures": [],
+        "residual": [],
     }
 
 

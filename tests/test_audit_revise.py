@@ -1,13 +1,22 @@
-"""The single revision, and the rule that decides whether it ships.
+"""The single revision, and the acceptance that decides whether it ships.
 
-`revise_once` is the only place downstream of the writer that may change a word, and it
-accepts a revision ONLY if the audit's finding count strictly shrinks. That rule is the
-project's answer to its most repeated defect class — a later pass undoing an earlier
-pass's work — so it is pinned here rather than left to the end-to-end test.
+`revise_once` is the only place downstream of the writer that may change a word. Its
+acceptance used to be "the audit's finding count strictly shrinks", and that rule
+failed in BOTH directions in one day: it rejected a correct Mr. Kim -> Mr. Song fix
+because the re-audit's own noise went 1 -> 2, and it accepted a text that went 8 -> 7
+while replacing the correct name "Mr. Song" with "the hunter with orange hair" in four
+places — seven "wrong name" findings become zero if nobody is named. The count
+measures the auditor's noise floor, not the revision's quality.
+
+Acceptance is now `acceptance_failures` (tests/test_revision_acceptance.py pins its
+rules; this file pins revise_once's use of it): targeted quotes must change, total
+glossary-name occurrences must not drop, no new placeholder descriptors, length within
+±15%. No re-audit call at all — which also halves the audit's vision spend.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -22,20 +31,25 @@ def paths(tmp_path: Path) -> dict[str, Path]:
     pages = tmp_path / "pages"
     pages.mkdir()
     Image.new("RGB", (32, 32)).save(pages / "0001.png")
-    return {"root": tmp_path, "pages": pages}
+    glossary = tmp_path / "glossary.json"
+    glossary.write_text(json.dumps({
+        "characters": {"Mr. Kim": [], "Mr. Song": [], "Jin-Woo": []},
+        "terms": {},
+    }), encoding="utf-8")
+    return {"root": tmp_path, "pages": pages, "glossary": glossary}
 
 
-def _audit(majors: int = 0, missing: int = 0) -> dict:
+def _audit(majors: list[dict] | int = 0, missing: int = 0) -> dict:
+    if isinstance(majors, int):
+        majors = [{"quote": f"q{i}", "problem": "wrong", "page": "0001"}
+                  for i in range(majors)]
     return {
-        "majors": [{"quote": f"q{i}", "problem": "wrong", "page": "0001"} for i in range(majors)],
+        "majors": majors,
         "undelivered_system_messages": [f"[MSG {i}]" for i in range(missing)],
     }
 
 
-def _patch(monkeypatch, *, revision: str, recheck_findings: int):
-    """Stub the provider's revision and the re-audit's verdict."""
-    import manhwa2vid.script.audit as audit_mod
-
+def _patch(monkeypatch, *, revision: str):
     class _Provider:
         temperature = None
         vision_model = None
@@ -43,13 +57,8 @@ def _patch(monkeypatch, *, revision: str, recheck_findings: int):
         def describe_labeled_panels_text(self, labeled, system, user, *, max_width=None):
             return revision
 
-    monkeypatch.setattr(audit_mod, "get_llm_provider", lambda *a, **k: _Provider(), raising=False)
     monkeypatch.setattr(
         "manhwa2vid.llm.provider.get_llm_provider", lambda *a, **k: _Provider()
-    )
-    monkeypatch.setattr(
-        audit_mod, "audit_script",
-        lambda *a, **k: _audit(majors=recheck_findings),
     )
 
 
@@ -60,33 +69,54 @@ def test_clean_audit_short_circuits(paths):
     assert report["revised"] is False and report["reason"] == "clean"
 
 
-def test_revision_accepted_only_when_findings_shrink(paths, monkeypatch):
-    _patch(monkeypatch, revision="A better narration.", recheck_findings=1)
-    out, report = revise_once("Original.", _audit(majors=3), paths, {})
-    assert out == "A better narration."
-    assert report["revised"] is True and report["before"] == 3 and report["after"] == 1
+def test_a_correct_wrong_name_fix_is_accepted(paths, monkeypatch):
+    """The fix the old count rule rejected: quote changed, name total preserved."""
+    original = "Mr. Kim holds up a glowing magical core. Jin-Woo watches."
+    _patch(monkeypatch, revision="Mr. Song holds up a glowing magical core. Jin-Woo watches.")
+    out, report = revise_once(
+        original,
+        _audit(majors=[{"quote": "Mr. Kim holds up a glowing magical core.",
+                        "problem": "it is Mr. Song", "page": "0001"}]),
+        paths, {},
+    )
+    assert report["revised"] is True
+    assert "Mr. Song" in out
 
 
-def test_revision_rejected_when_findings_do_not_shrink(paths, monkeypatch):
-    """Equal is a rejection, not a tie — a rewrite that fixes one thing and breaks
-    another must not ship."""
-    _patch(monkeypatch, revision="A differently wrong narration.", recheck_findings=3)
-    out, report = revise_once("Original.", _audit(majors=3), paths, {})
-    assert out == "Original.", "the original must survive a non-improving revision"
-    assert report["revised"] is False and report["reason"] == "no improvement"
+def test_a_name_to_descriptor_revision_is_rejected(paths, monkeypatch):
+    """The regression the old count rule shipped."""
+    original = ("Mr. Song strokes his chin. Mr. Song counts the hands. "
+                "Jin-Woo watches Mr. Song.")
+    _patch(monkeypatch, revision=(
+        "The hunter with orange hair strokes his chin. The hunter with orange hair "
+        "counts the hands. Jin-Woo watches the man."))
+    out, report = revise_once(
+        original,
+        _audit(majors=[{"quote": "Mr. Song strokes his chin.",
+                        "problem": "x", "page": "0001"}]),
+        paths, {},
+    )
+    assert out == original, "the original must survive a name-stripping revision"
+    assert report["revised"] is False and report["reason"] == "acceptance failed"
+    assert any("glossary names dropped" in f for f in report["failures"])
     assert report["residual"], "what is still wrong has to reach the human"
 
 
-def test_revision_rejected_when_findings_grow(paths, monkeypatch):
-    _patch(monkeypatch, revision="Much worse.", recheck_findings=9)
-    out, report = revise_once("Original.", _audit(majors=2), paths, {})
-    assert out == "Original."
-    assert report["revised"] is False
+def test_an_ignored_finding_is_rejected(paths, monkeypatch):
+    original = "Mr. Kim holds the core. Jin-Woo watches."
+    _patch(monkeypatch, revision="Mr. Kim holds the core. Jin-Woo watches closely.")
+    out, report = revise_once(
+        original,
+        _audit(majors=[{"quote": "Mr. Kim holds the core.", "problem": "x", "page": "0001"}]),
+        paths, {},
+    )
+    assert out == original
+    assert any("quote unchanged" in f for f in report["failures"])
 
 
 def test_empty_revision_keeps_the_original(paths, monkeypatch):
     """A model that returns nothing must not blank the script."""
-    _patch(monkeypatch, revision="   ", recheck_findings=0)
+    _patch(monkeypatch, revision="   ")
     out, report = revise_once("Original.", _audit(majors=2), paths, {})
     assert out == "Original."
     assert report["reason"] == "empty revision"
@@ -95,7 +125,7 @@ def test_empty_revision_keeps_the_original(paths, monkeypatch):
 def test_undelivered_system_messages_alone_trigger_a_revision(paths, monkeypatch):
     """Missing plot-critical system messages count as findings even with zero majors —
     five of them once shipped unnoticed on Frozen Player."""
-    _patch(monkeypatch, revision="Now it mentions the system message.", recheck_findings=0)
-    out, report = revise_once("Original.", _audit(missing=5), paths, {})
-    assert out == "Now it mentions the system message."
-    assert report["before"] == 5 and report["after"] == 0
+    _patch(monkeypatch, revision="Now Jin-Woo hears the system message.")
+    out, report = revise_once("Jin-Woo waits.", _audit(missing=5), paths, {})
+    assert out == "Now Jin-Woo hears the system message."
+    assert report["revised"] is True and report["before"] == 5
