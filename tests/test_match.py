@@ -665,3 +665,43 @@ def test_a_bare_list_response_is_accepted_as_the_claims_array():
     finally:
         prov.get_llm_provider = orig
     assert claims == [(1, "p1")]
+
+
+def test_an_over_cap_row_donates_trailing_sentences_forward():
+    """The J-cut: Frozen Player's time-skip parked 38s of narration on three panels of
+    open sky — different panels that look identical, so no camera treatment cuts, and
+    the scene detector read one 38.23s shot. The museum the narration was describing
+    sat one panel ahead. A row over the cap moves its trailing sentences (and their
+    seconds) onto the NEXT row, sentence-aligned, forward-only."""
+    plan = plan_shots(
+        {"sentences": [
+            {"number": 1, "beat_id": 1, "panels": ["p1"]},
+            {"number": 2, "beat_id": 1, "panels": []},
+            {"number": 3, "beat_id": 1, "panels": []},
+            {"number": 4, "beat_id": 1, "panels": ["p2"]},
+        ]},
+        {1: [{"seconds": 6.0}] * 4},
+        floor=1.0,
+        panel_order=["p1", "p2"],
+        max_shot=10.0,
+    )
+    assert plan is not None
+    rows = plan[1]
+    assert [pid for pid, _ in rows] == ["p1", "p2"], rows
+    assert rows[0][1] <= 10.0, f"p1 still over the cap: {rows[0]}"
+    assert abs(sum(sec for _p, sec in rows) - 24.0) < 1e-6
+
+
+def test_a_single_over_long_sentence_is_never_split_by_donation():
+    plan = plan_shots(
+        {"sentences": [
+            {"number": 1, "beat_id": 1, "panels": ["p1"]},
+            {"number": 2, "beat_id": 1, "panels": ["p2"]},
+        ]},
+        {1: [{"seconds": 14.0}, {"seconds": 3.0}]},
+        floor=1.0,
+        panel_order=["p1", "p2"],
+        max_shot=10.0,
+    )
+    assert plan is not None
+    assert plan[1][0][1] == 14.0, "a mid-sentence split crept in"

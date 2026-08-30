@@ -776,6 +776,38 @@ def plan_shots_with_sentences(
             plan[cb][ci] = (spare, cur[1], cur[2])
             used.add(spare)
 
+    # J-cut: a row over the cap DONATES its trailing sentences forward to the next
+    # row, so the following panel arrives while the previous thought is still being
+    # spoken — which is what a human editor does with a long transition. Measured need:
+    # Frozen Player's time-skip parked 38 seconds of narration on three panels of open
+    # sky ("YOU GUYS...", "25 YEARS LATER", empty blue). They are DIFFERENT panels that
+    # look identical on screen, so no camera treatment produces a visible cut, and the
+    # scene detector read one 38.23s shot — a shot-max-duration FAIL. The museum the
+    # narration was already describing sat one panel ahead.
+    #
+    # Sentence-aligned (never splits mid-sentence; a single over-long sentence stays),
+    # forward-only (order untouched), and between EXISTING adjacent rows (no repeats,
+    # no new panels). Seconds move with their sentences, proportionally. Runs after the
+    # cross-beat pass so it sees the assembled sequence; before the stale-hold
+    # normalization, which must see the final durations.
+    if plan and panel_order and max_shot > 0:
+        rows_seq = [(b, i) for b in sorted(plan) for i in range(len(plan[b]))]
+        for k, (b, i) in enumerate(rows_seq[:-1]):
+            pid_, sec_, nums_ = plan[b][i]
+            nb, ni = rows_seq[k + 1]
+            npid, nsec, nnums = plan[nb][ni]
+            if npid == pid_:
+                continue  # same-panel holds are the renderer's segmentation problem
+            while sec_ > max_shot and len(nums_) > 1:
+                share = sec_ / len(nums_)
+                moved = nums_[-1]
+                nums_ = nums_[:-1]
+                sec_ -= share
+                nnums = [moved] + nnums
+                nsec += share
+            plan[b][i] = (pid_, sec_, nums_)
+            plan[nb][ni] = (npid, nsec, nnums)
+
     # Re-point stale HOLDS at the true last-shown panel. A hold is resolved early, in
     # the flat->shots build, by remembering `current_panel` — but the split pass runs
     # later and can insert rows after the hold's origin. Beat 18 then re-opens beat
