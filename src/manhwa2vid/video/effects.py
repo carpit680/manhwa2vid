@@ -203,9 +203,17 @@ def render_vertical_scroll_frames(
     frames: list[Image.Image] = []
     for i in range(num_frames):
         t = i / max(num_frames - 1, 1)
-        y = start_y + int(max_y * cosine_ease(t))
-        crop = scaled.crop((0, y, out_w, y + out_h))
-        frames.append(crop.resize((width, height), Image.Resampling.LANCZOS))
+        # Float, and resize(box=...) — same reason as the fill-frame path above: an
+        # integer y makes a slow scroll advance in whole-pixel steps, which reads as
+        # judder rather than movement.
+        y = start_y + max_y * cosine_ease(t)
+        frames.append(
+            scaled.resize(
+                (width, height),
+                Image.Resampling.LANCZOS,
+                box=(0.0, y, float(out_w), y + out_h),
+            )
+        )
     return frames
 
 
@@ -560,8 +568,20 @@ def render_fill_frame_frames(
             left = max(0.0, min(panel.width - cw, cx - cw / 2.0))
             top = max(0.0, min(panel.height - ch, cy - ch / 2.0))
             left, top = _contain(left, top, cw, ch, protect, panel.width, panel.height)
-            crop = panel.crop((int(left), int(top), int(left + cw), int(top + ch)))
-            frames.append(crop.resize((width, height), Image.Resampling.LANCZOS))
+            # Sub-pixel. `left`/`top`/`cw`/`ch` move smoothly, so int()-ing them into a
+            # crop box quantised the camera TWICE over: the origin snapped 100->100->101
+            # instead of gliding, and the box WIDTH flipped between cw and cw+1 as the
+            # fractional parts crossed, changing the scale factor from one frame to the
+            # next. Together that is the jiggle visible on every zoom in every video.
+            # resize(box=...) takes float coordinates and does crop+scale in one
+            # resampling step, so neither quantisation happens.
+            frames.append(
+                panel.resize(
+                    (width, height),
+                    Image.Resampling.LANCZOS,
+                    box=(left, top, left + cw, top + ch),
+                )
+            )
     return frames
 
 
