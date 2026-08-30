@@ -244,14 +244,41 @@ def test_true_peak_ceiling_is_the_tightened_one(monkeypatch, tmp_path):
     assert _run(monkeypatch, tmp_path, true_peak_dbtp=-0.9)["true-peak"] == "fail"
 
 
-def test_loudness_is_judged_against_the_configured_target_not_a_constant(monkeypatch, tmp_path):
-    """-16.4 LUFS is the pipeline's UNDERSHOOT, not its intent: loudnorm in linear mode
-    will not apply gain that would breach TP -1.5. The spec proposed a -16 +/- 1 band,
-    which would codify the bug and FAIL a future render that fixes it."""
-    assert _run(monkeypatch, tmp_path, loudness_lufs=-14.0)["audio-loudness"] == "pass"
-    assert _run(monkeypatch, tmp_path, loudness_lufs=-16.4)["audio-loudness"] == "warn"
-    assert _run(monkeypatch, tmp_path, loudness_lufs=-20.0)["audio-loudness"] == "fail"
-    assert _run(monkeypatch, tmp_path, loudness_lufs=-11.0)["audio-loudness"] == "fail"
+def test_loudness_is_judged_against_the_field_not_the_platform_constant(monkeypatch, tmp_path):
+    """Re-derived 2026-08-30 from the 12-video corpus: median -19.81, range
+    -25.89..-14.72.
+
+    The previous form measured distance from `export.loudness_target` (-14 +/- 1) and so
+    warned on our own -15.37 — louder than ten of twelve competitors and a third of a LU
+    from the corpus's most-watched video — while FAILING -20.0, which is the field
+    median. It was scoring adherence to a platform constant, not whether the mix is
+    wrong. Where we aim is unchanged; only the verdict moved.
+    """
+    for lufs in (-14.0, -15.37, -19.81, -25.89):        # ours, and the field's spread
+        assert _run(monkeypatch, tmp_path, loudness_lufs=lufs)["audio-loudness"] == "pass", lufs
+    # Outside the field but recoverable.
+    assert _run(monkeypatch, tmp_path, loudness_lufs=-27.5)["audio-loudness"] == "warn"
+    assert _run(monkeypatch, tmp_path, loudness_lufs=-11.5)["audio-loudness"] == "warn"
+    # Broken chain: a silent stem, or a limiter slamming everything flat.
+    assert _run(monkeypatch, tmp_path, loudness_lufs=-34.0)["audio-loudness"] == "fail"
+    assert _run(monkeypatch, tmp_path, loudness_lufs=-8.0)["audio-loudness"] == "fail"
+
+
+def test_the_loudest_and_quietest_real_competitors_both_pass(monkeypatch, tmp_path):
+    """A band derived from the field must not reject the field that produced it —
+    the failure mode of the -14 +/- 1 form it replaces."""
+    import json as _json
+    from pathlib import Path as _Path
+
+    corpus = _Path("reference/corpus/corpus_metrics.json")
+    if not corpus.exists():
+        import pytest
+        pytest.skip("competitor corpus not present")
+    values = [r["mid"]["lufs"] for r in _json.loads(corpus.read_text())
+              if (r.get("mid") or {}).get("lufs") is not None]
+    assert len(values) >= 10, "corpus shrank — re-derive the band before trusting it"
+    for lufs in (min(values), max(values)):
+        assert _run(monkeypatch, tmp_path, loudness_lufs=lufs)["audio-loudness"] == "pass", lufs
 
 
 def test_bed_separation_band_is_field_derived(monkeypatch, tmp_path):

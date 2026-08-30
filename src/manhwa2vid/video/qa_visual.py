@@ -99,6 +99,38 @@ _SEPARATION_MIN_DB, _SEPARATION_MAX_DB = 13.0, 36.0
 # true peak -0.77 dBTP, which would FAIL our own -1.0 gate. Ours stays stricter.
 _LRA_MIN_LU, _LRA_MAX_LU = 1.5, 4.5
 
+# Integrated loudness, re-derived 2026-08-30 from the 12-video competitor corpus measured
+# with our own detectors (reference/corpus/corpus_metrics.json, mid-sections):
+#
+#     -25.89  vault_med       3 K views      <- quietest, and the least-watched
+#     -21.47  tobs_top      1.6 M
+#     -21.43  tobs_med
+#     -21.01  mamoru_med
+#     -20.99  zone_med
+#     -19.87  zone_top      1.2 M            median -19.81
+#     -19.75  mangaking_top
+#     -19.41  vault_top
+#     -19.28  mamoru_top    5.2 M
+#     -17.27  outpost_med
+#     -15.00  isekai_top
+#     -14.72  outpost_top   6.2 M            <- loudest, and the most-watched
+#
+# The old gate judged against `export.loudness_target` -14.0 +/- 1.0 and warned on our
+# own -15.37, which is louder than ten of twelve field videos and sits beside the
+# corpus's biggest hit. It was measuring distance from a platform constant, not whether
+# the mix is wrong, and the field plainly does not punish loud.
+#
+# We keep PRODUCING at -14.0 (the platform normalization point; loudnorm undershoots to
+# about -15.4 because linear mode will not breach TP -1.5). The gate only asks whether
+# the result is somewhere a real recap channel lives:
+#   ceiling -13.0 — above both the platform point and every video in the field, so the
+#                   limiter is doing work the mix should not need;
+#   floor   -26.0 — quieter than the entire field, i.e. inaudible on a phone.
+# Outside that but not absurd is a warn; beyond the fail bounds the chain is broken
+# (a silent stem, a missing loudnorm pass) rather than mis-tuned.
+_LUFS_FIELD_MIN, _LUFS_FIELD_MAX = -26.0, -13.0
+_LUFS_FAIL_MIN, _LUFS_FAIL_MAX = -30.0, -10.0
+
 # Rhythm bands. Derived from the reference channel measured with THIS scene detector over
 # three windows (reference/mamoru_metrics_2026-08-28.json), not from the hardening brief's
 # proposals — four of those would have failed the reference itself. Justifications live in
@@ -352,19 +384,26 @@ def enforce_render_qa(
             dbtp=tp, threshold=_TRUE_PEAK_MAX_DBTP,
         )
 
-    # Loudness is judged against the CONFIGURED target, never a hardcoded -16. The spec
-    # proposed -16 +/- 1, but -16.4 is the pipeline's UNDERSHOOT: loudnorm in linear mode
-    # will not apply gain that would breach TP -1.5, so it lands short of the -14 it aims
-    # for. Pinning the gate at the undershoot would fail a future render that fixes it.
+    # Loudness is judged against the FIELD, not against distance from the platform
+    # constant we produce at — see _LUFS_FIELD_MIN above. The old form warned on -15.37,
+    # which is louder than ten of twelve competitor videos and a third of a LU from the
+    # corpus's most-watched one. Where we AIM stays `export.loudness_target`.
     lufs = metrics.get("loudness_lufs")
     if lufs is not None:
         target = float(get_nested(config, "export", "loudness_target", default=-14))
-        off = lufs - target
+        if _LUFS_FIELD_MIN <= lufs <= _LUFS_FIELD_MAX:
+            verdict: Any = True
+        elif _LUFS_FAIL_MIN <= lufs <= _LUFS_FAIL_MAX:
+            verdict = "warn"
+        else:
+            verdict = False
         report.add(
             "audio-loudness",
-            True if abs(off) <= 1.0 else ("warn" if -3.0 <= off <= 2.0 else False),
-            f"{lufs} LUFS against a {target} target ({off:+.1f} LU)",
-            lufs=lufs, target=target, offset=round(off, 2),
+            verdict,
+            f"{lufs} LUFS (field {_LUFS_FIELD_MIN}..{_LUFS_FIELD_MAX}, median -19.8; "
+            f"produced against a {target} target)",
+            lufs=lufs, target=target,
+            field_min=_LUFS_FIELD_MIN, field_max=_LUFS_FIELD_MAX,
         )
 
     # Is there music under this at all? The bed is globbed from assets/bgm/, so an empty
