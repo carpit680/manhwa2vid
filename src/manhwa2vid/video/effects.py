@@ -20,6 +20,70 @@ def cosine_ease(t: float) -> float:
     return (1.0 - math.cos(math.pi * t)) / 2.0
 
 
+#: An edge line of a panel border covers essentially its whole side; a speech bubble
+#: poking out past that border covers a few percent. On the panels where this defect is
+#: visible the overhang columns run 2.4-5.2% and the border column runs ~100%.
+_OVERHANG_MAX_FRAC = 0.08
+#: What the walk must land ON for the trim to be believed: a real edge, not more sparse
+#: ink. Without this the walk eats faint panels whole — it took p0006_01 from 558x282 to
+#: 2x2, because on a uniformly faint panel EVERY column is under the overhang threshold.
+_EDGE_MIN_FRAC = 0.40
+#: And it may never travel far, because an overhang is thin by definition.
+_MAX_TRIM_FRAC = 0.12
+
+
+def _tighten_to_sustained(content: "np.ndarray", box: tuple[int, int, int, int]):
+    """Pull each edge of `box` in past a THIN overhang, but only onto a real edge.
+
+    `getbbox()` returns the extent of ANY ink, so one thin thing sticking out past the
+    artwork sets the edge. On this material that thing is usually a SPEECH BUBBLE
+    overhanging the panel border into the page margin — reported from watching as
+    "blank spaces around the artwork taking up the viewport", and correctly attributed
+    to the bubbles at the time.
+
+    Frozen Player p0023_08 is the worked example: art and border end at x=345, the
+    "AH, SHIT." bubble's outline reaches x=364, and the crop kept all 19 columns of white
+    page between them. On screen that was a white band down the right of the frame.
+
+    An earlier investigation rejected bubble overhang as a cause after measuring 27 Solo
+    Leveling panels, where removing lettering changed the bbox by 0.0%. That sample had
+    no overhanging bubbles; the conclusion was drawn too widely.
+
+    Three conditions, all required, because the first version of this had only the first
+    and destroyed sparse panels:
+      1. the columns being removed are nearly empty (`_OVERHANG_MAX_FRAC`),
+      2. the walk STOPS on a substantial edge (`_EDGE_MIN_FRAC`) — otherwise there was
+         no border there and the sparseness is the art itself, so the edge is reverted,
+      3. it travels no further than `_MAX_TRIM_FRAC` of the side, an overhang being thin.
+    """
+    x0, y0, x1, y1 = box
+    cols = content[y0:y1, :].sum(axis=0)
+    rows = content[:, x0:x1].sum(axis=1)
+    h, w = max(1, y1 - y0), max(1, x1 - x0)
+
+    def walk(lo, hi, cover, span, from_high):
+        limit = max(1, int((hi - lo) * _MAX_TRIM_FRAC))
+        moved, a, b = 0, lo, hi
+        while moved < limit and b - a > 2:
+            idx = b - 1 if from_high else a
+            if cover[idx] >= _OVERHANG_MAX_FRAC * span:
+                break
+            b, a = (b - 1, a) if from_high else (b, a + 1)
+            moved += 1
+        if not moved:
+            return lo, hi
+        landed = cover[b - 1 if from_high else a]
+        if landed < _EDGE_MIN_FRAC * span:
+            return lo, hi  # no border here — the sparse ink IS the art
+        return a, b
+
+    x0, x1 = walk(x0, x1, cols, h, from_high=True)
+    x0, x1 = walk(x0, x1, cols, h, from_high=False)
+    y0, y1 = walk(y0, y1, rows, w, from_high=True)
+    y0, y1 = walk(y0, y1, rows, w, from_high=False)
+    return x0, y0, x1, y1
+
+
 def crop_to_content(panel: Image.Image, pad_frac: float = 0.004) -> Image.Image:
     """Crop away white margins so the frame is filled with art, not paper.
 
@@ -67,7 +131,7 @@ def crop_to_content(panel: Image.Image, pad_frac: float = 0.004) -> Image.Image:
     box = mask.getbbox()
     if box is None:
         return panel
-    x0, y0, x1, y1 = box
+    x0, y0, x1, y1 = _tighten_to_sustained(mask_arr > 0, box)
     if (x1 - x0) * (y1 - y0) >= 0.99 * panel.width * panel.height:
         # 0.99, not 0.95: at 0.95 a panel whose art already fills it kept a 5% band of
         # page, and the bail fired on roughly a quarter of panels. There is no cost to
