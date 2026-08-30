@@ -94,6 +94,17 @@ def init_project(
     )
     save_json(paths["meta"], meta)
     init_glossary(paths)
+    # Continuation: a later chapter range starts from the names the series already
+    # agreed on, instead of re-deriving them and drifting. No-op for a first part.
+    from manhwa2vid.script.series import preceding_parts, seed_project_glossary
+
+    seeded = seed_project_glossary(meta.series_slug, paths["glossary"])
+    if seeded:
+        earlier = preceding_parts(meta.series_slug, meta.chapters)
+        console.print(
+            f"[green]Series glossary seeded:[/] {seeded} known name(s)"
+            + (f", continuing after {len(earlier)} earlier part(s)" if earlier else "")
+        )
     seed_series_bible(meta, paths["glossary"], load_config())
     console.print(f"[green]Created project:[/] {dest}")
     if source_type == SourceType.IMAGES:

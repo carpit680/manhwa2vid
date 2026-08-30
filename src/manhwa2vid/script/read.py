@@ -108,6 +108,14 @@ def read_chapter_facts(
     facts.setdefault("plot_spine", [])
 
     merge_cast_into_glossary(facts.get("cast", []), paths)
+    # ...and up to the series, so the next chapter range inherits this cast and any
+    # human repair made to it. Additive only — an existing series entry is extended,
+    # never rewritten.
+    from manhwa2vid.script.series import promote_to_series
+
+    promoted = promote_to_series(meta.series_slug, paths["glossary"])
+    if promoted:
+        console.print(f"[dim]Series glossary: +{promoted} entr(ies) for future parts[/]")
     save_json(out_path, facts)
     console.print(
         f"[green]Chapter facts[/] — {len(facts['system_messages'])} system message(s), "

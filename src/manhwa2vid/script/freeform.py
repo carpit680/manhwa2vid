@@ -133,6 +133,16 @@ def write_freeform_script(
         console.print("[dim]Using cached freeform script[/]")
         return out_path.read_text(encoding="utf-8")
 
+    # Earlier chapter ranges of this series, if any — empty string for a first part.
+    from manhwa2vid.script.series import story_so_far_prompt
+
+    story_so_far = story_so_far_prompt(meta.series_slug, meta.chapters)
+    if story_so_far:
+        console.print(
+            f"[dim]Continuing a series: {story_so_far.count('Chapters ')} earlier "
+            f"part(s) treated as already watched[/]"
+        )
+
     pages = sorted(paths["pages"].glob("*.png"))
     if not pages:
         raise FileNotFoundError(f"no pages in {paths['pages']} — run ingest first")
@@ -166,6 +176,12 @@ def write_freeform_script(
             console.print(f"[cyan]Writing[/] {len(pages)} page(s) in one pass")
 
         parts = [glossary] if glossary else []
+        # What the viewer already watched, from EARLIER chapter ranges of this series.
+        # Distinct from "the recap so far" below, which is this video's own text: that
+        # one says "do not repeat yourself", this one says "these people have already
+        # been introduced, to a viewer who is continuing".
+        if story_so_far:
+            parts.append(story_so_far)
         if written:
             # The FULL text so far, never a digest. A thin running summary was measured
             # too weak to stop two beats narrating the same moment.

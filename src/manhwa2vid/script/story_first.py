@@ -379,6 +379,20 @@ def generate_story_first_script(
     # machinery attached to script generation. Removed with that machinery; narration
     # style is measured against the reference by hand when it matters.
 
+    # Record what this range covered, so a LATER range can be written as a continuation
+    # rather than a restart. Before enforce(), because a range whose script was produced
+    # is a range the next part must not re-introduce — even if a gate then stops the run
+    # for a reason unrelated to what the narration covers. Re-running a range replaces
+    # its entry rather than appending a second one.
+    from manhwa2vid.script.series import record_part, summarise_narration
+
+    record_part(
+        meta.series_slug,
+        meta.chapters,
+        summarise_narration(text),
+        slug=getattr(meta, "slug", ""),
+    )
+
     enforce(report, paths["root"], force=qa_forced(config))
     return draft
 
