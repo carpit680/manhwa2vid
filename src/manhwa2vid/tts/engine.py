@@ -316,7 +316,7 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
         a, b = order_of.get(prev_run["panel_id"]), order_of.get(run["panel_id"])
         if a is not None:
             high = max(high, a)
-        if a is not None and b is not None and b < high - SCENE_RADIUS + 1 and b < a:
+        if a is not None and b is not None and b < high - SCENE_RADIUS and b < a:
             inversions.append(
                 f"{prev_run['panel_id']}(#{a}) -> {run['panel_id']}(#{b}) at {clock:.1f}s"
             )

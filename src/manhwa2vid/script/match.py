@@ -255,6 +255,11 @@ claim for pure narrator commentary with nothing to show.
 Return JSON only: {"claims": [{"sentence": <number>, "panels": ["<panel id>"]}]}"""
 
 
+#: Claims above this for ONE sentence mean the model found the sentence generic, not
+#: depicted — see the drop in `_second_pass_claims`.
+_SECOND_PASS_MAX_PER_SENTENCE = 3
+
+
 def _second_pass_claims(
     block_sents: list[tuple[int, str]],
     panels: list[Panel],
@@ -299,7 +304,19 @@ def _second_pass_claims(
         found = collect_claims(
             run, spare_panels, paths, config, None, system=_SECOND_PASS_SYSTEM
         )
-        out.extend(found)
+        # A sentence the model matches to MANY panels matched none of them. The willing
+        # framing makes generic narration attractive to everything: Solo Leveling's
+        # "It is a miserable life" drew six claims spanning p0006 to p0100, and the two
+        # that survived the order filter put a 10-panel rewind on screen. Real depiction
+        # is specific, so more than _SECOND_PASS_MAX_PER_SENTENCE claims for one
+        # sentence is a signal to drop that sentence's claims entirely and let it
+        # inherit the picture — which is the honest outcome for commentary.
+        by_sentence: dict[int, list[str]] = {}
+        for number, pid in found:
+            by_sentence.setdefault(number, []).append(pid)
+        for number, pids in by_sentence.items():
+            if len(pids) <= _SECOND_PASS_MAX_PER_SENTENCE:
+                out.extend((number, pid) for pid in pids)
     return out
 
 

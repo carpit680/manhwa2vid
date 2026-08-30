@@ -776,3 +776,34 @@ def test_second_pass_stays_quiet_when_coverage_is_good():
     finally:
         M.collect_claims = orig
     assert out == [] and not called
+
+
+def test_second_pass_drops_scattershot_claims():
+    """"It is a miserable life" drew six second-pass claims spanning p0006 to p0100 —
+    the willing framing makes generic narration attractive to everything, and the two
+    that survived the order filter put a 10-panel rewind on screen. Specific depiction
+    is specific; a sentence matched to many panels matched none."""
+    from manhwa2vid.script import match as M
+
+    class _P:
+        def __init__(self, pid):
+            self.id = pid
+            self.image_path = f"panels/{pid}.png"
+
+    spares = [_P(f"p{i:04d}_01") for i in range(1, 9)]
+
+    def fake_collect(sents, panels, paths, config, pages=None, system=None):
+        return ([(2, "p0001_01"), (2, "p0002_01"), (2, "p0003_01"),
+                 (2, "p0004_01"), (2, "p0005_01"), (2, "p0006_01")]   # scattershot
+                + [(3, "p0007_01")])                                   # specific
+
+    orig = M.collect_claims
+    M.collect_claims = fake_collect
+    try:
+        out = M._second_pass_claims(
+            [(1, "a"), (2, "b"), (3, "c"), (4, "d")], spares, [(1, "px")], {}, {},
+        )
+    finally:
+        M.collect_claims = orig
+    assert (3, "p0007_01") in out
+    assert not any(n == 2 for n, _ in out), "a scattershot sentence survived"
