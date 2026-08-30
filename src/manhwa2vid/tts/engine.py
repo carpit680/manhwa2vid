@@ -284,12 +284,41 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
     ]
     report.add(
         "no-repeated-panels",
-        "warn" if repeats else True,
+        # FAIL, not warn (user decision 2026-08-30): after the gap rule in the shot
+        # planner both this and reading-order measure exactly 0 on real artifacts, so
+        # anything nonzero is a regression, and this class shipped twice while warns
+        # scrolled past. A deliberate callback edit takes --force-past-qa.
+        not repeats,
         "; ".join(repeats[:4]) + " — the same panel returns later in the video"
         if repeats
         else "",
         repeats=repeats,
         repeated_panels=len(repeats),
+    )
+
+    # The panels must appear in READING ORDER. Watched twice before it was measured:
+    # 16 inversions on FP (jumps back by up to 71 panels), 11 on SL — every large one
+    # an unconstrained borrow in the shot planner. The planner now takes every
+    # substitute from the reading-order gap (script/match.py::_gap_spare); this gate is
+    # what notices the next unconstrained search however it arrives.
+    order_of = {p.id: i for i, p in enumerate(panels)}
+    inversions = []
+    clock = 0.0
+    for prev_run, run in zip(runs_all, runs_all[1:]):
+        clock += prev_run["seconds"]
+        a, b = order_of.get(prev_run["panel_id"]), order_of.get(run["panel_id"])
+        if a is not None and b is not None and b < a:
+            inversions.append(
+                f"{prev_run['panel_id']}(#{a}) -> {run['panel_id']}(#{b}) at {clock:.1f}s"
+            )
+    report.add(
+        "reading-order",
+        not inversions,
+        "; ".join(inversions[:4]) + " — the timeline rewinds past art already shown"
+        if inversions
+        else "",
+        inversions=inversions,
+        inversion_count=len(inversions),
     )
 
     # The last thing on screen. Frozen Player ch1-2 closed on a "WHAT?!" starburst held

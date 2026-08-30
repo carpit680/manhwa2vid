@@ -400,10 +400,13 @@ def test_a_very_long_beat_keeps_splitting_until_every_shot_is_legal():
     assert abs(sum(sec for _pid, sec in plan[1]) - 24.0) < 1e-6
 
 
-def test_a_long_shot_borrows_backwards_when_nothing_follows():
-    """These holds sit at the END of a chapter with no unused panel after them, which is
-    why a forward-only search could never fix them. An unused panel is art the reader saw
-    on the same pages either way."""
+def test_a_long_shot_at_the_chapter_end_keeps_the_dwell_rather_than_rewinding():
+    """REVERSED 2026-08-30. This test used to pin backwards borrowing ("an unused panel
+    is art the reader saw on the same pages either way"). Watching proved that wrong:
+    an earlier panel shown after a later one is a REWIND on screen, whatever the reader
+    once saw — 16 reading-order inversions on FP, jumps back by up to 71 panels, all
+    from unconstrained borrows. With nothing unused AFTER the held panel, the long
+    dwell stays; `dwell-over-limit` reports it, and a long shot beats a wrong image."""
     plan = plan_shots(
         {"sentences": [
             {"number": 1, "beat_id": 1, "panels": ["p3"]},
@@ -415,7 +418,8 @@ def test_a_long_shot_borrows_backwards_when_nothing_follows():
         max_shot=10.0,
     )
     assert plan is not None
-    assert {pid for pid, _sec in plan[1]} == {"p2", "p3"}
+    assert [pid for pid, _sec in plan[1]] == ["p3"], "a backwards borrow crept back in"
+    assert abs(sum(sec for _pid, sec in plan[1]) - 18.0) < 1e-6
 
 
 def test_a_single_sentence_shot_is_never_split():

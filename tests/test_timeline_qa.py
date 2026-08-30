@@ -292,9 +292,15 @@ def test_a_panel_returning_later_is_caught(tmp_path: Path) -> None:
     panels = [_panel("p0001_01", 1), _panel("p0001_02", 1)]
     gates = _gates(tmp_path, beats, panels, timeline)
 
-    assert gates["no-repeated-panels"]["status"] == WARN
+    # FAIL since 2026-08-30 (user decision): the planner's gap rule makes repeats
+    # exactly 0 on real artifacts, so nonzero is a regression, and this class shipped
+    # twice while warns scrolled past.
+    assert gates["no-repeated-panels"]["status"] == FAIL
     assert "p0001_01" in gates["no-repeated-panels"]["details"]
     assert "0.0s, 6.0s" in gates["no-repeated-panels"]["details"]
+    # The same fixture rewinds (p0001_01 after p0001_02), so reading-order fails too.
+    assert gates["reading-order"]["status"] == FAIL
+    assert "p0001_01" in gates["reading-order"]["details"]
     # The gate that already existed is blind to it — which is why this one exists.
     assert gates["no-invisible-cuts"]["status"] == PASS
 
@@ -318,3 +324,24 @@ def test_a_hold_across_a_beat_boundary_is_not_a_repeat(tmp_path: Path) -> None:
     gates = _gates(tmp_path, beats, [_panel("p0001_01", 1)], timeline)
     assert gates["no-repeated-panels"]["status"] == PASS
     assert gates["no-invisible-cuts"]["status"] == WARN
+
+
+def test_an_in_order_timeline_passes_the_reading_order_gate(tmp_path: Path) -> None:
+    from manhwa2vid.models import Timeline, TimelineEntry
+
+    def entry(pid, start, dur, beat):
+        return TimelineEntry(panel_id=pid, panel_path=f"panels/{pid}.png", start=start,
+                             end=start + dur, duration=dur, beat_id=beat,
+                             subtitle_text="x")
+
+    timeline = Timeline(
+        entries=[entry("p0001_01", 0.0, 3.0, 1), entry("p0001_02", 3.0, 3.0, 1),
+                 entry("p0002_01", 6.0, 3.0, 2)],
+        total_duration=9.0,
+    )
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p0001_01", "p0001_02"], narration="a b"),
+             ScriptBeat(beat_id=2, panel_ids=["p0002_01"], narration="c d")]
+    panels = [_panel("p0001_01", 1), _panel("p0001_02", 1), _panel("p0002_01", 2)]
+    gates = _gates(tmp_path, beats, panels, timeline)
+    assert gates["reading-order"]["status"] == PASS
+    assert gates["no-repeated-panels"]["status"] == PASS

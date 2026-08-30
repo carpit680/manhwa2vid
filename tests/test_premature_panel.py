@@ -40,7 +40,7 @@ def plan():
     shotlist = {"sentences": [
         {"number": 1, "beat_id": 1, "text": "One.", "panels": ["p01"]},
         {"number": 2, "beat_id": 1, "text": "Two.", "panels": []},
-        {"number": 3, "beat_id": 2, "text": "Three.", "panels": ["p02"]},
+        {"number": 3, "beat_id": 2, "text": "Three.", "panels": ["p03"]},
     ]}
     segments = {
         1: [{"text": "One.", "seconds": 9.0}, {"text": "Two.", "seconds": 9.0}],
@@ -59,19 +59,19 @@ def _flat(plan):
 
 def test_the_split_does_not_borrow_a_panel_a_later_sentence_claims(plan):
     shown_before = [pid for pid, _s, _n in plan[1]]
-    assert "p02" not in shown_before, (
-        f"beat 1 showed p02, which sentence 3 claims in beat 2: {shown_before}"
+    assert "p03" not in shown_before, (
+        f"beat 1 showed p03, which sentence 3 claims in beat 2: {shown_before}"
     )
 
 
 def test_the_claiming_sentence_keeps_its_own_panel(plan):
     """The follow-on half of the defect: the borrow displaced the rightful owner."""
-    assert [pid for pid, _s, _n in plan[2]] == ["p02"]
+    assert [pid for pid, _s, _n in plan[2]] == ["p03"]
 
 
 def test_no_panel_is_shown_before_the_sentence_that_claims_it(plan):
     """The general invariant, stated as the render experiences it."""
-    speaks_at = {"p01": 0.0, "p02": 18.0}
+    speaks_at = {"p01": 0.0, "p03": 18.0}
     t = 0.0
     for pid, sec, _nums in _flat(plan):
         if pid in speaks_at:
@@ -84,11 +84,37 @@ def test_a_claimed_panel_is_never_shown_twice(plan):
     assert len(shown) == len(set(shown)), f"repeat in {shown}"
 
 
-def test_the_split_still_happens_using_the_genuinely_free_panel(plan):
-    """The fix must not disable the split — it exists so an 18 s hold becomes two shots,
-    and 28-41% of story panels never reach the screen, so spares are available."""
+def test_the_split_still_happens_using_the_free_panel_in_the_gap(plan):
+    """The fix must not disable the split — it exists so an 18 s hold becomes two shots.
+    p02 sits BETWEEN p01 and the next claim (p03), so it is the legal spare.
+
+    2026-08-30 revision: the spare must come from the reading-order GAP, so a free
+    panel BEYOND the next claim is no longer usable — an earlier fixture put the free
+    panel after the claim and expected a borrow; that borrow is now (correctly) a kept
+    dwell instead. See test_an_out_of_gap_spare_means_the_dwell_is_kept."""
     assert len(plan[1]) == 2, f"the over-long shot was not split: {plan[1]}"
-    assert plan[1][1][0] == "p03", "the free panel farther away was not used"
+    assert plan[1][1][0] == "p02", "the in-gap free panel was not used"
+
+
+def test_an_out_of_gap_spare_means_the_dwell_is_kept():
+    """Free art exists (p03) but only BEYOND the next claim (p02): borrowing it would
+    show a later panel, then jump back — the inversion class watched twice. The long
+    dwell stays and QA reports it."""
+    shotlist = {"sentences": [
+        {"number": 1, "beat_id": 1, "text": "One.", "panels": ["p01"]},
+        {"number": 2, "beat_id": 1, "text": "Two.", "panels": []},
+        {"number": 3, "beat_id": 2, "text": "Three.", "panels": ["p02"]},
+    ]}
+    segments = {
+        1: [{"text": "One.", "seconds": 9.0}, {"text": "Two.", "seconds": 9.0}],
+        2: [{"text": "Three.", "seconds": 3.0}],
+    }
+    plan = plan_shots_with_sentences(
+        shotlist, segments, panel_order=["p01", "p02", "p03"], max_shot=10.0, floor=1.0
+    )
+    assert plan is not None
+    assert [pid for pid, _s, _n in plan[1]] == ["p01"], "borrowed from beyond the gap"
+    assert [pid for pid, _s, _n in plan[2]] == ["p02"]
 
 
 def test_seconds_are_preserved_by_the_split(plan):

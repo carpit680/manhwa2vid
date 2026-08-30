@@ -332,6 +332,40 @@ def plan_shots(
     return {beat: [(pid, sec) for pid, sec, _nums in shots] for beat, shots in result.items()}
 
 
+def _gap_spare(
+    panel_order: list[str],
+    order_pos: dict[str, int],
+    prev_pid: str | None,
+    next_pid: str | None,
+    used: set[str],
+    text_only: set[str] | None,
+) -> str | None:
+    """The one panel a substitution may use: the first unused panel STRICTLY BETWEEN
+    the panels shown before and after it in reading order. None if the gap is empty.
+
+    This is the single ordering rule for every borrow, swap and substitution in this
+    planner, and it exists because every one of them previously searched the WHOLE
+    reading order for "the nearest unused panel", both directions. Measured on the
+    2026-08-30 renders: 16 reading-order inversions on Frozen Player (jumps back by 7,
+    8, 11, 26, 38 and 71 panels) and 11 on Solo Leveling — the viewer saw a frame from
+    a different scene, then the timeline jumped back. Every large jump traced to a
+    panel claimed by no sentence, i.e. inserted by one of these searches.
+
+    The earlier "borrowing backwards is safe because the reader saw that art" comment
+    was wrong in exactly the way a viewer notices: an earlier panel shown after a later
+    one IS a rewind on screen, whatever the reader once saw on the page.
+
+    An empty gap means KEEP WHAT YOU HAVE — hold the long shot, keep the text claim.
+    A long dwell warns in QA; a wrong image is the defect the user reports.
+    """
+    lo = order_pos.get(prev_pid, -1) if prev_pid is not None else -1
+    hi = order_pos.get(next_pid, len(panel_order)) if next_pid is not None else len(panel_order)
+    for pid in panel_order[lo + 1 : hi]:
+        if pid not in used and pid not in (text_only or ()):
+            return pid
+    return None
+
+
 def plan_shots_with_sentences(
     shotlist: dict[str, Any],
     segments_by_beat: dict[int, list[dict[str, Any]]],
@@ -398,28 +432,40 @@ def plan_shots_with_sentences(
     # the moment instead: swap in the nearest art panel in reading order.
     if text_only and panel_order:
         art_at = {pid: i for i, pid in enumerate(panel_order)}
-        art_seq = [pid for pid in panel_order if pid not in text_only]
         # Panels already on screen somewhere. A swap that lands on one of them does not
         # replace a shot, it DELETES one: the two entries fold into a single hold. That
         # is how removing FP's closing "WHAT?!" first made things worse rather than
         # better — both it and the shot before it swapped onto the same neighbour and
-        # became one 30.6s hold, up from 18.6s. Take the nearest UNUSED art panel.
+        # became one 30.6s hold, up from 18.6s.
+        #
+        # The replacement must come from the reading-order GAP around the claim —
+        # see _gap_spare. The old "nearest unused art panel, searched both ways" was
+        # one of the four unconstrained searches behind the 2026-08-30 inversions.
+        # With an empty gap the text claim is KEPT: a wall of lettering for one shot
+        # beats a frame from another scene, and the bare-bubble render gate reports it.
         taken = {pid for item in flat for pid in item["panels"] if pid not in text_only}
-        for item in flat:
+        # Reading-order neighbours: for each flat position, the panel shown before and
+        # after it, taken from the ORIGINAL claims. Swaps stay inside their own gaps,
+        # so using pre-swap neighbours cannot introduce an inversion.
+        for idx, item in enumerate(flat):
             swapped: list[str] = []
-            for pid in item["panels"]:
+            for k, pid in enumerate(item["panels"]):
                 if pid not in text_only or pid not in art_at:
                     swapped.append(pid)
                     continue
-                here = art_at[pid]
-                nearby = sorted(art_seq, key=lambda a: abs(art_at[a] - here))
-                pick = next((a for a in nearby if a not in taken and a not in swapped), None)
+                prev_pid = next(
+                    (q for q in reversed(swapped) if q in art_at),
+                    next((q for j in range(idx - 1, -1, -1)
+                          for q in reversed(flat[j]["panels"]) if q in art_at), None),
+                )
+                next_pid = next(
+                    (q for q in item["panels"][k + 1:] if q in art_at),
+                    next((q for j in range(idx + 1, len(flat))
+                          for q in flat[j]["panels"] if q in art_at), None),
+                )
+                pick = _gap_spare(panel_order, art_at, prev_pid, next_pid, taken, text_only)
                 if pick is None:
-                    # every art panel is already showing: fall back to the nearest one
-                    # not in THIS sentence, and only then keep the text claim.
-                    pick = next((a for a in nearby if a not in swapped), None)
-                if pick is None:
-                    swapped.append(pid)      # nothing but text anywhere — keep the claim
+                    swapped.append(pid)      # empty gap — keep the text claim
                 else:
                     swapped.append(pick)
                     taken.add(pick)
@@ -459,6 +505,12 @@ def plan_shots_with_sentences(
                     )
                     for offset, panels in enumerate(assigned):
                         flat[i + offset]["panels"] = panels
+                        # Fill assignments join `claimed` immediately. It was computed
+                        # once before this loop and never updated, so two runs whose
+                        # anchor gaps overlapped could receive the SAME panel — one of
+                        # the sources of the non-adjacent repeats the 2026-08-30 gate
+                        # caught (p0015_02 twice, 14.4s apart, claimed by no sentence).
+                        claimed.update(panels)
             i = j
 
     # A beat that OPENS on the panel the previous beat CLOSED on schedules a cut the
@@ -481,7 +533,7 @@ def plan_shots_with_sentences(
     if panel_order:
         pos = {pid: i for i, pid in enumerate(panel_order)}
         claimed = {pid for item in flat for pid in item["panels"]}
-        for prev_item, item in zip(flat, flat[1:]):
+        for item_idx, (prev_item, item) in enumerate(zip(flat, flat[1:]), start=1):
             if prev_item["beat_id"] == item["beat_id"]:
                 continue
             if not prev_item["panels"] or not item["panels"]:
@@ -489,23 +541,42 @@ def plan_shots_with_sentences(
             last, first = prev_item["panels"][-1], item["panels"][0]
             if last != first or last not in pos:
                 continue
-            # Nearest unused panel, searched BOTH ways. Forward-only leaves the holds at
-            # the end of a chapter unfixable — there is nothing after them — and those
-            # are exactly the ones that grew to 14-18s.
-            nxt = min(
-                (
-                    pid
-                    for pid in panel_order
-                    if pid not in claimed and pid not in (text_only or ())
-                ),
-                key=lambda pid: abs(pos[pid] - pos[last]),
-                default=None,
+            # Replacement from the reading-order gap only (_gap_spare): after `last`,
+            # before whatever this item shows next (or the next item's first panel).
+            # The old "nearest unused, searched both ways" was one of the four
+            # unconstrained searches behind the 2026-08-30 inversions. An empty gap
+            # keeps the hold — `no-invisible-cuts` reports it, and a long hold beats
+            # a frame from another scene.
+            after = next(
+                (q for q in item["panels"][1:] if q in pos),
+                next((q for later in flat[item_idx + 1:]
+                      for q in later["panels"] if q in pos), None),
             )
+            nxt = _gap_spare(panel_order, pos, last, after, claimed, text_only)
             if nxt is not None:
                 item["panels"][0] = nxt
                 claimed.add(nxt)
 
     # Sentences -> raw shots: (panel, seconds, accent, sentence numbers).
+    # For the split pass: the first panel shown by each LATER beat, so a split at the
+    # end of a beat can bound its gap by what the viewer sees next. Built from `flat`
+    # after every substitution above, so it reflects the real sequence.
+    next_first_by_beat: dict[int, str | None] = {}
+    if panel_order:
+        beat_seq: list[int] = []
+        for item in flat:
+            if not beat_seq or beat_seq[-1] != item["beat_id"]:
+                beat_seq.append(item["beat_id"])
+        first_panel_of_beat: dict[int, str] = {}
+        for item in flat:
+            if item["beat_id"] not in first_panel_of_beat and item["panels"]:
+                first_panel_of_beat[item["beat_id"]] = item["panels"][0]
+        for bi, b in enumerate(beat_seq):
+            next_first_by_beat[b] = next(
+                (first_panel_of_beat[lb] for lb in beat_seq[bi + 1:]
+                 if lb in first_panel_of_beat), None,
+            )
+
     plan: dict[int, list[tuple[str, float, list[int]]]] = {}
     current_panel: str | None = None
     pending_lead = 0.0
@@ -589,12 +660,15 @@ def plan_shots_with_sentences(
         # is 16.37s; Solo Leveling shipped 27.8s and Frozen Player 18.6s, both from a
         # beat carrying more narration than it has panels.
         #
-        # The panel it borrows is the nearest UNUSED one in reading order, searched both
-        # ways. Searching only forward is why the earlier cross-beat fix could not help
-        # these: they sit at the end of their chapter with nothing after them. Borrowing
-        # backwards is safe because an unused panel is art the reader saw on the same
-        # pages — and 41% (FP) / 28% (SL) of story panels never reach the screen at all,
-        # so this pays the same debt twice.
+        # The borrowed panel comes from the reading-order GAP between this shot and the
+        # next one shown (_gap_spare) — never from a global nearest-unused search. Two
+        # revisions of this pass are worth recording: the original stole panels LATER
+        # sentences had claimed (premature reuse, fixed bb78858); the fix then excluded
+        # every claimed panel, which shrank the pool so "nearest unused, both ways"
+        # landed 26-100 panels away — the 2026-08-30 inversions, up to a 71-panel jump
+        # back on Frozen Player. "Borrowing backwards is safe because the reader saw
+        # that art" was wrong: an earlier panel after a later one is a rewind on
+        # screen. An empty gap keeps the long dwell, which QA already reports.
         if panel_order and max_shot > 0:
             order_pos = {pid: idx for idx, pid in enumerate(panel_order)}
             # Every panel any sentence resolved to, in EVERY beat — not just the beats
@@ -621,29 +695,44 @@ def plan_shots_with_sentences(
                 if sec <= max_shot or pid not in order_pos or len(nums) < 2:
                     i += 1
                     continue
-                here = order_pos[pid]
-                spare = min(
-                    (
-                        cand for cand in panel_order
-                        if cand not in used and cand not in (text_only or ())
-                    ),
-                    key=lambda cand: abs(order_pos[cand] - here),
-                    default=None,
+                shown_next = (
+                    merged[i + 1][0] if i + 1 < len(merged)
+                    else next_first_by_beat.get(beat_id)
                 )
-                if spare is None:
-                    i += 1
+                lo = order_pos[pid]
+                hi = (
+                    order_pos.get(shown_next, len(panel_order))
+                    if shown_next is not None else len(panel_order)
+                )
+                gap = [
+                    c for c in panel_order[lo + 1 : hi]
+                    if c not in used and c not in (text_only or ())
+                ]
+                # One multi-way split, spares taken from the gap IN READING ORDER —
+                # not the old recursive halving. Halving deadlocks under the gap rule:
+                # its first spare lands adjacent to the shot, the re-examined first
+                # half then has an empty gap, and a 12s hold survives a 10s cap.
+                # Sizing: per-sentence seconds are ~sec/len(nums) here (sentence splits
+                # were even upstream), so group size is what fits under the cap.
+                per_sentence = sec / len(nums)
+                fit = max(1, int(max_shot // per_sentence)) if per_sentence > 0 else len(nums)
+                parts = -(-len(nums) // fit)                      # ceil
+                parts = min(parts, len(nums), 1 + len(gap))
+                if parts < 2:
+                    i += 1                                        # empty gap: keep the dwell
                     continue
-                # Split the narration, not just the clock: the second half of the
-                # sentences moves to the borrowed panel, so the cut lands on a sentence
-                # boundary rather than mid-thought.
-                half = len(nums) // 2
-                share = sec * (len(nums) - half) / len(nums)
-                merged[i] = [pid, sec - share, accent, nums[:half]]
-                merged.insert(i + 1, [spare, share, accent, nums[half:]])
-                used.add(spare)
-                # Do NOT advance: the first half may still be over the cap. Termination is
-                # guaranteed because a split halves the sentence count and the `< 2` guard
-                # stops at one sentence.
+                base, extra = divmod(len(nums), parts)
+                sizes = [base + (1 if k < extra else 0) for k in range(parts)]
+                panels = [pid] + gap[: parts - 1]
+                rows, start = [], 0
+                for k in range(parts):
+                    grp = nums[start : start + sizes[k]]
+                    start += sizes[k]
+                    rows.append([panels[k], sec * len(grp) / len(nums), accent, grp])
+                merged[i : i + 1] = rows
+                used.update(panels[1:])
+                i += parts
+
 
         if merged:
             plan[beat_id] = [
@@ -657,21 +746,50 @@ def plan_shots_with_sentences(
         order_pos = {pid: i for i, pid in enumerate(panel_order)}
         flat_shots = [(beat, idx) for beat in sorted(plan) for idx in range(len(plan[beat]))]
         used = {plan[b][i][0] for b, i in flat_shots}
-        for (pb, pi), (cb, ci) in zip(flat_shots, flat_shots[1:]):
+        for k, ((pb, pi), (cb, ci)) in enumerate(zip(flat_shots, flat_shots[1:]), start=1):
             prev, cur = plan[pb][pi], plan[cb][ci]
             if prev[0] != cur[0] or prev[1] + cur[1] <= max_shot:
                 continue
-            spare = min(
-                (
-                    cand for cand in panel_order
-                    if cand not in used and cand not in (text_only or ())
-                ),
-                key=lambda cand: abs(order_pos[cand] - order_pos.get(cur[0], 0)),
-                default=None,
+            # Substitute from the reading-order gap only: after the held panel, before
+            # whatever the assembled sequence shows next. The global nearest-unused
+            # search this replaces was one of the four behind the 2026-08-30
+            # inversions. Empty gap -> keep the hold; a long shot beats a rewind.
+            shown_next = (
+                plan[flat_shots[k + 1][0]][flat_shots[k + 1][1]][0]
+                if k + 1 < len(flat_shots) else None
             )
+            spare = _gap_spare(panel_order, order_pos, cur[0], shown_next, used, text_only)
             if spare is None:
                 continue  # an unrelated image is still worse than a long one
             plan[cb][ci] = (spare, cur[1], cur[2])
             used.add(spare)
+
+    # Re-point stale HOLDS at the true last-shown panel. A hold is resolved early, in
+    # the flat->shots build, by remembering `current_panel` — but the split pass runs
+    # later and can insert rows after the hold's origin. Beat 18 then re-opens beat
+    # 17's p0023_11 although p0024_01 (a split spare) now sits between them: a
+    # non-adjacent repeat AND an inversion in one move, and the last one standing after
+    # the gap rule (1 of FP's original 16). Re-pointing the hold at the actual
+    # previous panel turns it back into the adjacent hold it was meant to be.
+    #
+    # Only UNCLAIMED rows are rewritten. A claimed row re-appearing would be a planner
+    # bug, and hiding it here would blind the `no-repeated-panels` gate that exists to
+    # catch exactly that — let it fail loudly instead.
+    if plan and panel_order:
+        sent_panels: dict[int, set[str]] = {}
+        for item in flat:
+            sent_panels[item["number"]] = set(item["panels"])
+        seen: set[str] = set()
+        prev_pid: str | None = None
+        for b in sorted(plan):
+            rows_out: list[tuple[str, float, list[int]]] = []
+            for pid_, sec_, nums_ in plan[b]:
+                is_hold = not any(pid_ in sent_panels.get(n, ()) for n in nums_)
+                if pid_ in seen and pid_ != prev_pid and is_hold and prev_pid is not None:
+                    pid_ = prev_pid
+                rows_out.append((pid_, sec_, nums_))
+                seen.add(pid_)
+                prev_pid = pid_
+            plan[b] = rows_out
 
     return plan or None
