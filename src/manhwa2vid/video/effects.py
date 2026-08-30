@@ -84,6 +84,100 @@ def _tighten_to_sustained(content: "np.ndarray", box: tuple[int, int, int, int])
     return x0, y0, x1, y1
 
 
+def _dominant_mass_crop(panel: Image.Image) -> Image.Image:
+    """Cut a multi-mass panel down to its dominant content mass.
+
+    A "mass" is a maximal run of rows (then, within it, columns) whose content coverage
+    clears a floor; runs below it are page background. Interior background runs must be
+    LONG (>= 6% of the dimension, >= 24 px) to count as separators — panel art is full
+    of thin quiet strips that mean nothing.
+
+    Selection is by content pixels, with one correction: when the winner is a lettering
+    mass (a floating bubble or typeset page text) and a substantial art mass exists,
+    the art wins — the narrator is already speaking; the screen should carry the moment.
+
+    A panel with one mass, or whose masses this cannot separate, returns unchanged, so
+    applying this everywhere is safe. The uniformly-faint panel that an earlier crop
+    revision ate to 2x2 stays whole here by construction: its rows all clear the
+    coverage floor, so it is a single mass.
+    """
+    from manhwa2vid.panels.regions import background_level
+
+    for _axis_pass in range(2):
+        arr = np.asarray(panel.convert("L"))
+        bg = background_level(arr)
+        content = np.abs(arr.astype(np.int16) - int(bg)) > 18
+        h, w = content.shape
+        if h < 48 or w < 48:
+            return panel
+        changed = False
+        for axis, span, dim in ((1, w, h), (0, h, w)):
+            cov = content.sum(axis=axis)
+            floor = max(2.0, 0.015 * span)
+            is_bg = cov < floor
+            min_sep = max(24, int(0.06 * dim))
+            # runs of background rows/cols
+            runs, start = [], None
+            for i, b in enumerate(is_bg):
+                if b and start is None:
+                    start = i
+                elif not b and start is not None:
+                    runs.append((start, i)); start = None
+            if start is not None:
+                runs.append((start, len(is_bg)))
+            separators = [r for r in runs if r[1] - r[0] >= min_sep]
+            if not separators:
+                continue
+            # masses = complement of separator runs
+            masses, pos = [], 0
+            for a, b in separators:
+                if a > pos:
+                    masses.append((pos, a))
+                pos = b
+            if pos < len(is_bg):
+                masses.append((pos, len(is_bg)))
+            masses = [m for m in masses if m[1] - m[0] >= 8]
+            if len(masses) < 2:
+                continue
+
+            def _mass_pixels(m):
+                a, b = m
+                return int(content[a:b, :].sum() if axis == 1 else content[:, a:b].sum())
+
+            ranked = sorted(masses, key=_mass_pixels, reverse=True)
+            winner = ranked[0]
+            if len(ranked) > 1 and _mass_pixels(ranked[1]) >= 0.4 * _mass_pixels(winner):
+                try:
+                    import cv2
+
+                    from manhwa2vid.panels.regions import is_text_dominant_panel
+
+                    def _crop_of(m):
+                        a, b = m
+                        return (panel.crop((0, a, w, b)) if axis == 1
+                                else panel.crop((a, 0, b, h)))
+
+                    def _texty(m):
+                        img = cv2.cvtColor(np.array(_crop_of(m)), cv2.COLOR_RGB2BGR)
+                        return is_text_dominant_panel(img)
+
+                    if _texty(winner) and not _texty(ranked[1]):
+                        winner = ranked[1]
+                except Exception:  # noqa: BLE001 — tie-break is best-effort
+                    pass
+            a, b = winner
+            if (b - a) < 0.10 * dim:
+                # The "dominant" mass is a sliver of the panel: this is background-
+                # dominated mood art with incidental marks, not a collage. Keep it.
+                continue
+            panel = panel.crop((0, a, w, b)) if axis == 1 else panel.crop((a, 0, b, h))
+            changed = True
+            break  # re-derive bg/content for the new crop before the other axis
+        if not changed:
+            break
+    return panel
+
+
 def crop_to_content(panel: Image.Image, pad_frac: float = 0.004) -> Image.Image:
     """Crop away white margins so the frame is filled with art, not paper.
 
@@ -127,29 +221,53 @@ def crop_to_content(panel: Image.Image, pad_frac: float = 0.004) -> Image.Image:
     arr = np.asarray(panel.convert("L"))
     bg = background_level(arr)
     mask_arr = (np.abs(arr.astype(np.int16) - int(bg)) > 18).astype(np.uint8) * 255
+    # A panel that is nearly all background is a MOOD panel — a black beat with a
+    # faint glow, a pale sky. The field is the content; cropping toward the one bright
+    # speck turns 800x712 into 29x27 and the render into a blur. This destruction
+    # predates every 2026-08-30 crop revision (the bbox mask has always found only the
+    # speck) and was caught by the mass-crop sweep, not by any gate.
+    if float((mask_arr > 0).mean()) < 0.02:
+        return panel
     mask = Image.fromarray(mask_arr, mode="L")
     box = mask.getbbox()
     if box is None:
         return panel
-    x0, y0, x1, y1 = _tighten_to_sustained(mask_arr > 0, box)
-    if (x1 - x0) * (y1 - y0) >= 0.99 * panel.width * panel.height:
+    content = mask_arr > 0
+    x0, y0, x1, y1 = _tighten_to_sustained(content, box)
+    if (x1 - x0) * (y1 - y0) < 0.99 * panel.width * panel.height:
         # 0.99, not 0.95: at 0.95 a panel whose art already fills it kept a 5% band of
         # page, and the bail fired on roughly a quarter of panels. There is no cost to
         # cropping a nearly-full panel — the crop is a no-op by construction — so the
         # bail only needs to catch "the mask found everything", not "almost everything".
-        return panel  # nothing worth cropping
-    # Pad relative to the DETECTED BOX. Panel-relative padding scales with the page, so
-    # the smaller the art the larger the margin handed back — backwards.
-    pad_x = int((x1 - x0) * pad_frac)
-    pad_y = int((y1 - y0) * pad_frac)
-    return panel.crop(
-        (
-            max(0, x0 - pad_x),
-            max(0, y0 - pad_y),
-            min(panel.width, x1 + pad_x),
-            min(panel.height, y1 + pad_y),
+        #
+        # Pad relative to the DETECTED BOX — panel-relative padding scales with the
+        # page — and per SIDE: a side whose edge landed on a real border gets no pad
+        # at all. Re-adding 1-3 px of page beyond a border the tighten walk just found
+        # is the "really thin white lines on the sides" reported 2026-08-30.
+        h_span, w_span = max(1, y1 - y0), max(1, x1 - x0)
+        col_cov = content[y0:y1, :].sum(axis=0)
+        row_cov = content[:, x0:x1].sum(axis=1)
+        def _pad(edge_cov: float, span_frac: int, base: int) -> int:
+            return 0 if edge_cov >= _EDGE_MIN_FRAC * span_frac else base
+        pad_x, pad_y = int(w_span * pad_frac), int(h_span * pad_frac)
+        panel = panel.crop(
+            (
+                max(0, x0 - _pad(col_cov[x0], h_span, pad_x)),
+                max(0, y0 - _pad(row_cov[y0], w_span, pad_y)),
+                min(panel.width, x1 + _pad(col_cov[x1 - 1], h_span, pad_x)),
+                min(panel.height, y1 + _pad(row_cov[y1 - 1], w_span, pad_y)),
+            )
         )
-    )
+
+    # Interior page background. Everything above trims MARGINS; it cannot help when
+    # the "panel" is really several content masses with page background BETWEEN them —
+    # a framed panel, a floating bubble and a borderless dark scene extracted as one
+    # png (FP p0009_01), or art above typeset page text (SL p0049_03). Framing such a
+    # blob renders its interior background as the white/black banners reported on
+    # 2026-08-30, and the letterbox bars (a blurred copy of the panel) inherit them.
+    # Cut to the dominant content mass instead; segmentation itself is revisited
+    # separately, before the 20-chapter run.
+    return _dominant_mass_crop(panel)
 
 
 
