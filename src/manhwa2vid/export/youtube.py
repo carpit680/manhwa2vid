@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import json
 from pathlib import Path
 from typing import Any
@@ -42,16 +43,73 @@ def write_srt(timeline: Timeline, path: Path) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+#: Measured across 864 competitor videos on six channels (2026-08-29): every channel's
+#: median title length is exactly this, which is where YouTube truncates in browse and
+#: search. See reports/field_measurement_2026-08-29.md.
+TITLE_MAX_CHARS = 70
+
+
+def title_problems(title: str, series: str) -> list[str]:
+    """Field conventions a title must satisfy, as measurable checks.
+
+    Only two packaging findings survived a within-channel test, and both are
+    categorical rather than correlational — which is exactly why they are trustworthy:
+    NO competitor title names its source series (0 of 864), and every channel writes to
+    a 70-character median. The reversal-clause and CAPS-density "formula" did not
+    survive (0.76-1.37x with four of five channels below 1.0) and is not enforced here.
+    """
+    problems = []
+    if len(title) > TITLE_MAX_CHARS:
+        problems.append(f"{len(title)} chars, over the {TITLE_MAX_CHARS} truncation point")
+
+    # A CONTIGUOUS RUN of two or more series words, not any single one. Single-word
+    # matching flagged "He Was Frozen For 25 Years..." because "Frozen" also appears in
+    # "Return of the Frozen Player" — but that title is describing the story, which is
+    # exactly what the field's titles do. What no competitor does is print the series
+    # NAME, and a name shows up as consecutive words.
+    words = [w for w in re.split(r"[^A-Za-z0-9']+", series) if w]
+    runs = [" ".join(words[i : i + 2]) for i in range(len(words) - 1)]
+    runs = [r for r in runs if len(r.replace(" ", "")) > 6]
+    hit = next((r for r in runs if re.search(rf"\b{re.escape(r)}\b", title, re.I)), None)
+    if hit:
+        problems.append(
+            f"names the source series ({hit!r}) — no competitor title does this "
+            f"(0 of 864); the name belongs in the pinned comment"
+        )
+    return problems
+
+
 def write_metadata(meta: ProjectMeta, timeline: Timeline, path: Path) -> None:
+    """Emit the upload pack in the shape the field actually uses.
+
+    What changed on 2026-08-30, and why each is evidence and not taste:
+
+    - The title no longer leads with the series name. Not one top title on any measured
+      channel names its source; the name is released in a pinned comment, which is a
+      deliberate engagement mechanic.
+    - The hashtags are gone. None of the large channels use them; the one channel that
+      did is the collapsed one.
+    - `title` is emitted as a TEMPLATE to fill, not an invented logline. Writing the
+      hook is an editorial act with real consequences for how the video is represented,
+      and the pipeline has no basis for it beyond the narration — so it hands over the
+      constraints and the material rather than fabricating a claim about the story.
+    """
+    hook = (getattr(meta, "hook", "") or "").strip()
     payload = {
-        "title": f"{meta.title} Chapters {meta.chapters} | Manhwa Recap",
+        "title": hook or f"TODO — write the hook, max {TITLE_MAX_CHARS} chars, do not name the series",
+        "title_rules": [
+            f"max {TITLE_MAX_CHARS} characters (every measured channel's median)",
+            "do not name the source series (0 of 864 competitor titles do)",
+        ],
+        "pinned_comment": f"Source: {meta.title}, chapters {meta.chapters}.",
         "description": (
-            f"Recap of {meta.title} chapters {meta.chapters}.\n\n"
-            f"Duration: {timeline.total_duration / 60:.1f} minutes\n"
-            "#manhwa #recap #webtoon"
+            f"Chapters {meta.chapters}.\n\n"
+            f"Duration: {timeline.total_duration / 60:.1f} minutes"
         ),
-        "tags": ["manhwa", "recap", "webtoon", meta.title.lower()],
+        "tags": ["manhwa", "recap", "webtoon"],
     }
+    if hook:
+        payload["title_problems"] = title_problems(hook, meta.title) or ["none"]
     path.write_text(yaml.dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
