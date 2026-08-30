@@ -35,6 +35,66 @@ def _load_pipeline(config: dict[str, Any]) -> Any:
     return _pipeline
 
 
+
+def _resolve_voice(pipeline: Any, spec: str) -> Any:
+    """A voice name, or a weighted blend of them.
+
+    Kokoro voices are (510, 1, 256) style tensors, so two can be interpolated into a
+    voice that exists in neither preset — and the blend changes DELIVERY, not just
+    timbre, which is why it is a synthesis-time choice rather than an EQ one. Kokoro's
+    own "a,b" syntax averages equally; this accepts weights:
+
+        af_heart                      a preset, unchanged
+        af_heart:0.65,af_nicole:0.35  weighted blend, chosen by ear 2026-08-29
+
+    Weights are normalised, so 65/35 and 0.65/0.35 mean the same thing.
+    """
+    if ":" not in spec:
+        return spec
+    parts = []
+    for token in spec.split(","):
+        name, _, weight = token.partition(":")
+        parts.append((name.strip(), float(weight or 1.0)))
+    total = sum(w for _n, w in parts) or 1.0
+    blended = None
+    for name, weight in parts:
+        vec = pipeline.load_single_voice(name) * (weight / total)
+        blended = vec if blended is None else blended + vec
+    return blended
+
+
+def _trim_silence(audio: Any, keep_ms: float) -> Any:
+    """Cut Kokoro's own lead/trail silence back to `keep_ms` a side.
+
+    Measured on a six-sentence passage: Kokoro emits ~250 ms of lead and ~500 ms of
+    trail PER SENTENCE — 4.6 s of dead air against the 0.36 s of join gap we add
+    ourselves. Because we synthesise one sentence per call to keep timings measured,
+    that silence lands at every sentence boundary and the read drags without the
+    articulation being slow.
+
+    Trimming raises words-per-minute without touching speed: at 1.30 the same passage
+    went 155 -> 179 wpm with the voice reading no faster. It is applied per segment
+    BEFORE the sidecar is measured, so picture and sound stay joined — the shot planner
+    reads those durations.
+
+    0 disables it. Silence is detected at 2% of the segment's own peak, so a quiet
+    sentence is not mistaken for silence.
+    """
+    import numpy as np
+
+    if keep_ms <= 0 or audio.size == 0:
+        return audio
+    envelope = np.abs(audio)
+    peak = float(envelope.max())
+    if peak <= 0:
+        return audio
+    loud = np.nonzero(envelope > peak * 0.02)[0]
+    if loud.size == 0:
+        return audio
+    keep = int(SAMPLE_RATE * keep_ms / 1000.0)
+    return audio[max(0, int(loud[0]) - keep) : min(audio.size, int(loud[-1]) + keep)]
+
+
 class KokoroTTSProvider(TTSProvider):
     """
     Preset-voice synthesis. Kokoro cannot clone a reference voice — tts.voice_prompt is
@@ -50,8 +110,11 @@ class KokoroTTSProvider(TTSProvider):
         import soundfile as sf
 
         pipeline = _load_pipeline(config)
-        voice = str(get_nested(config, "tts", "kokoro_voice", default="am_adam"))
+        voice = _resolve_voice(
+            pipeline, str(get_nested(config, "tts", "kokoro_voice", default="am_adam"))
+        )
         speed = float(get_nested(config, "tts", "kokoro_speed", default=1.0))
+        trim_ms = float(get_nested(config, "tts", "kokoro_trim_ms", default=0.0))
 
         out_wav = out_path.with_suffix(".wav")
         out_wav.parent.mkdir(parents=True, exist_ok=True)
@@ -76,7 +139,7 @@ class KokoroTTSProvider(TTSProvider):
                 if len(pieces) == 1
                 else np.concatenate([np.asarray(p, dtype="float32") for p in pieces])
             )
-            segments.append((sentence, merged))
+            segments.append((sentence, _trim_silence(merged, trim_ms)))
         chunks = [audio for _g, audio in segments]
         if not chunks:
             raise RuntimeError(f"Kokoro returned no audio for: {text[:60]!r}")

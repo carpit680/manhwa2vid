@@ -181,9 +181,15 @@ script:
   provider: gemini
   model: gemini-3.5-flash
   outro_cta: true
-  target_wpm: 220       # was 200. Mamoru speaks 237; at 200 our sentences ran
-                        # 4.71s each against his 3.23s, which is what made our
-                        # shots longer than his despite cutting MORE per sentence
+  target_wpm: 196       # MEASURED on the full 16-beat FP script at kokoro_speed 1.30
+                        # with kokoro_trim_ms 150 — not benched. Two benches this week
+                        # missed the delivered rate in OPPOSITE directions (+18, then
+                        # -17 wpm), because synthesis is per-sentence and the trim's
+                        # saving scales with sentence COUNT, not word count. align.py
+                        # budgets panels from this number, so it must be the delivered
+                        # one; narration-pace is what catches it when it is not.
+                        # Field context: competitor median is 218 wpm
+                        # (reports/field_measurement_2026-08-29.md).
   max_narrator_asides: 4  # the 0.24 first-person per 1k measurement means the narrator
                           # never says "I" — NOT that he has no voice. He runs 8.2
                           # evaluative asides and 2.0 similes per 1k.
@@ -224,8 +230,20 @@ qa:
 tts:
   provider: kokoro      # kokoro | chatterbox | openai | mock
   # Kokoro (Apache-2.0, 82M, preset voices — cannot clone a reference voice):
-  kokoro_voice: af_heart # user choice 2026-08-29; af_* = American female. am_adam was
-                         # the spec default, kept in git if you want it back.
+  # Weighted style-tensor blend, chosen by ear 2026-08-29 against every preset and
+  # several mixes: af_nicole's vector steadies and slows the read, af_heart keeps the
+  # warmth. Kokoro's own "a,b" syntax averages equally; this takes weights. A bare
+  # preset name still works — see tts/kokoro.py:_resolve_voice.
+  kokoro_voice: "af_heart:0.65,af_nicole:0.35"
+  # Trim Kokoro's OWN lead/trail silence to this many ms per sentence. Measured: it
+  # emits ~250 ms lead + ~500 ms trail per sentence — 4.6 s of dead air across a
+  # six-sentence passage, against the 60 ms join gap we add. Synthesis is one call per
+  # sentence (so every sidecar timing is measured, not estimated), which puts that
+  # silence at every boundary. Trimming raises words-per-minute with NO change to
+  # articulation, and 1.30+trim was preferred by ear over 1.35 untrimmed at the same
+  # delivered pace. Applied before the sidecar is written, because the shot planner
+  # joins the shot list to those durations. 0 disables.
+  kokoro_trim_ms: 150
   # 1.35 because Kokoro at 1.0 delivers ~171 WPM, while script.target_wpm (235) is what
   # curate.words_per_shown_panel budgets panels from — so the pipeline planned 9.79 words
   # into 2.5s that actually took 3.4s to say, and every panel dwelled ~36% too long. The
@@ -241,9 +259,11 @@ tts:
   # 1.05 -> 184 WPM, 1.14 -> 194, 1.19 -> 202. Calibrate the way the pipeline RUNS,
   # not the way it is convenient to bench — the narration-pace gate is what caught
   # the 16-WPM gap between the two.
-  kokoro_speed: 1.34  # per-sentence synthesis slowed delivery (full terminal prosody per
-                      # sentence): 1.29->193 WPM. Re-measured curve 2026-08-26:
-                      # 1.33->204, 1.34->223, 1.35->228 vs target_wpm 220
+  kokoro_speed: 1.30  # chosen by ear 2026-08-29 from a 1.00-1.65 sweep in the blended
+                      # voice, paired with kokoro_trim_ms 150. 1.35 untrimmed and
+                      # 1.30+trim deliver the same pace; the trimmed one reads calmer,
+                      # because what sounded "rushed" was dead air, not articulation.
+                      # Delivered rate on the real script: 196 WPM (see target_wpm).
                         # from the target, so a target the voice does not actually
                         # deliver makes every dwell wrong. Measured: 1.19 delivered
                         # 191 WPM, so 220 needs ~1.37. The narration-pace gate
