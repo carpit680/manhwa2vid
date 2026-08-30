@@ -20,13 +20,31 @@ def cosine_ease(t: float) -> float:
     return (1.0 - math.cos(math.pi * t)) / 2.0
 
 
-def crop_to_content(panel: Image.Image, pad_frac: float = 0.04) -> Image.Image:
+def crop_to_content(panel: Image.Image, pad_frac: float = 0.004) -> Image.Image:
     """Crop away white margins so the frame is filled with art, not paper.
 
     Measured need: ~48 shown panels across the two real projects carry their content in
     under 60% of their area, and `letterbox_panel` fit the WHOLE png — margins included —
-    so their art rendered at barely half the size the screen allowed. A 4% pad keeps
-    the crop from feeling clinical.
+    so their art rendered at barely half the size the screen allowed.
+
+    The pad was 0.04 and that WAS the blank-margin defect the user reported on
+    2026-08-30 as "blank spaces around the artwork taking up the viewport". The crop
+    found the right box and then handed the margin straight back: 4% of the ORIGINAL
+    panel dimensions, re-added on all four sides. Measured on the six worst Solo
+    Leveling panels — blank fraction vertical/horizontal after cropping:
+
+        pad 0.04 (old)   9-14% still blank on every panel
+        pad 0.004        0% on every panel, art reaching the frame edge
+
+    Confirmed by eye on those panels, not only by the numbers — the numbers had already
+    passed once through `dead-space`, which is report-only and hardwired to pass.
+
+    Scale of the defect: 155 of 400 Solo Leveling panels carried >20% blank margins,
+    and on screen that was 79 panels / 258 s = 34% of runtime.
+
+    The pad is a fraction of the DETECTED BOX now, not of the panel: on a panel whose
+    art occupies a third of the page, a panel-relative pad is three times the intended
+    breathing room, which is how a "4% pad" became a 14% band.
 
     Background-aware, and that is load-bearing: the first version defined content as
     `v < 240`, i.e. "anything not white". On a DARK page every pixel satisfies that, so
@@ -50,10 +68,16 @@ def crop_to_content(panel: Image.Image, pad_frac: float = 0.04) -> Image.Image:
     if box is None:
         return panel
     x0, y0, x1, y1 = box
-    if (x1 - x0) * (y1 - y0) >= 0.95 * panel.width * panel.height:
+    if (x1 - x0) * (y1 - y0) >= 0.99 * panel.width * panel.height:
+        # 0.99, not 0.95: at 0.95 a panel whose art already fills it kept a 5% band of
+        # page, and the bail fired on roughly a quarter of panels. There is no cost to
+        # cropping a nearly-full panel — the crop is a no-op by construction — so the
+        # bail only needs to catch "the mask found everything", not "almost everything".
         return panel  # nothing worth cropping
-    pad_x = int(panel.width * pad_frac)
-    pad_y = int(panel.height * pad_frac)
+    # Pad relative to the DETECTED BOX. Panel-relative padding scales with the page, so
+    # the smaller the art the larger the margin handed back — backwards.
+    pad_x = int((x1 - x0) * pad_frac)
+    pad_y = int((y1 - y0) * pad_frac)
     return panel.crop(
         (
             max(0, x0 - pad_x),
