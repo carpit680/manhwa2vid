@@ -2397,9 +2397,21 @@ _MIXED_NUMBER_STOP = (
     "against", "toward", "towards", "around", "over", "under", "near", "behind",
     "beside", "through", "across", "beyond", "onto", "upon",
 )
+#: What the possessive has to own for "They ... his" to be a NUMBER error rather than
+#: two people in one sentence. The defect is one character called "they" and "his" in
+#: the same breath, and the tell is that the thing possessed is inalienably their own —
+#: "They grit his teeth", "They clench his fists". When the possessive owns something
+#: separable ("They trust his skills", "They raise his banner") the plural reading is
+#: not just possible, it is the ordinary one.
+_SELF_POSSESSION = (
+    "teeth|fists?|hands?|head|forehead|jaw|chin|temples?|chest|shoulders?|brow|eyes?|"
+    "arms?|legs?|fingers?|knuckles?|throat|neck|face|breath|grip|stomach|gut|heart|"
+    "lips|mouth|nose|ears?|hair|skin|spine|ribs?|wrists?|elbows?|knees?|feet|foot|"
+    "palms?|thumbs?|tongue|body|blood|voice"
+)
 _MIXED_NUMBER_RE = re.compile(
     r"\bThey\b(?:\s+(?!" + "|".join(rf"{w}\b" for w in _MIXED_NUMBER_STOP)
-    + r")[\w'’-]+){1,3}\s+(his|her)\b",
+    + r")[\w'’-]+){1,3}\s+(his|her)\s+(?:" + _SELF_POSSESSION + r")\b",
     re.I,
 )
 
@@ -2415,6 +2427,21 @@ def mixed_number_pronouns(text: str) -> list[str]:
 
     Detection only. The repair is to fix the PRONOUN in the bible — rewriting the
     narration would paper over a wrong profile that the next chapter re-uses.
+
+    NARROWED TWICE, both times because it blocked correct narration — this gate blocks,
+    so a false positive stops a script stage dead:
+
+      1. across a preposition: "Song admits there is nothing they can do for his missing
+         arm" (they = the healers, his = Jin-Woo);
+      2. on a separable possession: "The group readily agrees. They trust his skills."
+         (they = the party, his = Mr. Song) — a direct object, so the first narrowing
+         did not reach it.
+
+    What survives is the shape the gate was built for and nothing wider: "they" and a
+    possessive of something INALIENABLY that person's own (`_SELF_POSSESSION`). It
+    cannot be made fully precise — "They raise his sword" is ambiguous to any regex and
+    is deliberately not flagged, because the cost of a false positive here is a blocked
+    pipeline and the cost of a miss is one audible sentence.
     """
     hits: list[str] = []
     for sentence in _SENTENCE_SPLIT_RE.split((text or "").strip()):

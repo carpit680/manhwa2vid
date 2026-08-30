@@ -157,6 +157,30 @@ class TestGatesThatBlockedALegitimateScript:
 
         assert mixed_number_pronouns("They grit his teeth.")
         assert mixed_number_pronouns("They clench his fists.")
+        assert mixed_number_pronouns("They lower his head.")
+        assert mixed_number_pronouns("They wipe her brow.")
+
+    def test_a_separable_possession_is_two_people_not_one(self):
+        """Second false positive to block a script stage, and a direct object, so the
+        prepositional narrowing above did not reach it.
+
+        "The group readily agrees. They trust his skills." — they = the party, his =
+        Mr. Song. The gate exists for a character called "they" and "his" in one breath,
+        and the tell is a possessive of something INALIENABLY that person's own.
+        """
+        from manhwa2vid.script.lint import mixed_number_pronouns
+
+        assert mixed_number_pronouns("They trust his skills.") == []
+        assert mixed_number_pronouns("The group readily agrees. They trust his skills.") == []
+        assert mixed_number_pronouns("They follow his lead.") == []
+        assert mixed_number_pronouns("They question his judgment.") == []
+
+    def test_the_ambiguous_middle_is_deliberately_not_flagged(self):
+        """"They raise his sword" cannot be resolved by a regex. It is left alone on
+        purpose: a false positive here blocks the pipeline, a miss is one sentence."""
+        from manhwa2vid.script.lint import mixed_number_pronouns
+
+        assert mixed_number_pronouns("They raise his sword.") == []
 
     def test_an_unknown_real_world_place_warns_rather_than_blocks(self):
         """`unknown_names` documents "real-world places" as false-positive class two and
