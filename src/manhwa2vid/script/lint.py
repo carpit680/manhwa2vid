@@ -3976,3 +3976,48 @@ def lint_dangling_reply(beats: list[ScriptBeat]) -> dict[int, list[str]]:
                 break
             prior += " " + sent
     return report
+
+
+def near_homophone_names(text: str, names: set[str]) -> list[str]:
+    """Glossary name TOKENS that collide on audio, both present in the narration.
+
+    "Mr. Song" (Song Chi-Yul) and "Mr. Sung" (Sung Jin-Woo) are one edit apart and
+    near-identical from the TTS; the user's own dictation of the vote scene transcribed
+    BOTH as "Mr. Sung". A viewer cannot tell who counts the hands from who is being
+    asked. Warn-only: the fix is a wording choice (use the given name for one of them),
+    not a glossary repair, and the writer cannot be blocked for the source material
+    naming two characters a vowel apart.
+    """
+    tokens: set[str] = set()
+    for name in names:
+        for tok in re.findall(r"[A-Za-z][a-z]+", name):
+            if len(tok) >= 3:
+                tokens.add(tok)
+
+    def _close(a: str, b: str) -> bool:
+        if a == b or abs(len(a) - len(b)) > 1:
+            return False
+        # edit distance 1 on lowercase, cheap two-pointer
+        a, b = a.lower(), b.lower()
+        if len(a) == len(b):
+            return sum(x != y for x, y in zip(a, b)) == 1
+        if len(a) > len(b):
+            a, b = b, a
+        i = j = diff = 0
+        while i < len(a) and j < len(b):
+            if a[i] == b[j]:
+                i += 1
+            else:
+                diff += 1
+                if diff > 1:
+                    return False
+            j += 1
+        return True
+
+    present = {t for t in tokens if re.search(rf"\b{re.escape(t)}\b", text)}
+    hits = []
+    for a in sorted(present):
+        for b in sorted(present):
+            if a < b and _close(a, b):
+                hits.append(f"{a} / {b}")
+    return hits

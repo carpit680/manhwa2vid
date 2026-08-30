@@ -260,6 +260,22 @@ def generate_story_first_script(
         unknown=strangers,
     )
 
+    # Names that collide on AUDIO. "Mr. Song" and "Mr. Sung" are one vowel apart and
+    # the TTS renders them near-identically — the user's dictation of the vote scene
+    # transcribed both as "Mr. Sung". Warn-only: the repair is wording (give one of
+    # them their given name), and the source material is allowed to name two
+    # characters a vowel apart.
+    from manhwa2vid.script.lint import near_homophone_names
+
+    homophones = near_homophone_names(text, glossary_names(paths))
+    report.add(
+        "name-homophones",
+        True if not homophones else "warn",
+        f"names nearly identical to the ear: {homophones} — prefer a given name or "
+        "epithet for one of them" if homophones else "",
+        pairs=homophones,
+    )
+
     # A regression guard, not a discovery gate: `strip_placeholder_descriptors` runs
     # above, so this can only fire if narration reached the beats down a path that
     # skipped it.

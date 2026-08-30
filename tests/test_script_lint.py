@@ -2555,3 +2555,19 @@ def test_mixed_number_pronoun_blocks_and_does_not_fire_on_real_plurals():
         "They and his brother argue about the raid.",
     ):
         assert lint_broken_sentences([_beat(1, genuine_plural)]) == {}
+
+
+def test_near_homophone_names_hears_song_and_sung():
+    """"Mr. Song" (Song Chi-Yul) vs "Mr. Sung" (Sung Jin-Woo): one vowel apart, near-
+    identical from the TTS — the user's own dictation of the vote scene transcribed
+    both as "Mr. Sung". Detection only; the repair is a wording choice."""
+    from manhwa2vid.script.lint import near_homophone_names
+
+    names = {"Sung Jin-Woo", "Song Chi-Yul", "Ju-Hee", "Kim Sang-Shik"}
+    text = "Mr. Song counts the hands. He asks how about Mr. Sung."
+    assert near_homophone_names(text, names) == ["Song / Sung"]
+
+    # only fires when BOTH appear in the narration
+    assert near_homophone_names("Mr. Song counts the hands.", names) == []
+    # distinct names that do not collide stay silent
+    assert near_homophone_names("Ju-Hee helps Kim.", names) == []
