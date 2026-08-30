@@ -456,3 +456,34 @@ def test_block_crossing_uses_text_and_position_together():
     clamp_to_time_blocks(lists, paras, sl, [sl[120]])
     blocks = clamp_to_time_blocks.last_block_of
     assert blocks.count(0) == 10 and blocks.count(1) == 2, blocks
+
+
+class TestMatcherFailureIsLoud:
+    """"Matching is an improvement, never a hard dependency" swallowed every exception,
+    and it was wrong twice in one day: Solo Leveling ran with NO shotlist, binding fell
+    back to airtime weighting, and the only gate that notices (timing-measured) runs
+    after the TTS money is spent. One retry, then the stage stops."""
+
+    def test_a_transient_failure_is_retried_and_survives(self):
+        from manhwa2vid.script.align import _retry_once
+
+        calls = {"n": 0}
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise AttributeError("'list' object has no attribute 'get'")
+
+        _retry_once(flaky, what="Shot matching")
+        assert calls["n"] == 2
+
+    def test_a_persistent_failure_raises_instead_of_continuing(self):
+        import pytest
+
+        from manhwa2vid.script.align import _retry_once
+
+        def broken():
+            raise AttributeError("'list' object has no attribute 'get'")
+
+        with pytest.raises(AttributeError):
+            _retry_once(broken, what="Shot matching")

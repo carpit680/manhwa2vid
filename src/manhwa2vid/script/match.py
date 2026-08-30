@@ -126,8 +126,20 @@ def collect_claims(
             data = json.loads(raw) if isinstance(raw, str) else raw
         except (TypeError, ValueError):
             continue
+        # The model sometimes returns the claims ARRAY bare instead of wrapped in
+        # {"claims": [...]}. `data.get` then raised AttributeError, which escaped this
+        # function entirely and was swallowed by align.py's blanket except — the run
+        # continued with NO shotlist and the planner fell back to airtime weighting.
+        # It happened twice on Solo Leveling before being traced. A bare list is
+        # unambiguous here; accept it.
+        if isinstance(data, list):
+            data = {"claims": data}
+        if not isinstance(data, dict):
+            continue
         batch_ids = {p.id for p in batch}
         for claim in data.get("claims") or []:
+            if not isinstance(claim, dict):
+                continue
             try:
                 number = int(claim.get("sentence"))
             except (TypeError, ValueError):

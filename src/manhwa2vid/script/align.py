@@ -502,6 +502,15 @@ def _sentence_page_ranges(
     return ranges
 
 
+def _retry_once(fn, *, what: str) -> None:
+    """Run `fn`; on failure retry once; on the second failure RAISE."""
+    try:
+        fn()
+    except Exception as exc:  # noqa: BLE001 — retried once, then loud
+        console.print(f"[yellow]{what} failed ({exc}) — retrying once[/]")
+        fn()
+
+
 def _build_shotlist_for(
     para_texts: list[str],
     panel_lists: list[list[str]],
@@ -623,13 +632,19 @@ def align_script(
     # a panel that does not depict them, because even apportionment desynchronises from
     # narration that compresses.
     if get_nested(config, "align", "match_enabled", default=True):
-        try:
-            _build_shotlist_for(
+        # One retry, then RAISE. "Matching is an improvement, never a hard dependency"
+        # was the doctrine here, and it was wrong twice on the same day: a swallowed
+        # exception left Solo Leveling with no shotlist at all, the planner silently
+        # fell back to airtime weighting, and the only gate that notices
+        # (timing-measured) runs AFTER the TTS money is spent. A missing shotlist must
+        # stop the stage while stopping is still cheap.
+        _retry_once(
+            lambda: _build_shotlist_for(
                 para_texts, panel_lists, ordered_ids, block_of, blocks, panels, paths,
                 config, alignment_map=entries,
-            )
-        except Exception as exc:  # matching is an improvement, never a hard dependency
-            console.print(f"[yellow]Shot matching skipped ({exc})[/]")
+            ),
+            what="Shot matching",
+        )
 
     beats = [
         ScriptBeat(

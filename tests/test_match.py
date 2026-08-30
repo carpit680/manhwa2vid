@@ -627,3 +627,41 @@ def test_filter_still_keeps_accents_when_they_cost_nothing():
     claims = [(1, "pa"), (1, "pb"), (2, "pc")]
     kept = filter_monotonic(claims, order)
     assert kept == [(1, "pa"), (1, "pb"), (2, "pc")]
+
+
+def test_a_bare_list_response_is_accepted_as_the_claims_array():
+    """The matcher LLM sometimes returns the claims array bare instead of wrapped in
+    {"claims": [...]}. `data.get` then raised AttributeError, align.py's blanket except
+    swallowed it, and the run continued with NO shotlist — twice on Solo Leveling in
+    one day, with binding silently degraded to airtime weighting both times."""
+    import json as _json
+
+    from manhwa2vid.script import match as M
+
+    class _Provider:
+        temperature = 0.0
+        vision_model = None
+
+        def describe_labeled_panels(self, *_a, **_k):
+            return _json.dumps([
+                {"sentence": 1, "panels": ["p1"]},
+                "not-a-dict-claim-must-be-skipped",
+                {"sentence": "junk"},
+            ])
+
+    class _Panel:
+        def __init__(self, pid):
+            self.id = pid
+            self.image_path = f"panels/{pid}.png"
+
+    import manhwa2vid.llm.provider as prov
+    orig = prov.get_llm_provider
+    prov.get_llm_provider = lambda *_a, **_k: _Provider()
+    try:
+        claims = M.collect_claims(
+            [(1, "He draws his blade.")], [_Panel("p1")],
+            {"root": __import__("pathlib").Path(".")}, {},
+        )
+    finally:
+        prov.get_llm_provider = orig
+    assert claims == [(1, "p1")]
