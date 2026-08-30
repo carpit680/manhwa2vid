@@ -181,8 +181,13 @@ script:
   provider: gemini
   model: gemini-3.5-flash
   outro_cta: true
-  target_wpm: 196       # MEASURED on the full 16-beat FP script at kokoro_speed 1.30
-                        # with kokoro_trim_ms 150 — not benched. Two benches this week
+  target_wpm: 210       # RE-MEASURED 2026-08-30 on both full scripts after
+                        # kokoro_max_pause_ms 150 landed: FP 1510w/7.24min = 208.6,
+                        # SL 2944w/13.90min = 211.8. Was 196 before the internal-pause
+                        # cap; the narration-pace gate caught the 8% gap on the first
+                        # SL run, which is exactly what it is for.
+                        # Previously MEASURED on the full 16-beat FP script at
+                        # kokoro_speed 1.30 with kokoro_trim_ms 150 — not benched. Two benches
                         # missed the delivered rate in OPPOSITE directions (+18, then
                         # -17 wpm), because synthesis is per-sentence and the trim's
                         # saving scales with sentence COUNT, not word count. align.py

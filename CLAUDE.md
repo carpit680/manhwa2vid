@@ -84,6 +84,12 @@ be byte-identical unless you intended otherwise.
   argument first, and every stage passes its own `<stage>.provider` from config. Tests go
   offline by blanking API keys (`tests/conftest.py`); `tests/test_offline_guard.py` pins
   it. Ollama has no key and would escape — no stage may select it.
+- **Reading `config.yaml` directly silently selects the mock.** `load_config()` is what
+  calls `load_dotenv`, so a one-off script that does `yaml.safe_load(open("config.yaml"))`
+  runs with no `GEMINI_API_KEY` and every LLM stage falls back to the mock provider —
+  quietly, with a warning that scrolls past. It cost a Frozen Player alignment: match rate
+  fell to 16/136 sentences and all 11 script gates still reported pass. Always go through
+  `load_config()`, and read the match count before trusting a green report.
 - **A later pass undoing an earlier pass's work** is the dominant defect class here. The
   shot plan's seconds must reach the timeline unclamped; polish must not re-break what a
   rewrite fixed. When something "doesn't take", look for the pass that runs after it.
