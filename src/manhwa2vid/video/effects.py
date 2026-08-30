@@ -727,9 +727,27 @@ def render_letterbox_frames(
     blur = int(get_nested(config, "video", "letterbox_blur_radius", default=20))
     panel = crop_to_content(Image.open(panel_path).convert("RGB"))
 
-    background = panel.copy().resize((width, height), Image.Resampling.LANCZOS)
-    background = background.filter(ImageFilter.GaussianBlur(radius=blur))
-    fit = min(width / panel.width, height / panel.height)
+    # SUB-PIXEL, second pass 2026-08-30. The first jiggle fix (resize(box=...)) reached
+    # the fill and scroll cameras but not this one, and this one is the DEFAULT for
+    # tall panels — which is why the video was smooth early (the opening prefers the
+    # fill camera) and jiggly later. The old loop resized the sharp panel to
+    # int(round(w*scale)) per frame and centred it at (width-new_w)//2: the size
+    # stepped a whole pixel every few frames and the centring hopped as the parity
+    # flipped. A 4% push over 8s moves ~0.15 px/frame — every step visible.
+    #
+    # Instead: compose ONE supersampled canvas (blurred bars + sharp panel at its base
+    # scale), then per frame sample a float window from it with resize(box=...). The
+    # push-in becomes a sub-pixel zoom of a static composite; the bars zoom by <=4%
+    # along with the panel, invisible on an amorphous blur.
+    ss = 2
+    cw, ch = width * ss, height * ss
+    canvas = panel.resize((cw, ch), Image.Resampling.LANCZOS)
+    canvas = canvas.filter(ImageFilter.GaussianBlur(radius=blur * ss))
+    fit = min(cw / panel.width, ch / panel.height)
+    sharp_w = max(1, int(round(panel.width * fit)))
+    sharp_h = max(1, int(round(panel.height * fit)))
+    sharp = panel.resize((sharp_w, sharp_h), Image.Resampling.LANCZOS)
+    canvas.paste(sharp, ((cw - sharp_w) // 2, (ch - sharp_h) // 2))
 
     rng = random.Random(seed or str(panel_path))
     grow = rng.choice([True, False])
@@ -737,24 +755,17 @@ def render_letterbox_frames(
     frames: list[Image.Image] = []
     for i in range(num_frames):
         t = cosine_ease(i / max(num_frames - 1, 1))
-        scale = fit * ((1.0 + push * t) if grow else (1.0 + push * (1.0 - t)))
-        new_w = max(1, int(round(panel.width * scale)))
-        new_h = max(1, int(round(panel.height * scale)))
-        canvas = background.copy()
-        resized = panel.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        # Centre, cropping only the sliver the push-in pushes past the frame.
-        left = (width - new_w) // 2
-        top = (height - new_h) // 2
-        if new_w > width or new_h > height:
-            cx0 = max(0, -left)
-            cy0 = max(0, -top)
-            resized = resized.crop(
-                (cx0, cy0, min(new_w, cx0 + width), min(new_h, cy0 + height))
+        zoom = (1.0 + push * t) if grow else (1.0 + push * (1.0 - t))
+        win_w, win_h = cw / zoom, ch / zoom
+        left = (cw - win_w) / 2.0
+        top = (ch - win_h) / 2.0
+        frames.append(
+            canvas.resize(
+                (width, height),
+                Image.Resampling.LANCZOS,
+                box=(left, top, left + win_w, top + win_h),
             )
-            left = max(left, 0)
-            top = max(top, 0)
-        canvas.paste(resized, (left, top))
-        frames.append(canvas)
+        )
     return frames
 
 

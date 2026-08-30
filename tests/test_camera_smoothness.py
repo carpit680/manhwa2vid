@@ -146,3 +146,30 @@ def test_frames_are_the_requested_size(textured_panel):
         assert f.size == (480, 270)
     for f in render_vertical_scroll_frames(textured_panel, 480, 270, 12, {}):
         assert f.size == (480, 270)
+
+
+def test_the_letterbox_push_in_never_freezes(tmp_path):
+    """Second round of the same defect, reported from watching: "earlier in the video
+    the pans and zoom ins are smooth but later they become jiggly again." The first
+    sub-pixel fix reached the fill and scroll cameras but not the LETTERBOX one — the
+    default for tall panels, which dominate later in the video while the opening
+    prefers the fill camera. Its push-in resized the panel to int(round(w*scale)) per
+    frame and centred at (width-new_w)//2: whole-pixel size steps plus parity hops.
+
+    Same criterion as the others: a moving camera must not render byte-identical
+    consecutive frames."""
+    from manhwa2vid.video.effects import render_letterbox_frames
+
+    rng = np.random.default_rng(4)
+    a = rng.random((1000, 800))
+    k = np.ones(9) / 9.0
+    a = np.apply_along_axis(lambda r: np.convolve(r, k, "same"), 1, a)
+    arr = np.stack([(a * 255).astype(np.uint8)] * 3, axis=-1)
+    p = tmp_path / "tall.png"
+    Image.fromarray(arr, mode="RGB").save(p)
+
+    frames = render_letterbox_frames(p, 480, 270, 48, {})
+    arrays = [np.asarray(f.convert("L"), dtype=np.int16) for f in frames]
+    dupes = sum(1 for x, y in zip(arrays, arrays[1:]) if np.array_equal(x, y))
+    assert dupes == 0, f"{dupes} frozen frame pairs — the letterbox push-in is quantised"
+    assert not np.array_equal(arrays[0], arrays[-1]), "the push-in never moved"
