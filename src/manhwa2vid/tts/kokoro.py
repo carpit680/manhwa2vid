@@ -185,7 +185,7 @@ class KokoroTTSProvider(TTSProvider):
         speed = float(get_nested(config, "tts", "kokoro_speed", default=1.0))
         trim_ms = float(get_nested(config, "tts", "kokoro_trim_ms", default=150.0))
         max_pause_ms = float(
-            get_nested(config, "tts", "kokoro_max_pause_ms", default=120.0)
+            get_nested(config, "tts", "kokoro_max_pause_ms", default=150.0)
         )
 
         out_wav = out_path.with_suffix(".wav")

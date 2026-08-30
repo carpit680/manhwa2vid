@@ -13,6 +13,7 @@ over the last panels and the end card.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -31,11 +32,17 @@ narrator, same tense, same register, no greeting, no "hey guys", no restating th
 
 The closing does two things in one breath:
 1. names what the viewer is now waiting to find out (the hook the chapter just set up),
-2. folds in the ask — subscribing and turning on notifications — as the natural way to
-   not miss the answer.
+2. folds in the ask as the natural way to not miss the answer.
 
 Rules:
 - EXACTLY two sentences. No more.
+- The ask is an IMPERATIVE the narrator says to the viewer: "Subscribe and turn
+  notifications on". Use the word "subscribe" as a command. Never "subscribing".
+- NEVER make an -ing phrase the subject of a sentence. "Subscribing and turning on
+  notifications ensures you will be there" and "Determining whether he survives is the
+  question" are both wrong — they are the shape this prompt keeps producing and they
+  read like a form letter. Say "Subscribe and turn notifications on" and "Whether he
+  survives is the question".
 - Do not begin with "And", "So", "But", "Well", "Now", or "If".
 - Do not use the words "guys", "video", "channel", "episode", "recap", "watching",
   "comment", "like and subscribe" as a fixed phrase, or "in today's".
@@ -45,6 +52,17 @@ Rules:
   ("we'll be back").
 
 Return the two sentences as plain text. Nothing else."""
+
+
+#: The nominalised hook, which the model produced on BOTH titles: an -ing form as the
+#: subject of the sentence ("Determining whether he can raise his stats is now the only
+#: question that matters"). It is grammatical, passes every other shape check, and reads
+#: like a form letter — and it is the last thing the viewer hears in every video, so a
+#: defect here ships on every run. CLAUDE.md's rule applies: a rule the model declined
+#: twice belongs in code, not in the prompt.
+_NOMINALISED_RE = re.compile(
+    r"(?:^|[.!?]\s+)\w+ing\b\s+(?:whether|if|how|what|why|when)\b", re.I
+)
 
 
 def _fallback(meta: ProjectMeta) -> str:
@@ -105,7 +123,12 @@ def append_outro(
         not 1 <= len(sentences) <= 2
         or len(outro.split()) > 60
         or any(b in outro.lower() for b in banned)
-        or "subscri" not in outro.lower()
+        # The IMPERATIVE, not merely the topic. A "subscri" substring test accepts
+        # "subscribing ... ensures you will be right there", which is what shipped on
+        # both titles: the prompt handed the model the ask as a gerund phrase and it
+        # used that phrase as written, as a sentence subject. See _NOMINALISED_RE.
+        or not re.search(r"\bsubscribe\b", outro, re.I)
+        or _NOMINALISED_RE.search(outro)
     ):
         if outro:
             console.print("[yellow]Outro rejected by the shape check — using the fixed closing[/]")

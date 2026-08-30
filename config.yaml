@@ -248,16 +248,24 @@ tts:
   # touches each sentence's lead and trail, so tightening the boundaries left these
   # untouched and therefore relatively LONGER, and the prosody came out inverted: on FP
   # beat_010, 17 pauses ran over 210 ms when only 8 of them are sentence gaps, i.e. nine
-  # comma pauses were longer than the breaks between the sentences around them. At a
-  # 120 ms cap exactly 8 exceed it — the 8 real boundaries — and the beat goes 33.6 ->
-  # 30.9 s. Whole-script effect measured on the shipped audio: -5.4% (FP), -5.8% (SL).
+  # comma pauses were longer than the breaks between the sentences around them. Capping
+  # leaves exactly 8 over 210 ms — the 8 real boundaries — at every value tested:
+  #
+  #     baseline  33.58 s  176.9 wpm   17 pauses > 210 ms
+  #     100 ms    30.34 s  195.8 wpm    8
+  #     120 ms    30.91 s  192.2 wpm    8
+  #     150 ms    31.76 s  187.0 wpm    8    <- chosen by ear 2026-08-30
+  #
+  # Whole-script effect at 150 ms, measured on the shipped audio: -4.3% (FP), -4.6% (SL).
+  # All three fix the inversion, so this was a listening call, not a metric one; 150 is
+  # also the most conservative of the three against plosive closures.
   #
   # The cut is taken from the MIDDLE of each pause so the decay of the word before and
   # the onset ramp of the word after both survive. The cap is also what keeps it safe:
   # a plosive closure (the held /t/ inside a word) runs well under 120 ms, so only
   # phrase-boundary pauses are touched. Going far below 100 ms starts to risk those.
   # Applied per segment BEFORE the sidecar, like the trim. 0 disables.
-  kokoro_max_pause_ms: 120
+  kokoro_max_pause_ms: 150
   # 1.35 because Kokoro at 1.0 delivers ~171 WPM, while script.target_wpm (235) is what
   # curate.words_per_shown_panel budgets panels from — so the pipeline planned 9.79 words
   # into 2.5s that actually took 3.4s to say, and every panel dwelled ~36% too long. The
