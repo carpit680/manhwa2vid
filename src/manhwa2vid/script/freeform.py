@@ -66,6 +66,11 @@ VOICE — wry, confident, gen-Z-coded. Measured targets from the reference chann
   "bro", "our guy", "dude" — and mild profanity is fine where the moment earns it.
   Do not force it; do not sanitise it either.
 - Similes are welcome (~2 per 1000 words). Zero first person: never "I" or "we".
+- TALK TO THE VIEWER, about once per 1000 words — no more. A single turn outward:
+  "if you are keeping count", "you already know how that ends", "imagine being the guy
+  who signed off on this". It is a spice, not a habit: the reference channel's biggest
+  video runs 1.0 per 1000 words and most run far less, so more than a couple per video
+  reads as a tic. Never "I" or "we" — the narrator addresses you, never himself.
 - On-screen system messages (bracketed game-like text) are STORY EVENTS. Deliver what
   they say — they are usually the chapter's spine and the most commonly dropped thing.
 - Never describe artwork as artwork: no "panel", "scene", "we see", "the image shows".

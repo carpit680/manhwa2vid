@@ -149,3 +149,36 @@ def noun_repetition(
         "worst_count": worst,
         "findings": sorted(best_per_word.values(), key=lambda f: -f["count"]),
     }
+
+#: Frames in which second person means the NARRATOR talking to the VIEWER, rather than
+#: a character talking to another character. The distinction is the whole point: a raw
+#: count of "you" measured Mamoru's 5.2M video at 17.74/1k and looked like a huge gap,
+#: but its second person is almost entirely quoted dialogue ("why are you...", "you
+#: want to..."). On genuine address the same video runs 1.01/1k and ours runs 0.78 —
+#: second in the corpus, not far behind it.
+#:
+#: Frame-matching rather than quote-stripping, because it must work on BOTH sides:
+#: competitor auto-captions carry no quotation marks at all, so their dialogue and
+#: their address are indistinguishable by punctuation.
+_ADDRESS_RE = re.compile(
+    r"\b("
+    r"if you(?:'re| are| think| ever| want)?|you already|you know the|you can tell|"
+    r"you'd (?:expect|think|be)|you have to (?:admit|remember)|picture (?:this|it)|"
+    r"trust me|imagine (?:being|having|that)|let me (?:tell|explain)|"
+    r"remember (?:when|that)|as you|for those|the thing is"
+    r")\b",
+    re.I,
+)
+
+
+def narrator_address_rate(text: str) -> dict[str, Any]:
+    """Narrator-to-viewer address per 1000 words.
+
+    Measured across the competitor corpus: median ~0.16/1k, top of field 1.01 (Mamoru's
+    5.2M video). Ours: FP 0.78, SL 0.00 — so the real finding was an inconsistency
+    between our own two scripts, not a deficit against the field.
+    """
+    n = max(len(_words(text)), 1)
+    hits = _ADDRESS_RE.findall(text)
+    return {"words": n, "address_frames": len(hits), "per_1k": round(1000.0 * len(hits) / n, 2)}
+

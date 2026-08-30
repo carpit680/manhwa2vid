@@ -44,6 +44,14 @@ _QUOTED_MIN_PER_1K = 0.5   # brief's number; reference 1.16 re-measured
 # the reference. 18% sits below the reference with margin.
 _SHORT_MIN_PCT = 18.0
 
+#: Narrator-to-viewer address per 1000 words, from the competitor corpus (2026-08-29):
+#: median 0.16, highest single video 1.01, ours FP 0.75 / SL 0.00. The floor catches a
+#: script that never turns outward; the ceiling catches it becoming a tic. Deliberately
+#: NOT set from a raw "you" count — that read 17.74 on the field's biggest video, almost
+#: all of it quoted dialogue between characters rather than address.
+_ADDRESS_MIN_PER_1K = 0.3
+_ADDRESS_MAX_PER_1K = 2.0
+
 #: Sentence-case words that open a sentence are not evidence of a name.
 _CAPITALISED_RE = re.compile(r"\b([A-Z][a-z]+(?:[- ][A-Z][a-z]+)*)\b")
 #: "E-Rank Hunter", "S-Class Gate" — a single-letter grade prefix does not match
@@ -334,6 +342,26 @@ def generate_story_first_script(
         if repeats["findings"] else "",
         worst_count=repeats["worst_count"],
         findings=repeats["findings"][:10],
+    )
+
+    # Narrator-to-viewer address. Field-derived and deliberately two-sided: the corpus
+    # median is ~0.16/1k and its highest video 1.01, so this catches a script that never
+    # turns outward (SL measured 0.00 while FP measured 0.75 — an inconsistency between
+    # our own scripts) AND one that turns outward so often it reads as a tic.
+    #
+    # Measured on ADDRESS FRAMES, not raw "you". A raw count put Mamoru's 5.2M video at
+    # 17.74/1k and looked like a large gap; almost all of it is quoted dialogue between
+    # characters. On address proper that video runs 1.01 and ours 0.78.
+    from manhwa2vid.measure.script_text import narrator_address_rate
+
+    address = narrator_address_rate(text)
+    report.add(
+        "narrator-address",
+        True if _ADDRESS_MIN_PER_1K <= address["per_1k"] <= _ADDRESS_MAX_PER_1K else "warn",
+        f"{address['per_1k']} narrator-to-viewer asides per 1000 words "
+        f"(want {_ADDRESS_MIN_PER_1K}-{_ADDRESS_MAX_PER_1K}; field median 0.16, "
+        f"highest video 1.01) — a recap that never turns outward reads as a synopsis",
+        **address,
     )
 
     residual = (record.get("revision") or {}).get("residual") or []
