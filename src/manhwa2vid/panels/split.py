@@ -132,6 +132,15 @@ def is_visually_empty(img: np.ndarray) -> bool:
     action panel. Applied at ALIGN time, not split time: these panels stay in the
     inventory (they are part of the page), they just don't get shown.
     """
+    # The DOMINANT MASS, not the blob. Under-split panels hold two content masses with
+    # page background between them; the white-margin bbox then spans BOTH and the ink
+    # density is measured across the gutter, so real art reads as empty. Measured on
+    # 2026-08-31: 42 of Frozen Player's 60 flags (70%) and 31 of Solo Leveling's 48
+    # were wrong, and those panels never reached `fill_order` — which is what starved
+    # the bounded fill into 16-22s holds. See panels.regions.dominant_mass.
+    from manhwa2vid.panels.regions import dominant_mass
+
+    img = dominant_mass(img)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
     if float((gray >= 240).mean()) <= 0.70:
         return False
@@ -159,9 +168,12 @@ def panel_visual_stats_file(path: Path) -> tuple[bool, float]:
     now that the story-first path has no scene-card salience: a positional spread was
     the placeholder, and it happily crowned a margin-heavy panel.
     """
+    from manhwa2vid.panels.regions import dominant_mass
+
     img = cv2.imread(str(path))
     if img is None:
         return False, 0.0
+    img = dominant_mass(img)          # same reason as is_visually_empty above
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
     box = white_margin_bbox(gray)
     if box is None:

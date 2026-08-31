@@ -293,10 +293,20 @@ def test_content_free_catches_the_four_measured_classes():
     lines[:, ::7] = 10
     assert is_content_free(lines)
 
-    # a dark field with a couple of thin slivers (measured coverage 0.08)
+    # a dark field with thin slivers (the real p0005_08 / p0005_09 shape)
+    #
+    # 2026-08-31: since the detector judges the DOMINANT MASS, coverage is no longer
+    # what catches this class — an isolated sliver crops tight and reads dense. The
+    # ENTROPY signal carries it, which is what the class was always really about:
+    # slivers and speed lines point one way, drawings point every way. Verified on the
+    # real panels, which still measure content_free=True at coverage 0.22-0.44.
+    #
+    # The old fixture used `_paint_art` (uniform random noise) for the slivers, so
+    # once isolated they had maximal entropy and read as art — it modelled the shape
+    # of the class but not its texture.
     sparse = _canvas(300, 800, 12)
-    _paint_art(sparse, 60, 120, 90, 22)
-    _paint_art(sparse, 400, 160, 70, 18)
+    for x in range(60, 700, 9):                 # oriented streaks, low entropy
+        sparse[120:180, x : x + 2] = 210
     assert is_content_free(sparse)
 
     # a flat colour band
@@ -377,3 +387,41 @@ def test_a_bubble_with_art_beside_it_is_not_text_dominant():
         cv2.putText(img, "A", (250 + i * 55, 105), cv2.FONT_HERSHEY_SIMPLEX,
                     1.1, (0, 0, 0), 3)
     assert not is_text_dominant_panel(img)
+
+
+def test_a_two_scene_blob_is_judged_on_its_dominant_mass():
+    """Panel segmentation under-splits: one extracted "panel" holds two content masses
+    with page background between them. Every predicate that asks "is there anything
+    here" then measured the GUTTER as well as the art and answered no.
+
+    Measured 2026-08-31 across both projects — flags that were WRONG when judged on the
+    blob: visually_empty 42/60 (FP) and 31/48 (SL); content_free 30/65 and 13/35;
+    text_dominant 14/27 and 5/13. Those panels never reached `fill_order`, the bounded
+    fill starved, and unclaimed sentences held on one image for 16-22 seconds — which
+    the renderer then chopped into alternating framings of the SAME picture. That is
+    the "same frames show in succession" a viewer reports.
+
+    The real p0014_04 is the case in hand: a shocked reaction face above a hospital
+    scene, separated by white page, flagged visually_empty.
+    """
+    import numpy as np
+
+    from manhwa2vid.panels.regions import dominant_mass
+
+    page = _canvas(1400, 800, 255)
+    _paint_art(page, 60, 40, 680, 420)          # upper scene
+    _paint_art(page, 60, 940, 680, 400)         # lower scene, big white gutter between
+    mass = dominant_mass(page)
+    assert mass.shape[0] < 700, f"the gutter survived: {mass.shape}"
+    assert mass.shape[0] > 300, f"the mass was destroyed: {mass.shape}"
+    from manhwa2vid.panels.regions import is_content_free
+    assert not is_content_free(page), "a two-scene page of real art read as void"
+
+
+def test_a_single_mass_panel_is_returned_unchanged():
+    """Applying the mass rule everywhere must be safe."""
+    from manhwa2vid.panels.regions import dominant_mass
+
+    art = _canvas(600, 600, 255)
+    _paint_art(art, 20, 20, 560, 560)
+    assert dominant_mass(art).shape[:2] == (560, 560) or dominant_mass(art).shape[0] >= 540

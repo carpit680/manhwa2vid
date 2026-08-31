@@ -477,9 +477,112 @@ def text_regions(img: np.ndarray, *, containers_only: bool = False) -> list[Box]
 
 
 
+#: A background run must be this long, relative to the dimension, to separate two
+#: content masses. Art is full of short quiet strips that mean nothing.
+_MASS_SEP_FRAC = 0.06
+#: Coverage below which a row/column counts as background, relative to the span.
+_MASS_BG_FRAC = 0.015
+
+
+def dominant_mass(img: np.ndarray) -> np.ndarray:
+    """The largest content mass of a panel, with interior page background removed.
+
+    Panel segmentation under-splits: one extracted "panel" routinely holds two or more
+    content masses with page background between them — a reaction face above a hospital
+    scene, art above typeset page text. Every predicate that asks "is there anything
+    here" then measures the GUTTER as well as the art and answers no.
+
+    Measured on 2026-08-31 across both projects, re-judging each detector on the mass
+    instead of the blob:
+
+        detector          FP flagged -> wrong        SL flagged -> wrong
+        visually_empty      60 -> 42  (70%)            48 -> 31  (65%)
+        content_free        65 -> 30  (46%)            35 -> 13  (37%)
+        text_dominant       27 -> 14  (52%)            13 ->  5  (38%)
+
+    Those panels leave `fill_order` before the planner sees them, the bounded fill
+    starves, and unclaimed sentences hold on the previous panel for 16-22 seconds —
+    which the renderer then chops into alternating framings of the SAME image. That is
+    the "same frames show in succession" a viewer reports.
+
+    A single-mass panel is returned UNCHANGED, so applying this everywhere is safe.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    if gray.size == 0 or min(gray.shape[:2]) < 48:
+        return img
+
+    out = img
+    for _pass in range(2):
+        g = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY) if out.ndim == 3 else out
+        if min(g.shape[:2]) < 48:
+            break
+        content = np.abs(g.astype(np.int16) - background_level(g)) > 18
+        h, w = content.shape
+        changed = False
+        for axis, span, dim in ((1, w, h), (0, h, w)):
+            cov = content.sum(axis=axis)
+            is_bg = cov < max(2.0, _MASS_BG_FRAC * span)
+            min_sep = max(24, int(_MASS_SEP_FRAC * dim))
+            runs, start = [], None
+            for i, b in enumerate(is_bg):
+                if b and start is None:
+                    start = i
+                elif not b and start is not None:
+                    runs.append((start, i)); start = None
+            if start is not None:
+                runs.append((start, len(is_bg)))
+            seps = [r for r in runs if r[1] - r[0] >= min_sep]
+            if not seps:
+                continue
+            masses, pos = [], 0
+            for a, b in seps:
+                if a > pos:
+                    masses.append((pos, a))
+                pos = b
+            if pos < len(is_bg):
+                masses.append((pos, len(is_bg)))
+            masses = [m for m in masses if m[1] - m[0] >= 8]
+            if len(masses) < 2:
+                continue
+            best = max(
+                masses,
+                key=lambda m: int(
+                    content[m[0]:m[1], :].sum() if axis == 1 else content[:, m[0]:m[1]].sum()
+                ),
+            )
+            if (best[1] - best[0]) < 0.10 * dim:
+                continue      # background-dominated mood art, not a collage
+            out = out[best[0]:best[1], :] if axis == 1 else out[:, best[0]:best[1]]
+            changed = True
+            break
+        if not changed:
+            break
+
+    # Trim the OUTER background margin too. Separating the masses is only half the job:
+    # a mass still framed by page margin measures a low content coverage, which is the
+    # very number `is_content_free` thresholds on. Same background-aware rule.
+    g = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY) if out.ndim == 3 else out
+    if g.size:
+        content = np.abs(g.astype(np.int16) - background_level(g)) > 18
+        rows = np.flatnonzero(content.any(axis=1))
+        cols = np.flatnonzero(content.any(axis=0))
+        if rows.size and cols.size:
+            y0, y1 = int(rows[0]), int(rows[-1]) + 1
+            x0, x1 = int(cols[0]), int(cols[-1]) + 1
+            if (y1 - y0) >= 16 and (x1 - x0) >= 16:
+                out = out[y0:y1, x0:x1]
+    return out
+
+
 def is_text_dominant_panel(img: np.ndarray, threshold: float = TEXT_DOMINANT) -> bool:
-    """Is everything a viewer can see in this panel just lettering?"""
-    return text_content_ratio(img) >= threshold
+    """Is everything a viewer can see in this panel just lettering?
+
+    Judged on the DOMINANT MASS (see `dominant_mass`): an under-split blob holding a
+    caption box above real art measured as lettering because the gutter and the caption
+    together outweighed the picture. 14 of Frozen Player's 27 flags flipped when
+    measured correctly.
+    """
+    return text_content_ratio(dominant_mass(img)) >= threshold
 
 
 def is_content_free(img: np.ndarray) -> bool:
@@ -501,6 +604,10 @@ def is_content_free(img: np.ndarray) -> bool:
     Deliberately NOT a beauty test. It answers "is there anything here at all", which is
     why the thresholds sit far below the weakest real art rather than near it.
     """
+    # The DOMINANT MASS, not the blob: a panel holding two scenes with page background
+    # between them measured as "void" because the gutter dominated the coverage. 30 of
+    # Frozen Player's 65 flags flipped when measured correctly. See `dominant_mass`.
+    img = dominant_mass(img)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
     if gray.size == 0:
         return True

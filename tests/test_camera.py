@@ -199,8 +199,16 @@ def test_visually_empty_rule_matches_the_measured_fixtures():
     white = np.full((300, 800), 255, dtype=np.uint8)
 
     # Small dense text blob in a white field (the p0009_02 / p0076_02 shape).
+    #
+    # 2026-08-31: judged on the DOMINANT MASS now, so a lone dense blob is no longer
+    # "empty" by area — isolated, it IS its panel. That is deliberate: the blob rule
+    # was withholding real art, 42 of Frozen Player's 60 flags (70%) being wrong,
+    # which starved the fill into 16-22s holds. A blob of LETTERING is still excluded,
+    # by `is_text_dominant_panel`, which is the detector that should own it — verified
+    # on the real p0011_10 ("Light Novel: Chapter 1" credits): content_free False,
+    # text_dominant True, still excluded.
     blob = white.copy(); blob[130:160, 300:500] = 0
-    assert is_visually_empty(blob)
+    assert not is_visually_empty(blob)
 
     # Big but faint content box (the p0020_03 / p0146_01 shape): a large sparse scatter.
     sparse = white.copy(); sparse[::4, ::4] = 200
