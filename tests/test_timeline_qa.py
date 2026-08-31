@@ -369,3 +369,104 @@ def test_a_cross_scene_rewind_still_fails_reading_order(tmp_path: Path) -> None:
     gates = _gates(tmp_path, beats, panels, timeline)
     assert gates["reading-order"]["status"] == FAIL
     assert "p0002_01" in gates["reading-order"]["details"]
+
+
+def _block_meta(tmp_path: Path, boundaries: list[str], visits: list[int]) -> None:
+    """Write the shotlist metadata the reading-order gate reads."""
+    import json as _json
+
+    p = project_paths(tmp_path)["script_shotlist_json"]
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(_json.dumps({
+        "sentences": [],
+        "time_blocks": {"boundaries": boundaries, "visits": visits, "returns": []},
+    }), encoding="utf-8")
+
+
+def _entry(pid, start, dur, beat):
+    from manhwa2vid.models import TimelineEntry
+
+    return TimelineEntry(panel_id=pid, panel_path=f"panels/{pid}.png", start=start,
+                         end=start + dur, duration=dur, beat_id=beat, subtitle_text="x")
+
+
+class TestReadingOrderAcrossTimeBlocks:
+    """A chapter told out of page order — cold open, flashback, RETURN — makes the
+    return a legitimate large backward jump. Frozen Player's is 46 panels. Judged
+    globally it fails a correct artifact; judged only globally, 11 sentences of fight
+    narration played over sky. Order is checked WITHIN a visit; the visit SEQUENCE is
+    checked structurally against what the aligner planned."""
+
+    def _panels(self, n=20):
+        return [_panel(f"p{i:04d}_01", 1) for i in range(1, n + 1)]
+
+    def _beats(self, ids):
+        return [ScriptBeat(beat_id=i + 1, panel_ids=[pid], narration="a b")
+                for i, pid in enumerate(ids)]
+
+    def test_a_planned_return_is_legal(self, tmp_path: Path) -> None:
+        from manhwa2vid.models import Timeline
+
+        _block_meta(tmp_path, ["p0006_01", "p0012_01"], [0, 1, 0, 2])
+        ids = ["p0002_01", "p0008_01", "p0003_01", "p0015_01"]
+        timeline = Timeline(
+            entries=[_entry(pid, i * 3.0, 3.0, i + 1) for i, pid in enumerate(ids)],
+            total_duration=12.0,
+        )
+        gates = _gates(tmp_path, self._beats(ids), self._panels(), timeline)
+        assert gates["reading-order"]["status"] == PASS
+        assert gates["reading-order"]["data"]["observed_visits"] == [0, 1, 0, 2]
+
+    def test_an_unplanned_extra_visit_fails(self, tmp_path: Path) -> None:
+        """A rogue borrow into an earlier block adds a visit nobody planned."""
+        from manhwa2vid.models import Timeline
+
+        _block_meta(tmp_path, ["p0006_01", "p0012_01"], [0, 1, 2])
+        ids = ["p0002_01", "p0008_01", "p0003_01", "p0015_01"]
+        timeline = Timeline(
+            entries=[_entry(pid, i * 3.0, 3.0, i + 1) for i, pid in enumerate(ids)],
+            total_duration=12.0,
+        )
+        gates = _gates(tmp_path, self._beats(ids), self._panels(), timeline)
+        assert gates["reading-order"]["status"] == FAIL
+        assert "not a subsequence" in gates["reading-order"]["details"]
+
+    def test_a_vanished_visit_is_allowed(self, tmp_path: Path) -> None:
+        """A visit whose sentences all became holds legitimately never reaches the
+        screen — subsequence, not equality."""
+        from manhwa2vid.models import Timeline
+
+        _block_meta(tmp_path, ["p0006_01", "p0012_01"], [0, 1, 0, 2])
+        ids = ["p0002_01", "p0015_01"]
+        timeline = Timeline(
+            entries=[_entry(pid, i * 3.0, 3.0, i + 1) for i, pid in enumerate(ids)],
+            total_duration=6.0,
+        )
+        gates = _gates(tmp_path, self._beats(ids), self._panels(), timeline)
+        assert gates["reading-order"]["status"] == PASS
+
+    def test_a_rewind_inside_one_visit_still_fails(self, tmp_path: Path) -> None:
+        """The original watched defect was a 26-71 panel jump WITHIN a block."""
+        from manhwa2vid.models import Timeline
+
+        _block_meta(tmp_path, ["p0006_01"], [0, 1])
+        ids = ["p0008_01", "p0020_01", "p0009_01"]     # 11 back inside block 1
+        timeline = Timeline(
+            entries=[_entry(pid, i * 3.0, 3.0, i + 1) for i, pid in enumerate(ids)],
+            total_duration=9.0,
+        )
+        gates = _gates(tmp_path, self._beats(ids), self._panels(), timeline)
+        assert gates["reading-order"]["status"] == FAIL
+        assert "p0009_01" in gates["reading-order"]["details"]
+
+    def test_no_metadata_keeps_the_old_global_rule(self, tmp_path: Path) -> None:
+        """Old artifacts and projects with no printed jumps must be unaffected."""
+        from manhwa2vid.models import Timeline
+
+        ids = ["p0018_01", "p0002_01"]
+        timeline = Timeline(
+            entries=[_entry(pid, i * 3.0, 3.0, i + 1) for i, pid in enumerate(ids)],
+            total_duration=6.0,
+        )
+        gates = _gates(tmp_path, self._beats(ids), self._panels(), timeline)
+        assert gates["reading-order"]["status"] == FAIL

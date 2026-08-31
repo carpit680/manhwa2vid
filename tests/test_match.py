@@ -807,3 +807,95 @@ def test_second_pass_drops_scattershot_claims():
         M.collect_claims = orig
     assert (3, "p0007_01") in out
     assert not any(n == 2 for n, _ in out), "a scattershot sentence survived"
+
+
+class TestBlockReEntry:
+    """Frozen Player tells chapter 1 out of page order: cold-open fight, "76 HOURS
+    EARLIER" flashback, then a RETURN to the fight. `block_of` was monotonic by
+    construction, so the returning paragraph was stranded in the flashback with zero
+    claims — 11 sentences describing a sword fight played over three panels of empty
+    sky, and 18 of the fight block's 29 panels never appeared."""
+
+    class _P:
+        def __init__(self, pid):
+            self.id = pid
+            self.image_path = f"panels/{pid}.png"
+
+    def _blocks(self):
+        cold = [self._P(f"c{i}") for i in range(10)]      # block 0, fight
+        flash = [self._P(f"f{i}") for i in range(10)]     # block 1, flashback
+        return [cold, flash]
+
+    def test_a_starving_announcing_paragraph_returns_to_the_block_it_describes(self):
+        from manhwa2vid.script import match as M
+
+        numbered = [(n, "t", 1) for n in range(1, 4)] + [(n, "t", 2) for n in range(4, 9)]
+        block_of = [0, 0, 0, 1, 1, 1, 1, 1]
+        per_block = {
+            0: {"raw": [(1, "c0"), (2, "c1")], "kept": [(1, "c0"), (2, "c1")], "second": []},
+            1: {"raw": [], "kept": [], "second": []},      # beat 2 is starving
+        }
+
+        def probe(sents, panels, paths, config, pages=None, system=None):
+            assert pages is None, "the probe must not be page-scoped — see the docstring"
+            ids = [p.id for p in panels]
+            assert "c0" not in ids and "c1" not in ids, "probe saw USED panels"
+            return [(4, "c4"), (5, "c5"), (6, "c6"), (7, "c7")]
+
+        orig = M.collect_claims
+        M.collect_claims = probe
+        try:
+            moves = M.resolve_returns({2}, numbered, block_of, self._blocks(),
+                                      per_block, {}, {})
+        finally:
+            M.collect_claims = orig
+        assert moves and moves[0]["to"] == 0
+        assert block_of == [0, 0, 0, 0, 0, 0, 0, 0], block_of
+        kept_pids = [pid for _n, pid in per_block[0]["kept"]]
+        assert len(kept_pids) == len(set(kept_pids)), "the return replayed a panel"
+        assert "c0" in kept_pids and "c4" in kept_pids
+
+    def test_a_healthy_paragraph_is_never_moved(self):
+        """Solo Leveling has announcing phrases that are NOT returns; it must be
+        untouched. Evidence, not text, is what decides."""
+        from manhwa2vid.script import match as M
+
+        numbered = [(n, "t", 1) for n in range(1, 4)] + [(n, "t", 2) for n in range(4, 9)]
+        block_of = [0, 0, 0, 1, 1, 1, 1, 1]
+        per_block = {
+            0: {"raw": [], "kept": [], "second": []},
+            1: {"raw": [], "kept": [(4, "f0"), (5, "f1"), (6, "f2"), (7, "f3")], "second": []},
+        }
+        called = []
+        orig = M.collect_claims
+        M.collect_claims = lambda *a, **k: called.append(1) or []
+        try:
+            moves = M.resolve_returns({2}, numbered, block_of, self._blocks(),
+                                      per_block, {}, {})
+        finally:
+            M.collect_claims = orig
+        assert moves == [] and not called, "a healthy paragraph was probed"
+        assert block_of == [0, 0, 0, 1, 1, 1, 1, 1]
+
+    def test_scattered_probe_claims_are_declined(self):
+        """A willing model scatters claims. They must survive the monotonic filter
+        against the target block's existing chain, or the return is refused."""
+        from manhwa2vid.script import match as M
+
+        numbered = [(n, "t", 1) for n in range(1, 4)] + [(n, "t", 2) for n in range(4, 9)]
+        block_of = [0, 0, 0, 1, 1, 1, 1, 1]
+        per_block = {
+            0: {"raw": [(1, "c8"), (2, "c9")], "kept": [(1, "c8"), (2, "c9")], "second": []},
+            1: {"raw": [], "kept": [], "second": []},
+        }
+        # every probe claim sits BEFORE the existing chain's panels and behind its
+        # high-water by more than SCENE_RADIUS, so the filter destroys them
+        orig = M.collect_claims
+        M.collect_claims = lambda *a, **k: [(4, "c0"), (5, "c0"), (6, "c0")]
+        try:
+            moves = M.resolve_returns({2}, numbered, block_of, self._blocks(),
+                                      per_block, {}, {})
+        finally:
+            M.collect_claims = orig
+        assert moves == []
+        assert block_of == [0, 0, 0, 1, 1, 1, 1, 1]

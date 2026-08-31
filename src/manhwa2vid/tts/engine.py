@@ -303,31 +303,81 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
     # what notices the next unconstrained search however it arrives.
     from manhwa2vid.script.match import SCENE_RADIUS
 
-    # Tolerance matches the matcher's (user decision 2026-08-30): a backward cut of up
-    # to SCENE_RADIUS panels is same-scene editing — close-up, then the establishing
-    # shot. Measured against the HIGH-WATER position, so small steps cannot compound
-    # into a rewind. The 26-71 panel jumps originally reported stay inversions.
+    # Reading order is checked WITHIN a time block, and block CHANGES are checked
+    # structurally. A chapter told out of page order — cold open, flashback, return —
+    # makes the return a legitimate 46-panel backward jump; judging it globally would
+    # fail an artifact that is correct. Judging only globally is also what let 11
+    # sentences of Frozen Player fight narration play over sky.
+    #
+    # Tolerance inside a block is unchanged (user decision 2026-08-30): a backward cut
+    # of up to SCENE_RADIUS is same-scene editing — close-up, then the establishing
+    # shot — measured from the HIGH-WATER position so small steps cannot compound. The
+    # 26-71 panel jumps originally reported were WITHIN one block and still fail.
     order_of = {p.id: i for i, p in enumerate(panels)}
-    inversions = []
+    import json as _json
+
+    _sl_path = paths["script_shotlist_json"]
+    _sl = _json.loads(_sl_path.read_text(encoding="utf-8")) if _sl_path.exists() else {}
+    meta = _sl.get("time_blocks") or {}
+    expected_visits = list(meta.get("visits") or [])
+    cuts = sorted({order_of[b] for b in (meta.get("boundaries") or []) if b in order_of})
+
+    def _block_at(pos: int | None) -> int:
+        if pos is None:
+            return 0
+        return sum(1 for c in cuts if c <= pos)
+
+    inversions: list[str] = []
     clock = 0.0
+    observed: list[int] = []
     high = -1
-    for prev_run, run in zip(runs_all, runs_all[1:]):
-        clock += prev_run["seconds"]
-        a, b = order_of.get(prev_run["panel_id"]), order_of.get(run["panel_id"])
-        if a is not None:
-            high = max(high, a)
-        if a is not None and b is not None and b < high - SCENE_RADIUS and b < a:
-            inversions.append(
-                f"{prev_run['panel_id']}(#{a}) -> {run['panel_id']}(#{b}) at {clock:.1f}s"
-            )
+    prev_block: int | None = None
+    for prev_run, run in zip([None, *runs_all], runs_all):
+        if prev_run is not None:
+            clock += prev_run["seconds"]
+        pos = order_of.get(run["panel_id"])
+        blk = _block_at(pos)
+        if not observed or observed[-1] != blk:
+            observed.append(blk)
+            high = -1                      # each visit re-opens its own high-water
+        if pos is not None and prev_block == blk:
+            if pos < high - SCENE_RADIUS:
+                prev_id = prev_run["panel_id"] if prev_run else "?"
+                inversions.append(
+                    f"{prev_id}(#{order_of.get(prev_id)}) -> {run['panel_id']}(#{pos}) "
+                    f"at {clock:.1f}s"
+                )
+            high = max(high, pos)
+        elif pos is not None:
+            high = max(high, pos)
+        prev_block = blk
+
+    # The visit SEQUENCE must be one the aligner planned. A subsequence, not equality:
+    # a visit whose sentences all became holds legitimately disappears from the screen.
+    # A rogue borrow into an earlier block mid-chapter adds a visit that is not in the
+    # plan, so [0,1,0,2,0,2] is not a subsequence of [0,1,0,2] and fails.
+    def _is_subsequence(small: list[int], big: list[int]) -> bool:
+        it = iter(big)
+        return all(any(x == y for y in it) for x in small)
+
+    structural: list[str] = []
+    if expected_visits and not _is_subsequence(observed, expected_visits):
+        structural.append(
+            f"block visits {observed} are not a subsequence of the planned "
+            f"{expected_visits}"
+        )
+
+    problems = structural + inversions
     report.add(
         "reading-order",
-        not inversions,
-        "; ".join(inversions[:4]) + " — the timeline rewinds past art already shown"
-        if inversions
+        not problems,
+        "; ".join(problems[:4]) + " — the timeline rewinds past art already shown"
+        if problems
         else "",
         inversions=inversions,
         inversion_count=len(inversions),
+        observed_visits=observed,
+        expected_visits=expected_visits,
     )
 
     # The last thing on screen. Frozen Player ch1-2 closed on a "WHAT?!" starburst held

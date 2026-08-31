@@ -260,6 +260,29 @@ class TimeBlocks:
         return self.blocks[block_idx]
 
 
+def return_candidates(tb: TimeBlocks) -> list[int]:
+    """Paragraphs that ANNOUNCE a jump but were not spent on a forward crossing.
+
+    These are the only paragraphs that may be re-assigned to an earlier block. The
+    nomination is deliberately cheap and permissive — `_TIME_JUMP_RE` cannot tell a
+    return from a departure ("seventy-six hours later" is either, depending on where you
+    stand), and it certainly cannot name the target block. Confirmation is the matcher's
+    job: `match.resolve_returns` accepts a candidate only when the vision model claims
+    an earlier block's UNUSED panels for its sentences, and the claims survive the
+    monotonic filter.
+
+    Text alone was tried on paper and rejected: Solo Leveling has three announcing
+    phrases against one printed marker, so two announcing paragraphs remain unspent
+    there. Under a text-only rule both become false returns on the title that must stay
+    byte-identical.
+    """
+    spent = set(tb.crossings)
+    return [
+        i for i, announces in enumerate(tb.announcing)
+        if announces and i not in spent and tb.block_of[i] > 0
+    ]
+
+
 def clamp_to_time_blocks(
     panel_lists: list[list[str]],
     para_texts: list[str],
@@ -545,13 +568,13 @@ def _sentence_page_ranges(
     return ranges
 
 
-def _retry_once(fn, *, what: str) -> None:
-    """Run `fn`; on failure retry once; on the second failure RAISE."""
+def _retry_once(fn, *, what: str):
+    """Run `fn`; on failure retry once; on the second failure RAISE. Returns fn()."""
     try:
-        fn()
+        return fn()
     except Exception as exc:  # noqa: BLE001 — retried once, then loud
         console.print(f"[yellow]{what} failed ({exc}) — retrying once[/]")
-        fn()
+        return fn()
 
 
 def _build_shotlist_for(
@@ -564,7 +587,9 @@ def _build_shotlist_for(
     paths: dict[str, Path],
     config: dict[str, Any],
     alignment_map: list[dict[str, Any]] | None = None,
-) -> None:
+    return_candidate_paras: list[int] | None = None,
+    boundary_ids: list[str] | None = None,
+) -> dict[str, Any] | None:
     """Run the matcher over each time block and persist the shot list.
 
     Candidates for a block are that block's panels — a claim can never cross a printed
@@ -584,9 +609,12 @@ def _build_shotlist_for(
     blocks_panels = [
         [by_id[pid] for pid in ordered_ids[lo:hi] if pid in by_id] for lo, hi in blocks
     ]
-    build_shotlist(
+    return build_shotlist(
         beats_sentences, blocks_panels, block_of_sentence, paths, config,
         sentence_pages=_sentence_page_ranges(para_texts, alignment_map or []),
+        # beat_id is paragraph index + 1 (see `beats_sentences` above).
+        return_candidate_beats={i + 1 for i in (return_candidate_paras or [])},
+        boundary_ids=boundary_ids,
     )
 
 
@@ -668,16 +696,15 @@ def align_script(
             crossings=[],
         )
     blocks, block_of = time_blocks.blocks, time_blocks.block_of
-    panel_lists = distribute_within_blocks(
-        panel_lists, ordered_ids, block_of, blocks, min_panels
-    )
-
-    # Content matching: which panels actually DEPICT each sentence. The arithmetic
-    # distribution above still decides each paragraph's territory (and remains the
-    # fallback), but within it the shot list decides what is on screen. Measured on the
-    # arithmetic-only videos: 86% (FP) and 93% (SL) of matchable sentences were showing
-    # a panel that does not depict them, because even apportionment desynchronises from
-    # narration that compresses.
+    # Content matching runs BEFORE distribution, because it can move a paragraph to an
+    # earlier block: a chapter told out of page order (cold open, flashback, RETURN)
+    # leaves the returning paragraph stranded with no art it can claim. Distribution
+    # then apportions each block among its final members — including a block entered
+    # twice, which it already handles: members are laid front-to-back in paragraph
+    # order, so the cold open takes the block's head and the return its tail.
+    #
+    # `_build_shotlist_for` never reads `panel_lists` (dead parameter), so nothing here
+    # depends on distribution having run.
     if get_nested(config, "align", "match_enabled", default=True):
         # One retry, then RAISE. "Matching is an improvement, never a hard dependency"
         # was the doctrine here, and it was wrong twice on the same day: a swallowed
@@ -685,13 +712,27 @@ def align_script(
         # fell back to airtime weighting, and the only gate that notices
         # (timing-measured) runs AFTER the TTS money is spent. A missing shotlist must
         # stop the stage while stopping is still cheap.
-        _retry_once(
+        shotlist = _retry_once(
             lambda: _build_shotlist_for(
                 para_texts, panel_lists, ordered_ids, block_of, blocks, panels, paths,
                 config, alignment_map=entries,
+                return_candidate_paras=return_candidates(time_blocks),
+                boundary_ids=boundary_ids,
             ),
             what="Shot matching",
         )
+        # Adopt any confirmed return: the shot list carries each sentence's final block.
+        if shotlist and (shotlist.get("time_blocks") or {}).get("returns"):
+            by_beat: dict[int, int] = {}
+            for sent in shotlist["sentences"]:
+                by_beat.setdefault(int(sent["beat_id"]), int(sent.get("block", 0)))
+            block_of = [by_beat.get(i + 1, b) for i, b in enumerate(block_of)]
+            time_blocks.block_of = block_of
+            console.print(f"[dim]Align: block visits {time_blocks.visits}[/]")
+
+    panel_lists = distribute_within_blocks(
+        panel_lists, ordered_ids, block_of, blocks, min_panels
+    )
 
     beats = [
         ScriptBeat(

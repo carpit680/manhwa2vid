@@ -320,6 +320,110 @@ def _second_pass_claims(
     return out
 
 
+#: A candidate paragraph must be this starved at home before a return is even probed.
+_RETURN_STARVED_MAX = 0.25
+#: ...and the probe must claim at least this share of its sentences, and this many.
+_RETURN_PROBE_MIN_FRAC = 0.50
+_RETURN_PROBE_MIN_SENTENCES = 3
+
+
+def _coverage(sent_numbers: list[int], claims: list[tuple[int, str]]) -> float:
+    if not sent_numbers:
+        return 1.0
+    have = {no for no, _pid in claims} & set(sent_numbers)
+    return len(have) / len(sent_numbers)
+
+
+def resolve_returns(
+    candidate_beats: set[int],
+    numbered: list[tuple[int, str, int]],
+    block_of_sentence: list[int],
+    blocks_panels: list[list[Panel]],
+    per_block: dict[int, dict[str, Any]],
+    paths: dict[str, Path],
+    config: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Move a starving announcing paragraph to the earlier block whose art it describes.
+
+    Frozen Player tells chapter 1 out of page order — cold-open fight, "76 HOURS
+    EARLIER" flashback, then RETURN to the fight — and `block_of` was monotonic by
+    construction, so the returning paragraph was stranded in the flashback with zero
+    claims. Eleven sentences describing a sword fight played over three panels of empty
+    sky, and 18 of the fight block's 29 panels were never shown at all.
+
+    Text nominates (`align.return_candidates`), evidence decides. The regex cannot tell
+    a return from a departure — "seventy-six hours later" is either, depending where you
+    stand — and cannot name a target block. So each candidate is probed against earlier
+    blocks and accepted only on claims.
+
+    Two details are load-bearing:
+
+    - the probe passes `sentence_pages=None`. `_window_sentences` scopes windows by the
+      aligner's advisory page map, and a returning paragraph's advisory pages point PAST
+      the boundary — that misalignment is exactly why `clamp_to_time_blocks` cannot
+      trust position. With scoping on, the probe would be filtered to nothing and the
+      fix would fail silently in today's shape.
+    - the probe sees only the target block's UNUSED panels, so an accepted return cannot
+      replay the cold open; `no-repeated-panels` stays true by construction.
+
+    Acceptance also requires the claims to survive `filter_monotonic` against the target
+    block's existing chain — a willing model scatters claims, and the DP destroys the
+    ones that fight the chain.
+    """
+    moves: list[dict[str, Any]] = []
+    by_beat: dict[int, list[tuple[int, str]]] = {}
+    for no, text, beat_id in numbered:
+        by_beat.setdefault(beat_id, []).append((no, text))
+
+    for beat_id in sorted(candidate_beats):
+        sents = by_beat.get(beat_id) or []
+        if not sents:
+            continue
+        nums = [no for no, _t in sents]
+        home = block_of_sentence[nums[0] - 1]
+        if home <= 0:
+            continue
+        home_cov = _coverage(nums, per_block.get(home, {}).get("kept", []))
+        if home_cov > _RETURN_STARVED_MAX:
+            continue
+
+        for target in range(home - 1, -1, -1):
+            entry = per_block.get(target)
+            if not entry:
+                continue
+            panels = blocks_panels[target]
+            used = {pid for _no, pid in entry["kept"]}
+            spare = [p for p in panels if p.id not in used]
+            if len(spare) < _RETURN_PROBE_MIN_SENTENCES:
+                continue
+            probe = collect_claims(sents, spare, paths, config, None)
+            cov = _coverage(nums, probe)
+            if cov < _RETURN_PROBE_MIN_FRAC or len({n for n, _ in probe}) < _RETURN_PROBE_MIN_SENTENCES:
+                continue
+            if cov <= home_cov:
+                continue
+            merged = filter_monotonic(
+                entry["raw"] + probe, [p.id for p in panels]
+            )
+            if _coverage(nums, merged) < _RETURN_PROBE_MIN_FRAC:
+                continue  # the chain destroyed them: scattered, not depicted
+            entry["raw"] = entry["raw"] + probe
+            entry["kept"] = merged
+            for no in nums:
+                block_of_sentence[no - 1] = target
+            moves.append({
+                "beat": beat_id, "from": home, "to": target,
+                "sentences": nums, "home_coverage": round(home_cov, 3),
+                "probe_coverage": round(cov, 3),
+            })
+            console.print(
+                f"[dim]Match: beat {beat_id} returns to block {target} "
+                f"({int(cov * 100)}% of its sentences claim its unused panels)[/]"
+            )
+            break
+    return moves
+
+
 def build_shotlist(
     beats_sentences: list[tuple[int, list[str]]],
     blocks_panels: list[list[Panel]],
@@ -327,6 +431,8 @@ def build_shotlist(
     paths: dict[str, Path],
     config: dict[str, Any],
     sentence_pages: dict[int, tuple[int, int]] | None = None,
+    return_candidate_beats: set[int] | None = None,
+    boundary_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Match every block, save the claims artifact, return it.
 
@@ -341,8 +447,12 @@ def build_shotlist(
             n += 1
             numbered.append((n, text, beat_id))
 
-    all_claims: list[tuple[int, str]] = []
-    claims_debug: list[dict[str, Any]] = []
+    # PASS 1 — every block once, exactly as before. `filter_monotonic` runs ONCE per
+    # block over that block's whole panel order, never once per visit: its strictly
+    # increasing chain plus radius-recovery is what makes a block repeat-free, and two
+    # independent filter calls for two visits of one block would reintroduce repeats.
+    block_of_sentence = list(block_of_sentence)   # resolve_returns rewrites entries
+    per_block: dict[int, dict[str, Any]] = {}
     for block_idx, panels in enumerate(blocks_panels):
         block_sents = [
             (no, text) for (no, text, _b) in numbered
@@ -356,6 +466,28 @@ def build_shotlist(
             f"[dim]Match: block {block_idx} — {len(raw)} claim(s), "
             f"{len(kept)} after monotonic filter[/]"
         )
+        per_block[block_idx] = {"raw": raw, "kept": kept, "second": []}
+
+    # RETURN RESOLUTION — before the second pass, deliberately: the second pass's
+    # willing framing would otherwise scrape claims for a returning paragraph against
+    # the WRONG block's panels and park it there permanently.
+    moves = resolve_returns(
+        return_candidate_beats or set(), numbered, block_of_sentence,
+        blocks_panels, per_block, paths, config,
+    )
+
+    # PASS 2 — the willing re-ask for long unclaimed runs, with final membership.
+    all_claims: list[tuple[int, str]] = []
+    claims_debug: list[dict[str, Any]] = []
+    for block_idx, panels in enumerate(blocks_panels):
+        entry = per_block.get(block_idx)
+        if not entry:
+            continue
+        block_sents = [
+            (no, text) for (no, text, _b) in numbered
+            if block_of_sentence[no - 1] == block_idx
+        ]
+        raw, kept = entry["raw"], entry["kept"]
         second = _second_pass_claims(block_sents, panels, kept, paths, config)
         if second:
             kept = filter_monotonic(raw + second, [p.id for p in panels])
@@ -379,7 +511,7 @@ def build_shotlist(
     debug_dir = paths["debug"]
     debug_dir.mkdir(parents=True, exist_ok=True)
     (debug_dir / "match_claims.json").write_text(
-        json.dumps({"blocks": claims_debug}, indent=1), encoding="utf-8"
+        json.dumps({"blocks": claims_debug, "returns": moves}, indent=1), encoding="utf-8"
     )
 
     claims_by_number: dict[int, list[str]] = {}
@@ -400,6 +532,20 @@ def build_shotlist(
         ):
             outro_beat = last_beat
 
+    # Block identity crosses the STAGE boundary here. TTS/timeline is a separate process
+    # invocation, so nothing in memory survives — the shotlist is the carrier, and the
+    # planner and the reading-order gate both read it.
+    #
+    # Boundaries are persisted as panel IDS, never index ranges: align's `ordered_ids`,
+    # engine's `fill_order` and the gate's panel list each apply DIFFERENT exclusions,
+    # so an index-space block would silently mean three different things. Each consumer
+    # resolves the ids against its own order.
+    visits: list[int] = []
+    for no, _t, _b in numbered:
+        b = block_of_sentence[no - 1]
+        if not visits or visits[-1] != b:
+            visits.append(b)
+
     shotlist = {
         "sentences": [
             {
@@ -407,10 +553,16 @@ def build_shotlist(
                 "beat_id": beat_id,
                 "text": text,
                 "panels": claims_by_number.get(no, []),
+                "block": block_of_sentence[no - 1],
                 **({"outro": True} if beat_id == outro_beat else {}),
             }
             for (no, text, beat_id) in numbered
-        ]
+        ],
+        "time_blocks": {
+            "boundaries": list(boundary_ids or []),
+            "visits": visits,
+            "returns": moves,
+        },
     }
     save_json(paths["script_shotlist_json"], shotlist)
     matched = sum(1 for s in shotlist["sentences"] if s["panels"])
@@ -473,6 +625,11 @@ def plan_shots(
     return {beat: [(pid, sec) for pid, sec, _nums in shots] for beat, shots in result.items()}
 
 
+def _bounds_for(block_bounds: dict[int, tuple[int, int]], block: int):
+    """This block's panel range, or None when the shotlist carries no block metadata."""
+    return block_bounds.get(block) if block_bounds else None
+
+
 def _gap_spare(
     panel_order: list[str],
     order_pos: dict[str, int],
@@ -480,6 +637,7 @@ def _gap_spare(
     next_pid: str | None,
     used: set[str],
     text_only: set[str] | None,
+    bounds: tuple[int, int] | None = None,
 ) -> str | None:
     """The one panel a substitution may use: the first unused panel STRICTLY BETWEEN
     the panels shown before and after it in reading order. None if the gap is empty.
@@ -501,6 +659,14 @@ def _gap_spare(
     """
     lo = order_pos.get(prev_pid, -1) if prev_pid is not None else -1
     hi = order_pos.get(next_pid, len(panel_order)) if next_pid is not None else len(panel_order)
+    # A substitution may never leave its TIME BLOCK. Without this the fill and every
+    # borrow can walk across a printed skip and show the next era's art before its own
+    # caption — the defect `clamp_to_time_blocks` exists to prevent, reachable here
+    # because this function works in global reading-order positions.
+    if bounds is not None:
+        blo, bhi = bounds
+        lo = max(lo, blo - 1)
+        hi = min(hi, bhi)
     # Forward first — the natural continuation. Failing that, up to SCENE_RADIUS panels
     # behind the previous shown panel (2026-08-30, with the matcher and the gate):
     # unused same-scene art beats holding one image, and the radius keeps it a cut
@@ -508,7 +674,10 @@ def _gap_spare(
     for pid in panel_order[lo + 1 : hi]:
         if pid not in used and pid not in (text_only or ()):
             return pid
-    for pid in reversed(panel_order[max(0, lo - SCENE_RADIUS) : lo + 1]):
+    back_floor = max(0, lo - SCENE_RADIUS)
+    if bounds is not None:
+        back_floor = max(back_floor, bounds[0])
+    for pid in reversed(panel_order[back_floor : lo + 1]):
         if pid not in used and pid not in (text_only or ()):
             return pid
     return None
@@ -550,6 +719,22 @@ def plan_shots_with_sentences(
     caller then falls back to the weight path rather than guessing.
     """
     sentences = shotlist.get("sentences") or []
+    # Block ranges in THIS caller's panel_order coordinates. Resolved from panel IDS,
+    # never persisted indices: align's ordered_ids, the engine's fill_order and the
+    # gate's panel list apply different exclusions, so an index would mean three
+    # different things. A boundary panel missing from this order (it may have been
+    # filtered as text-dominant) falls to the next id that IS present.
+    block_bounds: dict[int, tuple[int, int]] = {}
+    if panel_order:
+        meta = (shotlist.get("time_blocks") or {}) if isinstance(shotlist, dict) else {}
+        pos_all = {pid: i for i, pid in enumerate(panel_order)}
+        cuts = sorted({pos_all[b] for b in (meta.get("boundaries") or []) if b in pos_all})
+        edges = [0, *cuts, len(panel_order)]
+        for i in range(len(edges) - 1):
+            block_bounds[i] = (edges[i], edges[i + 1])
+    block_of_number: dict[int, int] = {
+        int(sent.get("number", 0)): int(sent.get("block", 0)) for sent in sentences
+    }
     by_beat: dict[int, list[dict[str, Any]]] = {}
     for sent in sentences:
         by_beat.setdefault(int(sent["beat_id"]), []).append(sent)
@@ -570,6 +755,10 @@ def plan_shots_with_sentences(
                     "number": int(sent.get("number", 0)),
                     "seconds": max(float(seg.get("seconds", 0.0)), 0.0),
                     "panels": list(sent.get("panels") or []),
+                    # The sentence's TIME BLOCK, so every substitution below can stay
+                    # inside it. Absent (older shotlists) -> 0 -> one implicit block
+                    # spanning everything -> today's behaviour exactly.
+                    "block": int(sent.get("block", 0)),
                 }
             )
 
@@ -611,7 +800,10 @@ def plan_shots_with_sentences(
                     next((q for j in range(idx + 1, len(flat))
                           for q in flat[j]["panels"] if q in art_at), None),
                 )
-                pick = _gap_spare(panel_order, art_at, prev_pid, next_pid, taken, text_only)
+                pick = _gap_spare(
+                    panel_order, art_at, prev_pid, next_pid, taken, text_only,
+                    _bounds_for(block_bounds, item.get("block", 0)),
+                )
                 if pick is None:
                     swapped.append(pid)      # empty gap — keep the text claim
                 else:
@@ -642,9 +834,18 @@ def plan_shots_with_sentences(
             )
             if prev_anchor is not None and next_anchor is not None:
                 lo, hi = pos[prev_anchor], pos[next_anchor]
+                # The gap intersects the RUN'S OWN BLOCK. Without this the fill can
+                # reach across a printed time skip: Frozen Player's returning fight
+                # narration sat beside the "25 YEARS LATER" seam and would be handed
+                # sky panels from the next era.
+                run_block = flat[i].get("block", 0)
+                rb = _bounds_for(block_bounds, run_block)
+                g_lo, g_hi = (lo + 1, hi)
+                if rb is not None:
+                    g_lo, g_hi = max(g_lo, rb[0]), min(g_hi, rb[1])
                 gap = [
                     pid
-                    for pid in panel_order[lo + 1 : hi]
+                    for pid in panel_order[g_lo:g_hi]
                     if pid not in claimed and pid not in (text_only or ())
                 ]
                 if gap:
@@ -700,7 +901,10 @@ def plan_shots_with_sentences(
                 next((q for later in flat[item_idx + 1:]
                       for q in later["panels"] if q in pos), None),
             )
-            nxt = _gap_spare(panel_order, pos, last, after, claimed, text_only)
+            nxt = _gap_spare(
+                panel_order, pos, last, after, claimed, text_only,
+                _bounds_for(block_bounds, item.get("block", 0)),
+            )
             if nxt is not None:
                 item["panels"][0] = nxt
                 claimed.add(nxt)
@@ -906,7 +1110,13 @@ def plan_shots_with_sentences(
                 plan[flat_shots[k + 1][0]][flat_shots[k + 1][1]][0]
                 if k + 1 < len(flat_shots) else None
             )
-            spare = _gap_spare(panel_order, order_pos, cur[0], shown_next, used, text_only)
+            cur_block = next(
+                (block_of_number.get(n, 0) for n in cur[2]), 0
+            )
+            spare = _gap_spare(
+                panel_order, order_pos, cur[0], shown_next, used, text_only,
+                _bounds_for(block_bounds, cur_block),
+            )
             if spare is None:
                 continue  # an unrelated image is still worse than a long one
             plan[cb][ci] = (spare, cur[1], cur[2])
@@ -934,6 +1144,13 @@ def plan_shots_with_sentences(
             npid, nsec, nnums = plan[nb][ni]
             if npid == pid_:
                 continue  # same-panel holds are the renderer's segmentation problem
+            # Never donate across a time skip: that plays one era's narration over the
+            # next era's art, which is the whole reason time blocks exist. Leave the
+            # long row; `shot-max-duration` reports it honestly.
+            if block_of_number.get(nums_[-1] if nums_ else 0, 0) != block_of_number.get(
+                nnums[0] if nnums else 0, 0
+            ):
+                continue
             while sec_ > max_shot and len(nums_) > 1:
                 share = sec_ / len(nums_)
                 moved = nums_[-1]

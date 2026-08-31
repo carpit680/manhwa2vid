@@ -65,15 +65,31 @@ def scan_order(project: Path) -> tuple[list[str], dict[str, int]]:
     # the HIGH-WATER position is same-scene editing (close-up, then the establishing
     # shot). Only longer rewinds are inversions. Keeping this tool on the old strict
     # rule made it report 22 "inversions" on a render the gate passed.
+    # Block-aware, mirroring the gate: order is checked WITHIN a visit, and each visit
+    # re-opens its own high-water. A chapter told out of page order makes the return a
+    # legitimate large backward jump.
+    sl_path = project / "script.shotlist.json"
+    meta = {}
+    if sl_path.exists():
+        meta = (json.loads(sl_path.read_text()).get("time_blocks") or {})
+    cuts = sorted({order[b] for b in (meta.get("boundaries") or []) if b in order})
+    block_at = lambda pos: sum(1 for c in cuts if c <= pos)
+
     runs = merged_runs(tl)
-    inversions, clock, high = [], 0.0, -1
-    for prev, run in zip(runs, runs[1:]):
-        clock += prev["seconds"]
-        a, b = order.get(prev["panel_id"]), order.get(run["panel_id"])
-        if a is not None:
-            high = max(high, a)
-        if a is not None and b is not None and b < high - SCENE_RADIUS and b < a:
-            inversions.append(f"{prev['panel_id']}(#{a}) -> {run['panel_id']}(#{b}) at {clock:.1f}s")
+    inversions, clock, high, prev_block = [], 0.0, -1, None
+    for prev, run in zip([None, *runs], runs):
+        if prev is not None:
+            clock += prev["seconds"]
+        b = order.get(run["panel_id"])
+        blk = block_at(b) if b is not None else 0
+        if blk != prev_block:
+            high = -1
+        if b is not None and blk == prev_block and b < high - SCENE_RADIUS:
+            pid = prev["panel_id"] if prev else "?"
+            inversions.append(f"{pid}(#{order.get(pid)}) -> {run['panel_id']}(#{b}) at {clock:.1f}s")
+        if b is not None:
+            high = max(high, b)
+        prev_block = blk
     repeats = {k: v for k, v in Counter(r["panel_id"] for r in runs).items() if v > 1}
     return inversions, repeats
 
