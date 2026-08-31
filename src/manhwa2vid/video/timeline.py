@@ -490,4 +490,68 @@ def build_timeline(
             f"{drop_floor:.1f}s each — {len(entries)} shown"
         )
 
+    entries = _enforce_reading_order(entries, all_ids, audio_dir.parent)
     return Timeline(entries=entries, total_duration=cursor, fps=fps, dropped_panels=dropped)
+
+
+def _enforce_reading_order(
+    entries: list[TimelineEntry], all_ids: list[str], project_root: Path
+) -> list[TimelineEntry]:
+    """Make the finished entry list satisfy the invariant `reading-order` checks.
+
+    The planner enforces this too, but it is not the only producer: a beat whose plan
+    rows do not survive falls back to `_resolve_panels_for_beat`, which hands over the
+    beat's ALIGNED territory and knows nothing about blocks or high-water. On Frozen
+    Player that put beat 10's fill at panel #94 immediately after beat 9 closed on
+    #102 — an 8-panel rewind the planner had already cleaned from its own output, and
+    the reason the same inversion survived three fixes upstream.
+
+    This is the last stage before the gate and sees exactly what the gate sees, so it
+    is the honest place for the invariant. Rules match the gate's: order is judged
+    within a time-block visit, each visit re-opens its own high-water, and the
+    tolerance is SCENE_RADIUS. A rewinding entry is re-pointed to the previous panel —
+    a hold, always legal and always in-block.
+
+    Only entries whose panel NO SENTENCE CLAIMS are moved. A claimed panel that
+    rewinds is a genuine binding defect and must reach the gate rather than be hidden.
+    """
+    import json as _json
+
+    from manhwa2vid.script.match import SCENE_RADIUS
+
+    if not entries:
+        return entries
+    pos = {pid: i for i, pid in enumerate(all_ids)}
+    sl_path = project_root / "script.shotlist.json"
+    claimed: set[str] = set()
+    cuts: list[int] = []
+    if sl_path.exists():
+        sl = _json.loads(sl_path.read_text(encoding="utf-8"))
+        for sent in sl.get("sentences") or []:
+            claimed.update(sent.get("panels") or [])
+        meta = sl.get("time_blocks") or {}
+        cuts = sorted({pos[b] for b in (meta.get("boundaries") or []) if b in pos})
+
+    def block_at(q: int) -> int:
+        return sum(1 for c in cuts if c <= q)
+
+    high, prev_blk, prev_pid = -1, None, None
+    for e in entries:
+        q = pos.get(e.panel_id)
+        if q is None:
+            continue
+        blk = block_at(q)
+        if blk != prev_blk:
+            high = -1
+        if (
+            blk == prev_blk and q < high - SCENE_RADIUS
+            and e.panel_id not in claimed and prev_pid is not None
+        ):
+            e.panel_id = prev_pid
+            e.panel_path = next(
+                (x.panel_path for x in entries if x.panel_id == prev_pid), e.panel_path
+            )
+            q = pos.get(prev_pid, q)
+        high = max(high, q)
+        prev_blk, prev_pid = blk, e.panel_id
+    return entries
