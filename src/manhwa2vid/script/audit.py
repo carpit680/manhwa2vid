@@ -66,6 +66,41 @@ report the one the pages support. The facts are corroboration, not scripture: if
 pages contradict a fact, trust the pages and do not raise a finding against the
 narration for agreeing with them."""
 
+_VERIFY_SYSTEM = """You are verifying ONE claimed error in a manhwa recap against the
+page it cites. A previous pass read the whole chapter at once and reported this
+finding; roughly half of such findings are wrong — inverted attributions, details the
+page actually supports. Your job is to decide THIS one, from THESE pages only.
+
+You are given the finding and the cited page with its neighbours.
+
+Return JSON only:
+{"observed": "what these pages actually show on the disputed point — who speaks which
+line, what the art depicts — stated before any judgement",
+ "verdict": "confirmed" | "refuted",
+ "evidence": "the exact printed text (bubble, caption, system message) on these pages
+that decides it — or, if no text decides it, the specific visual detail",
+ "finding": "the error re-stated in one clean sentence, only if confirmed"}
+
+Rules:
+- Write "observed" FIRST and make the verdict follow from it — a verdict written
+  before looking is exactly the failure you are correcting.
+- confirmed means the finding's "problem" statement is EXACTLY what these pages show,
+  AND the narration quote contradicts it. If the problem statement misdescribes the
+  pages — even slightly, even if the narration has some other flaw — the verdict is
+  refuted: a wrong correction is worse than a missed one, and anything else you notice
+  is not your question. If the pages support the narration, or do not decide the
+  question, the verdict is likewise refuted — a recap is only corrected on evidence,
+  never on doubt.
+- For WHO-did-what claims: confirm only if the page itself identifies the actor —
+  a bubble tail, a printed name, or the flow of address. A line saying "YOU did X"
+  is spoken BY the other character, ABOUT the one addressed; quoting such a line
+  does not by itself tell you the speaker's name.
+- For claims about what the ART shows (anatomy, direction, injuries): confirm only
+  when the drawing is unambiguous. Gore, partial figures and motion smears are
+  routinely misread — when you cannot be certain, the verdict is refuted.
+- Quote evidence exactly as printed. Do not paraphrase printed text.
+- Judge only the cited problem. Other flaws in the narration are not your question."""
+
 _REVISE_SYSTEM = """You are correcting specific factual errors in a finished recap.
 
 Change ONLY what the findings identify. Preserve every other sentence verbatim —
@@ -184,11 +219,131 @@ def audit_script(
     data = json.loads(raw) if isinstance(raw, str) else raw
     findings = [f for f in (data.get("findings") or []) if isinstance(f, dict)]
     majors = [f for f in findings if str(f.get("severity", "")).lower() == "major"]
+    confirmed, unverified = verify_majors(majors, paths, config, provider=provider, facts=facts)
     return {
         "findings": findings,
-        "majors": majors,
+        "majors": confirmed,
+        "unverified": unverified,
         "undelivered_system_messages": _undelivered_spine(text, facts or {}),
     }
+
+
+def _pages_for_finding(page_ref: Any, pages: list[Path]) -> list[Path]:
+    """The cited page ±2, resolved leniently ("0012", "12", "page 12"), else [].
+
+    ±2, not ±1: measured on the benchmark findings, the stage-1 auditor's citations
+    run up to two pages early — the runner-bisection finding cited 0140 while the
+    deciding art (severed lower legs, upper half gone) prints on 0142."""
+    digits = re.sub(r"\D", "", str(page_ref or ""))
+    if not digits:
+        return []
+    want = int(digits)
+    for i, p in enumerate(pages):
+        stem_digits = re.sub(r"\D", "", p.stem)
+        if stem_digits and int(stem_digits) == want:
+            return pages[max(0, i - 2) : i + 3]
+    return []
+
+
+def verify_majors(
+    majors: list[dict[str, Any]],
+    paths: dict[str, Path],
+    config: dict[str, Any],
+    provider: Any = None,
+    facts: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(confirmed, unverified) — one single-page vision call per major finding.
+
+    The stage-1 auditor holds 19-156 page images in one call and demonstrably does not
+    re-examine the page it cites while writing a finding: of 8 findings checked against
+    their pages by hand (2026-08-30), 5 were false — a vendor inversion, an arm read as
+    a torso, a vertical bisection read as horizontal, two mis-attributions — and one
+    contained leaked chain-of-thought ("...but wait, let me check"). Every one was
+    decidable the moment the cited page was looked at ALONE, so that is what this stage
+    does: the finding, the cited page ±1, confirm-or-refute with the deciding text
+    quoted. Refuted or undecidable findings leave `majors` — `revise_once` acts only on
+    verified errors — but are kept under `unverified` for the human.
+
+    A finding that names no locatable page cannot be verified and is parked, not
+    trusted: an unverifiable accusation against narration that survived the writer,
+    the facts pass and the density pass is worth a human eye, never an automatic edit.
+    A provider error parks the finding the same way rather than silently accepting it.
+    """
+    if not majors:
+        return [], []
+    if provider is None:
+        from manhwa2vid.llm.provider import get_llm_provider
+
+        provider = get_llm_provider(
+            get_nested(config, "audit", "provider", default=None), config
+        )
+        model = get_nested(config, "audit", "model", default=None)
+        if model:
+            provider.vision_model = model
+        provider.temperature = 0.0
+
+    pages = sorted(paths["pages"].glob("*.png"))
+    # Who-is-who from the read pass, for attribution findings: the Kim/Song core swap
+    # is only decidable if the verifier knows Mr. Song is the orange-haired party
+    # leader — the page shows the man, the glossary names him. Cast only, not the
+    # spine: the spine narrates outcomes, and outcome text would prejudge the verdict.
+    cast_lines: list[str] = []
+    for c in (facts or {}).get("cast") or []:
+        if isinstance(c, dict) and c.get("name"):
+            note = str(c.get("note") or "").strip()
+            cast_lines.append(f"- {c['name']}{': ' + note if note else ''}")
+    cast_block = (
+        "\n\nWHO IS WHO (from a separate read of this chapter):\n" + "\n".join(cast_lines)
+        if cast_lines else ""
+    )
+    confirmed: list[dict[str, Any]] = []
+    unverified: list[dict[str, Any]] = []
+    for finding in majors:
+        cited = _pages_for_finding(finding.get("page"), pages)
+        if not cited:
+            unverified.append({**finding, "verification": "no locatable page"})
+            continue
+        prompt = (
+            f"{_VERIFY_SYSTEM}{cast_block}\n\nFINDING TO VERIFY:\n"
+            f"- narration says: {finding.get('quote', '')!r}\n"
+            f"- claimed problem: {finding.get('problem', '')}\n"
+            f"- cited page: {finding.get('page', '?')}"
+        )
+        try:
+            raw = provider.describe_labeled_panels(
+                [(f"[page {p.stem}]", p) for p in cited],
+                prompt,
+                max_width=page_max_width(config),
+            )
+            data = json.loads(raw) if isinstance(raw, str) else raw
+            verdict = str((data or {}).get("verdict", "")).lower().strip()
+        except Exception as exc:  # noqa: BLE001 — park it, never auto-accept
+            unverified.append({**finding, "verification": f"error: {exc}"})
+            continue
+        if verdict == "confirmed":
+            restated = str(data.get("finding") or "").strip()
+            confirmed.append({
+                **finding,
+                # The clean re-statement replaces the stage-1 problem text — this is
+                # where leaked chain-of-thought dies instead of reaching the reviser.
+                "problem": restated or finding.get("problem", ""),
+                "verification": {"verdict": "confirmed",
+                                 "evidence": str(data.get("evidence") or "")},
+            })
+        elif verdict == "refuted":
+            unverified.append({
+                **finding,
+                "verification": {"verdict": "refuted",
+                                 "evidence": str(data.get("evidence") or "")},
+            })
+        else:
+            unverified.append({**finding, "verification": f"unparseable verdict: {verdict!r}"})
+    if unverified:
+        console.print(
+            f"[yellow]Audit verification[/] — {len(confirmed)} confirmed, "
+            f"{len(unverified)} refuted/unverifiable finding(s) parked"
+        )
+    return confirmed, unverified
 
 
 def acceptance_failures(

@@ -129,3 +129,105 @@ def test_undelivered_system_messages_alone_trigger_a_revision(paths, monkeypatch
     out, report = revise_once("Jin-Woo waits.", _audit(missing=5), paths, {})
     assert out == "Now Jin-Woo hears the system message."
     assert report["revised"] is True and report["before"] == 5
+
+
+# --- per-finding verification (2026-08-31) --------------------------------------------
+
+def _verify_paths(tmp_path: Path) -> dict[str, Path]:
+    from PIL import Image
+
+    pages = tmp_path / "pages"
+    pages.mkdir(exist_ok=True)
+    for n in (1, 2, 3):
+        Image.new("RGB", (32, 32)).save(pages / f"{n:04d}.png")
+    return {"root": tmp_path, "pages": pages}
+
+
+class _VerifyProvider:
+    """Scripted verdicts, plus a record of which pages each call saw."""
+
+    temperature = None
+    vision_model = None
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def describe_labeled_panels(self, labeled, prompt, *, max_width=None):
+        self.calls.append([label for label, _p in labeled])
+        r = self.responses.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return json.dumps(r)
+
+
+def test_a_refuted_finding_leaves_majors_but_is_kept_for_the_human(tmp_path):
+    """The measured failure: 5 of 8 hand-checked majors were false — a vendor
+    inversion, an arm read as a torso. A refuted finding must never reach
+    revise_once, and must never silently vanish either."""
+    from manhwa2vid.script.audit import verify_majors
+
+    finding = {"quote": "he sells coffee", "problem": "he BUYS coffee", "page": "0002"}
+    provider = _VerifyProvider([
+        {"verdict": "refuted", "evidence": '"One iced americano, coming up!"'},
+    ])
+    confirmed, unverified = verify_majors([finding], _verify_paths(tmp_path), {}, provider)
+    assert confirmed == []
+    assert len(unverified) == 1
+    assert unverified[0]["verification"]["verdict"] == "refuted"
+
+
+def test_a_confirmed_finding_stays_and_carries_the_clean_restatement(tmp_path):
+    """Confirmation replaces the stage-1 problem text — one finding shipped with
+    leaked chain-of-thought ("...but wait, let me check"), and the re-statement is
+    where that dies before reaching the reviser."""
+    from manhwa2vid.script.audit import verify_majors
+
+    finding = {"quote": "q", "problem": "wrong, but wait, let me check", "page": "2"}
+    provider = _VerifyProvider([
+        {"verdict": "confirmed", "evidence": '"RANK: E"',
+         "finding": "The narration says D-rank; the card prints E."},
+    ])
+    confirmed, unverified = verify_majors([finding], _verify_paths(tmp_path), {}, provider)
+    assert unverified == []
+    assert confirmed[0]["problem"] == "The narration says D-rank; the card prints E."
+    assert confirmed[0]["verification"]["evidence"] == '"RANK: E"'
+
+
+def test_verification_sees_only_the_cited_page_and_neighbours(tmp_path):
+    """The whole point: the stage-1 failure is attention across 150 images, so the
+    verifier must hold the cited page's small neighbourhood (±2) and nothing else."""
+    from manhwa2vid.script.audit import verify_majors
+
+    provider = _VerifyProvider([{"verdict": "refuted", "evidence": "x"}])
+    verify_majors(
+        [{"quote": "q", "problem": "p", "page": "0002"}],
+        _verify_paths(tmp_path), {}, provider,
+    )
+    assert provider.calls == [["[page 0001]", "[page 0002]", "[page 0003]"]]
+
+
+def test_a_provider_error_parks_the_finding_never_accepts_it(tmp_path):
+    from manhwa2vid.script.audit import verify_majors
+
+    provider = _VerifyProvider([RuntimeError("429")])
+    confirmed, unverified = verify_majors(
+        [{"quote": "q", "problem": "p", "page": "0001"}],
+        _verify_paths(tmp_path), {}, provider,
+    )
+    assert confirmed == []
+    assert "error" in str(unverified[0]["verification"])
+
+
+def test_a_finding_without_a_locatable_page_is_parked(tmp_path):
+    """An unverifiable accusation against narration that survived the writer, the
+    facts pass and the density pass is worth a human eye, never an automatic edit."""
+    from manhwa2vid.script.audit import verify_majors
+
+    provider = _VerifyProvider([])
+    confirmed, unverified = verify_majors(
+        [{"quote": "q", "problem": "p", "page": "somewhere"}],
+        _verify_paths(tmp_path), {}, provider,
+    )
+    assert confirmed == [] and provider.calls == []
+    assert unverified[0]["verification"] == "no locatable page"
