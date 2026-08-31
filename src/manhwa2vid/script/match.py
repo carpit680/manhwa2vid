@@ -848,6 +848,27 @@ def plan_shots_with_sentences(
                     for pid in panel_order[g_lo:g_hi]
                     if pid not in claimed and pid not in (text_only or ())
                 ]
+                # When the forward gap cannot cover the run, reach BACK up to
+                # SCENE_RADIUS for unused art — the same tolerance every substitution
+                # and the reading-order gate already use. Measured need: Solo Leveling
+                # held p0100_02 for 25.1s across four sentences of narrator
+                # introspection because the only panel between its anchors was a
+                # lettering card ("THAT I KNEW VERY WELL."), while p0099_02 and
+                # p0100_01 sat unused one and two panels behind it.
+                #
+                # Kept in reading order so the run plays forward within itself; the
+                # step back happens once, at its head, inside the radius.
+                need = j - i
+                if len(gap) < need:
+                    b_lo = max(0, lo - SCENE_RADIUS)
+                    if rb is not None:
+                        b_lo = max(b_lo, rb[0])
+                    back = [
+                        pid
+                        for pid in panel_order[b_lo : lo + 1]
+                        if pid not in claimed and pid not in (text_only or ())
+                    ]
+                    gap = back[-(need - len(gap)):] + gap if back else gap
                 if gap:
                     assigned = _fill_run_panels(
                         j - i, gap, [flat[k]["seconds"] for k in range(i, j)], floor
@@ -1209,7 +1230,13 @@ def plan_shots_with_sentences(
     # binding problem and must reach the gate, not be hidden here.
     if plan and panel_order:
         order_pos_f = {pid: i for i, pid in enumerate(panel_order)}
-        claimed_pids = {pid for item in flat for pid in item["panels"]}
+        # From the SHOTLIST, not from `flat`. `flat` items have had fill assignments
+        # written into their "panels" by this point, so reading it here made every
+        # filled panel look claimed and exempt from the sweep — which is how an
+        # unclaimed backward fill survived to the gate.
+        claimed_pids = {
+            pid for sent in sentences for pid in (sent.get("panels") or [])
+        }
         cuts_f = sorted(
             {order_pos_f[b] for b in (
                 ((shotlist.get("time_blocks") or {}).get("boundaries") or [])
@@ -1225,9 +1252,15 @@ def plan_shots_with_sentences(
                 blk = block_at(q) if q is not None else 0
                 if blk != prev_blk:
                     high_f = -1
+                # Re-pointable: an unclaimed fill panel, or a LETTERING panel the
+                # bare-bubble swap could not replace. A text-only panel is one the
+                # planner would rather not show at all; if showing it also rewinds the
+                # timeline, a hold is strictly better. A claimed ART panel that
+                # rewinds is a genuine binding defect and still reaches the gate.
+                movable = pid_ not in claimed_pids or pid_ in (text_only or ())
                 if (
                     q is not None and blk == prev_blk and q < high_f - SCENE_RADIUS
-                    and pid_ not in claimed_pids and prev_p is not None
+                    and movable and prev_p is not None
                 ):
                     pid_, q = prev_p, order_pos_f.get(prev_p)
                 out_rows.append((pid_, sec_, nums_))
