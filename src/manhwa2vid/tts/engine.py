@@ -182,11 +182,17 @@ def _ensure_segments_sidecar(narration: str, wav_path: Path) -> None:
 # SL 57.1%. The ceiling is not 100 and never was — the matcher is INSTRUCTED to claim
 # nothing for narrator commentary ("a sentence of pure narrator commentary depicts
 # nothing"), and across both titles the model volunteers a claim for only 74.6-78.7%
-# of sentences. So 70 demanded matching nearly every claimable sentence. 55 sits below
-# the worse title with margin; the residual gap to the ceiling is the monotonic filter
-# refusing claims that contradict reading order, which is it working. Raising this
-# number requires a better matcher, not a lower floor.
-_MATCH_MIN_PCT = 55.0
+# of sentences. So 70 demanded matching nearly every claimable sentence. 55 sat below
+# the worse title with margin; the residual gap to the ceiling was the monotonic filter
+# refusing claims that contradict reading order.
+#
+# Re-derived UP 2026-08-31 after adjacent co-claims + the short-gap second pass:
+# the dominant filter loss was panel CONTENTION between neighbouring sentences (50 of
+# SL's 70 destroyed sentences), and both fixes recover honest matches rather than
+# loosening order discipline. Measured post-fix: SL 77%, FP ch1-2 87%, ch3-4 89%.
+# 70 sits below the worst title with margin; what remains unmatched is mostly
+# narrator commentary, which is unmatched BY DESIGN.
+_MATCH_MIN_PCT = 70.0
 _UTILISATION_MIN_PCT = 60.0    # brief; measured 58.8 / 71.5
 _HOLD_MAX_SENTENCES = 3        # brief
 _TIMING_MIN_PCT = 95.0         # replaces the brief's "80% measured": 100% today, so this

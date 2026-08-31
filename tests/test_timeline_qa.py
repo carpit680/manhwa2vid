@@ -262,12 +262,14 @@ def test_timing_measured_fails_on_a_regression_to_word_proration(tmp_path: Path)
 def test_match_rate_floor_is_reachable_given_the_matchers_own_instructions():
     """The floor must sit under what a correct matcher achieves. The matcher is told to
     claim nothing for narrator commentary, so the ceiling is the share of sentences the
-    model will claim at all — measured 74.6% (SL) / 78.7% (FP). The brief's 70 left
-    almost no headroom; 55 sits below both measured results (63.0 / 57.1) with margin."""
+    model will claim at all. Re-pinned 2026-08-31 after adjacent co-claims and the
+    short-gap second pass removed the dominant filter loss (neighbour contention):
+    measured SL 77%, FP ch1-2 87%, ch3-4 89%. The floor sits below the worst title
+    with margin, and high enough to catch a collapsed matcher."""
     from manhwa2vid.tts.engine import _MATCH_MIN_PCT
 
-    assert _MATCH_MIN_PCT <= 57.1, "floor exceeds the worse measured title"
-    assert _MATCH_MIN_PCT >= 45.0, "floor so low it would not catch a collapsed matcher"
+    assert _MATCH_MIN_PCT <= 77.0, "floor exceeds the worst measured title"
+    assert _MATCH_MIN_PCT >= 60.0, "floor so low it would not catch a collapsed matcher"
 
 
 def test_a_panel_returning_later_is_caught(tmp_path: Path) -> None:

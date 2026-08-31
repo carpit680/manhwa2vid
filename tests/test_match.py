@@ -899,3 +899,128 @@ class TestBlockReEntry:
             M.collect_claims = orig
         assert moves == []
         assert block_of == [0, 0, 0, 1, 1, 1, 1, 1]
+
+
+# --- adjacent co-claims (2026-08-31) --------------------------------------------------
+
+def test_contention_loser_rejoins_as_co_claim_of_the_same_panel():
+    """The dominant filter loss, measured on Solo Leveling: 50 of 70 destroyed
+    sentences lost EVERY claim to a neighbouring sentence claiming the same panel
+    (s5 to s2, s18 to s17...). Both sentences describe that moment; the honest match
+    is both riding one shot, which the planner's fold pass already produces."""
+    order = ["p1", "p2", "p3", "p4"]
+    claims = [(1, "p2"), (2, "p2"), (3, "p4")]
+    kept = filter_monotonic(claims, order)
+    assert (1, "p2") in kept and (2, "p2") in kept and (3, "p4") in kept
+
+
+def test_co_claim_allows_an_unclaimed_sentence_between_the_pair():
+    """The planner holds an unclaimed sentence on the previous shot, so a pair split
+    by one silent sentence still folds into a single showing of the panel."""
+    order = ["p1", "p2", "p3"]
+    claims = [(1, "p1"), (3, "p1")]
+    kept = filter_monotonic(claims, order)
+    assert (3, "p1") in kept
+
+
+def test_co_claim_refused_beyond_two_sentences_apart():
+    """Distance is scene distance: three sentences on is another moment, and granting
+    it would stretch one panel across narration it does not depict."""
+    order = ["p1", "p2", "p3"]
+    claims = [(1, "p1"), (4, "p1")]
+    kept = filter_monotonic(claims, order)
+    assert (4, "p1") not in kept
+
+
+def test_co_claim_refused_when_a_claimed_sentence_sits_between():
+    """An intervening claimed sentence's panel plays between the two showings — the
+    fold cannot merge them and the panel would repeat on screen. This is the original
+    never-claims-one-panel-twice case, and it stays dropped."""
+    order = ["p1", "p2", "p3", "p4", "p5"]
+    claims = [(1, "p1"), (2, "p2"), (3, "p1")]
+    kept = filter_monotonic(claims, order)
+    assert (3, "p1") not in kept
+
+
+def test_co_claim_only_on_the_facing_edge_of_an_accent():
+    """A follower may share the keeper's LAST panel; sharing its first would put the
+    keeper's other accent panel between the two showings and reintroduce a repeat."""
+    order = ["p1", "p2", "p3", "p4"]
+    claims = [(1, "p1"), (1, "p2"), (2, "p1"), (3, "p4")]
+    kept = filter_monotonic(claims, order)
+    assert (2, "p1") not in kept, "a repeat was scheduled around an accent panel"
+    claims = [(1, "p1"), (1, "p2"), (2, "p2"), (3, "p4")]
+    kept = filter_monotonic(claims, order)
+    assert (2, "p2") in kept, "the facing-edge co-claim was refused"
+
+
+def test_a_sentence_with_its_own_panel_gets_no_co_claim():
+    """Co-claims exist for total losers. A sentence that kept a panel of its own and
+    ALSO shared a neighbour's would put the shared panel out of sequence."""
+    order = ["p1", "p2", "p3"]
+    claims = [(1, "p1"), (2, "p1"), (2, "p3")]
+    kept = filter_monotonic(claims, order)
+    assert (2, "p3") in kept
+    assert (2, "p1") not in kept
+
+
+# --- short-gap micro-pass (2026-08-31) ------------------------------------------------
+
+def test_short_gap_probed_against_its_anchor_window_only():
+    """Depictable one-liners ("This is Miss Ju-Hee") sat in 1-2-sentence gaps the
+    3+ rule never touched. A short gap is probed against ONLY the unused panels
+    strictly between its anchors — a claim there cannot be a cross-scene guess."""
+    from manhwa2vid.script import match as M
+
+    calls = []
+
+    def fake_collect(sents, panels, paths, config, pages=None, system=None):
+        calls.append(([n for n, _ in sents], [p.id for p in panels]))
+        return [(sents[0][0], panels[0].id)]
+
+    class _P:
+        def __init__(self, pid):
+            self.id = pid
+            self.image_path = f"panels/{pid}.png"
+
+    orig = M.collect_claims
+    M.collect_claims = fake_collect
+    try:
+        panels = [_P(f"p{i}") for i in range(1, 7)]
+        kept = [(1, "p2"), (3, "p5")]
+        out = M._second_pass_claims(
+            [(1, "a"), (2, "b"), (3, "c")], panels, kept, {}, {},
+        )
+    finally:
+        M.collect_claims = orig
+    assert len(calls) == 1
+    run_nums, offered = calls[0]
+    assert run_nums == [2]
+    assert offered == ["p3", "p4"], "candidates escaped the anchor window"
+    assert out == [(2, "p3")]
+
+
+def test_short_gap_with_a_wide_window_is_left_to_the_fill():
+    """More than _SHORT_GAP_MAX_CANDIDATES unused panels between the anchors means
+    the gap is not really anchored — a claim from it would be a guess, and the
+    bounded fill already walks wide gaps in reading order."""
+    from manhwa2vid.script import match as M
+
+    called = []
+
+    class _P:
+        def __init__(self, pid):
+            self.id = pid
+            self.image_path = f"panels/{pid}.png"
+
+    orig = M.collect_claims
+    M.collect_claims = lambda *a, **k: called.append(1) or []
+    try:
+        panels = [_P(f"p{i:02d}") for i in range(1, 15)]
+        kept = [(1, "p01"), (3, "p14")]
+        out = M._second_pass_claims(
+            [(1, "a"), (2, "b"), (3, "c")], panels, kept, {}, {},
+        )
+    finally:
+        M.collect_claims = orig
+    assert out == [] and not called, "a 12-panel window was probed anyway"

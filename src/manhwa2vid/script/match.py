@@ -241,6 +241,54 @@ def filter_monotonic(
         if pid not in used_pids and high - SCENE_RADIUS <= pos[pid] < high:
             recovered.append(item)
             used_pids.add(pid)
+
+    # Phase 3 — adjacent co-claims (2026-08-31). Measured on Solo Leveling: of the 70
+    # sentences whose every claim the filter destroyed, 50 lost to PANEL CONTENTION
+    # with a neighbouring sentence — two consecutive sentences describe one moment,
+    # both claim its panel, the chain keeps one. On screen the loser inherited the
+    # same picture anyway, as an unmatched HOLD; the honest description is that both
+    # sentences depict that panel. So a dropped claim whose panel a NEIGHBOUR keeps
+    # (|Δsentence| ≤ 2) rejoins as a co-claim of the same panel.
+    #
+    # Repeat-freedom is preserved by three conditions, each load-bearing:
+    # - the co-claiming sentence must have NO kept claims of its own — this pass exists
+    #   for total losers, and a sentence with its own panel plus a co-claim would put
+    #   the shared panel out of sequence;
+    # - the panel must sit on the FACING EDGE of the keeper's claims (last panel when
+    #   the co-claimant follows, first when it precedes) — else the keeper's other
+    #   panel plays between the two showings and the fold cannot merge them;
+    # - no sentence strictly between the pair may hold a kept claim — an intervening
+    #   claimed sentence's panel would likewise split the pair. Unclaimed sentences
+    #   between are fine: the planner holds them on the previous shot, and the fill's
+    #   anchor gap (same panel to same panel) is empty by construction.
+    # Under these, the planner's fold pass collapses the pair into ONE shot carrying
+    # both sentence numbers — the panel still appears exactly once.
+    kept_set = set(recovered)
+    claims_of: dict[int, list[str]] = {}
+    for number, pid in recovered:                 # items order: pos-sorted per sentence
+        claims_of.setdefault(number, []).append(pid)
+    keepers_of: dict[str, list[int]] = {}
+    for number, pid in recovered:
+        keepers_of.setdefault(pid, []).append(number)
+    co: list[tuple[int, str]] = []
+    co_sentences: set[int] = set()
+    for number, pid in items:
+        if (number, pid) in kept_set or number in claims_of or number in co_sentences:
+            continue
+        for keeper in keepers_of.get(pid, []):
+            if abs(number - keeper) > 2:
+                continue
+            edge = claims_of[keeper][-1] if number > keeper else claims_of[keeper][0]
+            if edge != pid:
+                continue
+            lo_n, hi_n = min(number, keeper), max(number, keeper)
+            if any(q in claims_of for q in range(lo_n + 1, hi_n)):
+                continue
+            co.append((number, pid))
+            co_sentences.add(number)
+            break
+    if co:
+        recovered = sorted(recovered + co, key=lambda c: (c[0], pos[c[1]]))
     return recovered
 
 
@@ -259,6 +307,11 @@ Return JSON only: {"claims": [{"sentence": <number>, "panels": ["<panel id>"]}]}
 #: depicted — see the drop in `_second_pass_claims`.
 _SECOND_PASS_MAX_PER_SENTENCE = 3
 
+#: A short (1-2 sentence) gap is probed only when its anchor window holds at most this
+#: many unused panels — more means the window is not really anchored and a claim from
+#: it would be a guess. Observed windows for real short gaps run 1-6 panels.
+_SHORT_GAP_MAX_CANDIDATES = 8
+
 
 def _second_pass_claims(
     block_sents: list[tuple[int, str]],
@@ -267,15 +320,21 @@ def _second_pass_claims(
     paths: dict[str, Path],
     config: dict[str, Any],
 ) -> list[tuple[int, str]]:
-    """Re-ask the model about LONG unclaimed runs only, against unused panels.
+    """Re-ask the model about unclaimed runs, against unused panels.
 
     Measured need (Solo Leveling, 2:43-2:57): the first pass claimed nothing for six
     consecutive sentences — Jin-Woo's palm, the tiny core, the money — and the fill
     parked all of them on a fireball for 16.5 seconds. Match rate 48.6% means half the
     video rides on fill guesswork; the expensive stretches are exactly these runs.
 
-    Bounded: only runs of 3+ consecutive unclaimed sentences, only the block's unused
-    panels, one vision call per run. Its output joins the RAW claims and re-runs
+    Bounded: runs of 3+ consecutive unclaimed sentences see the block's whole unused
+    pool; SHORT gaps (1-2 sentences, added 2026-08-31) see only the unused panels
+    strictly between their surrounding anchors, and only when that window holds
+    1-`_SHORT_GAP_MAX_CANDIDATES` panels — a wide window means the model would be
+    guessing, and the fill already handles it. Measured need for the short form:
+    depictable one-liners ("This is Miss Ju-Hee", "Jun-Woo laughs") sat in 1-2-sentence
+    gaps the 3+ rule never touched — a third of the never-matched bucket on all three
+    titles. One vision call per run either way; output joins the RAW claims and re-runs
     through `filter_monotonic`, so a wild second-pass claim is subject to the same
     order discipline as everything else.
     """
@@ -285,12 +344,12 @@ def _second_pass_claims(
     cur: list[tuple[int, str]] = []
     for no, text in block_sents:
         if no in claimed_nums:
-            if len(cur) >= 3:
+            if cur:
                 runs.append(cur)
             cur = []
         else:
             cur.append((no, text))
-    if len(cur) >= 3:
+    if cur:
         runs.append(cur)
     if not runs:
         return []
@@ -299,10 +358,27 @@ def _second_pass_claims(
     if not spare_panels:
         return []
 
+    pos = {p.id: i for i, p in enumerate(panels)}
     out: list[tuple[int, str]] = []
     for run in runs:
+        if len(run) >= 3:
+            candidates = spare_panels
+        else:
+            first, last = run[0][0], run[-1][0]
+            prev_pos = max(
+                (pos[pid] for no, pid in kept if no < first and pid in pos), default=-1
+            )
+            next_pos = min(
+                (pos[pid] for no, pid in kept if no > last and pid in pos),
+                default=len(panels),
+            )
+            candidates = [
+                p for p in spare_panels if prev_pos < pos[p.id] < next_pos
+            ]
+            if not 1 <= len(candidates) <= _SHORT_GAP_MAX_CANDIDATES:
+                continue
         found = collect_claims(
-            run, spare_panels, paths, config, None, system=_SECOND_PASS_SYSTEM
+            run, candidates, paths, config, None, system=_SECOND_PASS_SYSTEM
         )
         # A sentence the model matches to MANY panels matched none of them. The willing
         # framing makes generic narration attractive to everything: Solo Leveling's
