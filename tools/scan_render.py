@@ -59,12 +59,20 @@ def scan_order(project: Path) -> tuple[list[str], dict[str, int]]:
     tl = json.loads((project / "timeline.json").read_text())["entries"]
     order = {p["id"]: i for i, p in
              enumerate(json.loads((project / "panels.story.json").read_text()))}
+    from manhwa2vid.script.match import SCENE_RADIUS
+
+    # Same rule as the reading-order gate: a backward step of up to SCENE_RADIUS from
+    # the HIGH-WATER position is same-scene editing (close-up, then the establishing
+    # shot). Only longer rewinds are inversions. Keeping this tool on the old strict
+    # rule made it report 22 "inversions" on a render the gate passed.
     runs = merged_runs(tl)
-    inversions, clock = [], 0.0
+    inversions, clock, high = [], 0.0, -1
     for prev, run in zip(runs, runs[1:]):
         clock += prev["seconds"]
         a, b = order.get(prev["panel_id"]), order.get(run["panel_id"])
-        if a is not None and b is not None and b < a:
+        if a is not None:
+            high = max(high, a)
+        if a is not None and b is not None and b < high - SCENE_RADIUS and b < a:
             inversions.append(f"{prev['panel_id']}(#{a}) -> {run['panel_id']}(#{b}) at {clock:.1f}s")
     repeats = {k: v for k, v in Counter(r["panel_id"] for r in runs).items() if v > 1}
     return inversions, repeats
