@@ -574,6 +574,39 @@ def dominant_mass(img: np.ndarray) -> np.ndarray:
     return out
 
 
+#: A caption card whose interior IS the page ground — glowing system-message text on
+#: black — has no detectable CONTAINER, so `text_content_ratio` only ever counts the
+#: glyph pixels and reads ~0.30 against a 0.82 threshold. Frozen Player closed on one
+#: for 18.3s and `closing-shot-is-art` passed.
+#:
+#: The question that works is "erase the lettering and its glow — is anything left?".
+#: Measured: the cards leave 0.000-0.061 of their content, real art leaves 0.216-0.498.
+_TEXT_CARD_RESIDUAL = 0.15
+#: ...but ONLY with few glyphs. Detailed art makes the glyph finder fire on texture —
+#: 900-1400 "glyphs" on a statue, a tunnel, a crowd — and the erase then swallows the
+#: panel. Looking at the 29 panels the residual rule alone would have dropped, 5 of 6
+#: sampled were real art. A genuine card is a line or three of type.
+_TEXT_CARD_MAX_GLYPHS = 60
+
+
+def _is_text_card(gray: np.ndarray) -> bool:
+    """A lettering card with no container: text and its glow, and nothing else."""
+    norm = _text_norm(gray)
+    bg = background_level(norm)
+    content = np.abs(norm.astype(np.int16) - bg) > 18
+    total = int(content.sum())
+    if total < 200:
+        return False
+    glyphs = _glyph_boxes(norm)
+    if not (4 <= len(glyphs) <= _TEXT_CARD_MAX_GLYPHS):
+        return False
+    ink = np.zeros(norm.shape, bool)
+    for (x, y, w, h, _stroke) in glyphs:
+        pad = max(3, int(0.9 * h))          # swallow the glow around outlined type
+        ink[max(0, y - pad):y + h + pad, max(0, x - pad):x + w + pad] = True
+    return float((content & ~ink).sum() / total) < _TEXT_CARD_RESIDUAL
+
+
 def is_text_dominant_panel(img: np.ndarray, threshold: float = TEXT_DOMINANT) -> bool:
     """Is everything a viewer can see in this panel just lettering?
 
@@ -582,7 +615,11 @@ def is_text_dominant_panel(img: np.ndarray, threshold: float = TEXT_DOMINANT) ->
     together outweighed the picture. 14 of Frozen Player's 27 flags flipped when
     measured correctly.
     """
-    return text_content_ratio(dominant_mass(img)) >= threshold
+    mass = dominant_mass(img)
+    if text_content_ratio(mass) >= threshold:
+        return True
+    gray = cv2.cvtColor(mass, cv2.COLOR_BGR2GRAY) if mass.ndim == 3 else mass
+    return _is_text_card(gray)
 
 
 def is_content_free(img: np.ndarray) -> bool:

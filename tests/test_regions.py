@@ -9,6 +9,8 @@ seconds of a speech bubble crawling past on black.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -425,3 +427,69 @@ def test_a_single_mass_panel_is_returned_unchanged():
     art = _canvas(600, 600, 255)
     _paint_art(art, 20, 20, 560, 560)
     assert dominant_mass(art).shape[:2] == (560, 560) or dominant_mass(art).shape[0] >= 540
+
+
+class TestTextCardsWithNoContainer:
+    """A caption card whose interior IS the page ground — glowing system-message text on
+    black — has no detectable container, so `text_content_ratio` counts only the glyph
+    pixels and reads ~0.30 against a 0.82 threshold. Frozen Player closed on one for
+    18.3 seconds and `closing-shot-is-art` passed, because the panel is not "text
+    dominant" by that measure.
+
+    The working question is "erase the lettering and its glow — is anything left?".
+    Measured on the real panels: cards leave 0.000-0.061 of their content, art leaves
+    0.216-0.498.
+    """
+
+    def _card(self, w=800, h=420, lines=1):
+        """Light type on a dark ground, inside a thin outlined box — no filled
+        container, which is exactly what defeats the ratio test.
+
+        The dark margin around the box is load-bearing: `background_level` samples the
+        image border, so a box touching the edge makes the bright OUTLINE the
+        background and inverts the whole measurement. The real p0024_01 has that
+        margin; a fixture without it tests nothing.
+        """
+        import cv2
+
+        img = _canvas(h, w, 8)
+        cv2.rectangle(img, (110, 120), (w - 110, h - 190), (120, 200, 210), 2)
+        for li in range(lines):
+            y = 175 + li * 55
+            for i in range(9):
+                x = 150 + i * 55
+                cv2.putText(img, "A", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.2,
+                            (235, 245, 250), 3)
+        return img
+
+    def test_a_glowing_system_message_card_is_excluded(self):
+        from manhwa2vid.panels.regions import is_text_dominant_panel
+
+        assert is_text_dominant_panel(self._card())
+
+    def test_detailed_art_is_not_mistaken_for_a_card(self):
+        """The residual rule ALONE dropped 29 panels across both projects, and 5 of 6
+        sampled were real art — a statue, a tunnel, a crowd. The glyph finder fires on
+        texture (900-1400 "glyphs"), so the erase swallows the panel. A real card is a
+        line or three of type, hence the glyph ceiling."""
+        from manhwa2vid.panels.regions import is_text_dominant_panel
+
+        rng = np.random.default_rng(7)
+        art = _canvas(700, 900, 255)
+        art[:] = rng.integers(30, 220, art.shape, dtype=np.uint8)   # dense texture
+        assert not is_text_dominant_panel(art)
+
+    def test_the_real_closing_card_and_the_real_art_beside_it(self):
+        """p0024_01 closed Frozen Player for 18.3s; p0014_04 and p0015_01 are the art
+        the same sweep must keep."""
+        import cv2
+        import pytest
+
+        P = Path("projects/return-of-the-frozen-player-ch1-2/panels")
+        if not P.exists():
+            pytest.skip("project artifacts not present")
+        from manhwa2vid.panels.regions import is_text_dominant_panel
+
+        assert is_text_dominant_panel(cv2.imread(str(P / "p0024_01.png")))
+        assert not is_text_dominant_panel(cv2.imread(str(P / "p0014_04.png")))
+        assert not is_text_dominant_panel(cv2.imread(str(P / "p0015_01.png")))

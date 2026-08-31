@@ -820,6 +820,33 @@ def render_panel_motion_frames(
     fits_frame = 0.85 * frame_aspect <= aspect <= 1.15 * frame_aspect
     letterbox_width_frac = frame_aspect / aspect if aspect > 0 else 1.0
 
+    # A panel whose LETTERING cannot fit the fill window must be shown whole. The fill
+    # camera crops a frame-shaped window out of the panel; `_protected_boxes` then keeps
+    # the zoom from slicing any box the RESTING window already holds — but a box wider
+    # than that window is skipped on purpose, so nothing protects it and the words are
+    # cut for the whole shot. Watched on Frozen Player at 6:56: "[YOU ARE ABLE TO
+    # REMOVE THE SEAL ON THE ICE STATUS.]" rendered as "LE TO REMOVE / HE ICE STATUS",
+    # and `clipped-text` passed. Earlier sheets showed the same on caption strips
+    # ("THE JOB WHERE YOUR LIFE'S ON THE", "MONSTERS THAT HUMANITY").
+    #
+    # Letterbox shows the panel whole, so the lettering survives by construction. Only
+    # when letterbox is viable — a panel too tall to read whole still goes to fill,
+    # where a long hold is the lesser defect.
+    if style is None and letterbox_width_frac >= min_width_frac:
+        try:
+            import cv2 as _cv2
+            import numpy as _np
+
+            _arr = _np.asarray(cropped)
+            _win_w, _win_h, _ax, _span = _window_geometry(pw, ph, width, height)
+            for (_bx, _by, _bw, _bh) in _text_boxes(_arr):
+                if _bw > _win_w or _bh > _win_h:
+                    return render_letterbox_frames(
+                        panel_path, width, height, num_frames, config, seed=seed
+                    )
+        except Exception:  # noqa: BLE001 — framing must never fail a render
+            pass
+
     # `style` overrides the routing for LONG-HOLD segments (render.py cuts a hold
     # that outlives the shot cap into alternating close/wide treatments of the same
     # panel). "fill" is always honourable; "letterbox" falls back to fill when the

@@ -574,3 +574,43 @@ def test_opening_framing_prefers_art_over_contrast(tmp_path: Path) -> None:
     assert lettering_of(art) < lettering_of(normal), (
         "the opening camera must move off the lettering, not toward it"
     )
+
+
+def test_lettering_too_wide_for_the_fill_window_is_shown_whole(tmp_path: Path) -> None:
+    """Watched on Frozen Player at 6:56: "[YOU ARE ABLE TO REMOVE THE SEAL ON THE ICE
+    STATUS.]" rendered as "LE TO REMOVE / HE ICE STATUS" for the whole shot, and
+    `clipped-text` passed. Earlier sheets showed the same on caption strips.
+
+    The fill camera crops a frame-shaped window out of the panel. `_protected_boxes`
+    stops the zoom slicing any box the RESTING window already holds — but a box WIDER
+    than that window is skipped on purpose, so nothing protects it. Letterbox shows the
+    panel whole, so the lettering survives by construction.
+    """
+    import cv2
+    import numpy as np
+    from PIL import Image as PILImage
+
+    from manhwa2vid.video.effects import render_panel_motion_frames
+    from manhwa2vid.models import Panel, PanelBBox
+
+    # A wide, shallow caption strip: any 16:9 window inside it is narrower than the type.
+    arr = np.full((260, 1600, 3), 12, np.uint8)
+    cv2.rectangle(arr, (40, 60), (1560, 200), (140, 210, 220), 3)
+    for i in range(26):
+        cv2.putText(arr, "A", (70 + i * 57, 150), cv2.FONT_HERSHEY_SIMPLEX, 1.5,
+                    (240, 248, 252), 4)
+    path = tmp_path / "caption.png"
+    PILImage.fromarray(arr).save(path)
+
+    panel = Panel(id="p0001_01", page_num=1,
+                  bbox=PanelBBox(x=0, y=0, width=1600, height=260),
+                  image_path=str(path))
+    frames = render_panel_motion_frames(path, panel, 960, 540, 8, {"video": {"fps": 30}})
+
+    # Letterbox keeps the full panel width inside the frame, so the first and last
+    # columns of the type are still present. A fill-frame crop loses them.
+    first = np.asarray(frames[0].convert("L"), dtype=np.float32)
+    # the type sits in a horizontal band; if it were cropped, the outer thirds go dark
+    left_band = first[:, : first.shape[1] // 6]
+    right_band = first[:, -first.shape[1] // 6 :]
+    assert left_band.std() > 2 or right_band.std() > 2, "the caption edges were cropped away"
