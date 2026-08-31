@@ -3997,6 +3997,12 @@ def near_homophone_names(text: str, names: set[str]) -> list[str]:
     def _close(a: str, b: str) -> bool:
         if a == b or abs(len(a) - len(b)) > 1:
             return False
+        # A plural is not a different NAME. "Player / players" fired on Frozen Player
+        # ch3-4 because the glossary holds the term "Player" and the narration also says
+        # "players" — one edit apart, and completely unambiguous to a listener.
+        lo_a, lo_b = sorted((a.lower(), b.lower()), key=len)
+        if lo_b in (lo_a + "s", lo_a + "'s") or lo_b == lo_a:
+            return False
         # edit distance 1 on lowercase, cheap two-pointer
         a, b = a.lower(), b.lower()
         if len(a) == len(b):

@@ -2571,3 +2571,18 @@ def test_near_homophone_names_hears_song_and_sung():
     assert near_homophone_names("Mr. Song counts the hands.", names) == []
     # distinct names that do not collide stay silent
     assert near_homophone_names("Ju-Hee helps Kim.", names) == []
+
+
+def test_near_homophone_ignores_plurals():
+    """"Player / players" fired on Frozen Player ch3-4: the glossary holds the term
+    "Player" and the narration also says "players". One edit apart, and completely
+    unambiguous to a listener — a plural is not a different name."""
+    from manhwa2vid.script.lint import near_homophone_names
+
+    names = {"Player", "Sung Jin-Woo", "Song Chi-Yul"}
+    assert near_homophone_names("The Player watched other players fight.", names) == []
+    # the real collision still fires
+    assert near_homophone_names(
+        "Mr. Song counts the hands. He asks how about Mr. Sung.",
+        {"Song Chi-Yul", "Sung Jin-Woo"},
+    ) == ["Song / Sung"]
