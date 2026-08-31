@@ -1056,8 +1056,17 @@ def plan_shots_with_sentences(
                     order_pos.get(shown_next, len(panel_order))
                     if shown_next is not None else len(panel_order)
                 )
+                # The split's spares are the LAST substitution path that was still
+                # unbounded: with the shot cap active it reached across a printed skip
+                # and inserted p0013_09 — claimed by nobody, 8 panels behind — into
+                # Frozen Player's aftermath, failing reading-order on the very run that
+                # proved the return works. Same rule as every other substitution now.
+                sb = _bounds_for(block_bounds, block_of_number.get(nums[0], 0))
+                g_lo, g_hi = lo + 1, hi
+                if sb is not None:
+                    g_lo, g_hi = max(g_lo, sb[0]), min(g_hi, sb[1])
                 gap = [
-                    c for c in panel_order[lo + 1 : hi]
+                    c for c in panel_order[g_lo:g_hi]
                     if c not in used and c not in (text_only or ())
                 ]
                 # One multi-way split, spares taken from the gap IN READING ORDER —
@@ -1188,5 +1197,43 @@ def plan_shots_with_sentences(
                 seen.add(pid_)
                 prev_pid = pid_
             plan[b] = rows_out
+
+    # Final invariant sweep: no UNCLAIMED row may rewind past the visit's high-water by
+    # more than SCENE_RADIUS. Every substitution path is individually bounded now, but
+    # they compose — a beat's fill can open behind where the previous beat's claims
+    # ended (measured on Frozen Player: beat 9 closed on #102, beat 10's fill opened on
+    # #94). Rather than chase each composition, enforce the property the gate checks.
+    #
+    # Only unclaimed rows are re-pointed, and only onto the previous panel — a hold,
+    # which is always legal and always in-block. A CLAIMED row that rewinds is a real
+    # binding problem and must reach the gate, not be hidden here.
+    if plan and panel_order:
+        order_pos_f = {pid: i for i, pid in enumerate(panel_order)}
+        claimed_pids = {pid for item in flat for pid in item["panels"]}
+        cuts_f = sorted(
+            {order_pos_f[b] for b in (
+                ((shotlist.get("time_blocks") or {}).get("boundaries") or [])
+                if isinstance(shotlist, dict) else []
+            ) if b in order_pos_f}
+        )
+        block_at = lambda q: sum(1 for c in cuts_f if c <= q)
+        high_f, prev_blk, prev_p = -1, None, None
+        for b in sorted(plan):
+            out_rows: list[tuple[str, float, list[int]]] = []
+            for pid_, sec_, nums_ in plan[b]:
+                q = order_pos_f.get(pid_)
+                blk = block_at(q) if q is not None else 0
+                if blk != prev_blk:
+                    high_f = -1
+                if (
+                    q is not None and blk == prev_blk and q < high_f - SCENE_RADIUS
+                    and pid_ not in claimed_pids and prev_p is not None
+                ):
+                    pid_, q = prev_p, order_pos_f.get(prev_p)
+                out_rows.append((pid_, sec_, nums_))
+                if q is not None:
+                    high_f = max(high_f, q)
+                prev_blk, prev_p = blk, pid_
+            plan[b] = out_rows
 
     return plan or None
