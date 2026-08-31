@@ -42,6 +42,7 @@ measuring the wrong thing. Print the matches, not just the count.
 | `name-integrity` | **fail** | zero names absent from the glossary | promoted 2026-08-28; FP rate zero, three false positives fixed with regression tests |
 | `beats-wellformed` | fail | no broken/truncated sentences | pre-existing |
 | `grounding` | warn | audit findings survived the revision | pre-existing |
+| `opener-rhythm` | warn | pronoun-open ≤ 40%, back-to-back opener ≤ 10%, connector-open ≥ 7% | **derived 2026-08-31 from the reference channel and the rhythm pass** (script/rhythm.py). Reference: 25.7% pronoun-open, 4.6% back-to-back, ~15% connector ("Then" alone 7.5%). Pre-pass scripts measured 35.3-46.7 / 11.0-25.0 / 1.1-3.7 on prose; the deterministic pass lands all three at ≤37.0 / ≤9.1 / ≥9.0, and the bands wrap that worst case with margin. Counters are `rhythm.opener_profile` — same ones the pass itself uses |
 | `dialogue-verb-density` | warn | ≥ 18 per 1k words | reference **31.34**; floor is ~57% of it |
 | `quoted-dialogue` | warn | ≥ 0.5 spans per 1k | reference **1.16** (re-measured; the first figure counted apostrophes in contractions) |
 | `sentence-length` | warn | ≥ 18% of sentences under 8 words | reference **21.5%**. The brief said 25%, which the reference itself would fail |

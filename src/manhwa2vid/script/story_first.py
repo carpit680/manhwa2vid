@@ -39,6 +39,16 @@ _REF_MEAN_WORDS = 12.76
 # reference's like-for-like 31.34.
 from manhwa2vid.script.density import VERBS_MIN_PER_1K as _VERBS_MIN_PER_1K  # noqa: E402
 _QUOTED_MIN_PER_1K = 0.5   # brief's number; reference 1.16 re-measured
+
+#: Opener-rhythm bands (2026-08-31). Reference: pronoun-open 25.7%, back-to-back 4.6%,
+#: connector-open ~15% ("Then" alone 7.5%). Pre-pass scripts measured 35.3-46.7% /
+#: 11.0-25.0% / 1.1-3.7% with THESE counters (rhythm.opener_profile, prose only);
+#: post-pass all three sit at ≤37.0 / ≤9.1 / ≥9.0. Bands wrap the measured post-pass
+#: worst case with margin — a band no pass can reach is an alarm that never stops
+#: ringing.
+_PRONOUN_OPEN_MAX_PCT = 40.0
+_B2B_OPEN_MAX_PCT = 10.0
+_CONNECTOR_OPEN_MIN_PCT = 7.0
 # The brief proposed 25%. The reference is 21.5%, so 25% would fail the channel being
 # imitated -- and Solo Leveling at 23.7% would fail while being MORE reference-like than
 # the reference. 18% sits below the reference with margin.
@@ -198,6 +208,14 @@ def generate_story_first_script(
 
     text, _density_record = apply_density_pass(text, paths, config)
 
+    # Opener-rhythm repair: fold same-subject reported-speech chains and break
+    # back-to-back openers with "Then" (script/rhythm.py). Deterministic, function
+    # words only. After density (it edits the sentences density may rewrite), before
+    # the outro (the closing ask is not narration rhythm's business).
+    from manhwa2vid.script.rhythm import apply_rhythm_pass
+
+    text, _rhythm_record = apply_rhythm_pass(text, paths, config)
+
     text = append_outro(text, meta, paths, config)
 
     # Cast-labelling placeholders read aloud as prose ("the unnamed man in a cowboy
@@ -325,6 +343,29 @@ def generate_story_first_script(
         f"{verbs['per_1k']} reporting verbs per 1000 words (floor {_VERBS_MIN_PER_1K}, "
         f"reference {_REF_VERBS_PER_1K}) — the reference lets people SPEAK",
         **verbs,
+    )
+
+    # Opener rhythm vs the reference: it opens 25.7% of sentences with a pronoun,
+    # ~15% with a connector ("Then" alone 7.5%), and repeats an opener back-to-back
+    # 4.6% of the time; we shipped 35.9-48.9% / 2.3-5.3% / 11.5-27.3%. Bands sit
+    # between the two — reachable by the deterministic rhythm pass, still far from
+    # the old monotony. Measured post-pass before pinning (docs/qa-gates.md).
+    from manhwa2vid.script.rhythm import opener_profile
+
+    openers = opener_profile(text)
+    rhythm_ok = (
+        openers["pronoun_open_pct"] <= _PRONOUN_OPEN_MAX_PCT
+        and openers["b2b_pct"] <= _B2B_OPEN_MAX_PCT
+        and openers["connector_pct"] >= _CONNECTOR_OPEN_MIN_PCT
+    )
+    report.add(
+        "opener-rhythm",
+        True if rhythm_ok else "warn",
+        f"pronoun-open {openers['pronoun_open_pct']}% (max {_PRONOUN_OPEN_MAX_PCT}), "
+        f"back-to-back {openers['b2b_pct']}% (max {_B2B_OPEN_MAX_PCT}), connectors "
+        f"{openers['connector_pct']}% (min {_CONNECTOR_OPEN_MIN_PCT}) — reference "
+        "25.7 / 4.6 / ~15",
+        **openers,
     )
 
     quoted = quoted_span_rate(text)

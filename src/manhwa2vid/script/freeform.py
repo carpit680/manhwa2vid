@@ -51,6 +51,10 @@ into a clause or drop it entirely rather than replaying it as new plot.
 VOICE — wry, confident, gen-Z-coded. Measured targets from the reference channel:
 - Present tense, third person. Past tense only for genuine backstory.
 - Mean sentence ~12 words; about 1 in 4 sentences under 7 words. Vary the rhythm.
+- Link consecutive actions with connectors: about 1 sentence in 7 opens with Then/
+  But/So/After — the reference's own rate. Never open two sentences in a row with
+  the same word; fold same-subject chains ("He asks X. He tells Y." reads as a
+  list — "He asks X, then tells Y." reads as a story).
 - LET PEOPLE SPEAK. This is the single biggest gap between this channel and the
   reference. Mostly reported speech ("he asks whether…", "she tells him that…",
   "he admits he…") — one says/asks/tells/explains/admits/replies-class verb every 32
