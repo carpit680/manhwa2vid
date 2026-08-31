@@ -267,13 +267,13 @@ def test_time_blocks_stop_panels_crossing_a_printed_scene_break():
         ordered[8:14],      # para 2 — same overreach
         ordered[13:18],     # para 3 — the flashback
     ]
-    out = clamp_to_time_blocks(lists, paras, ordered, ["p0005_14"])
+    out, _tb = clamp_to_time_blocks(lists, paras, ordered, ["p0005_14"])
     assert "p0005_14" not in out[0], "fight narration must not show the flashback caption"
     assert "p0005_14" not in out[1]
     assert out[2][0] == "p0005_14", "the flashback paragraph starts ON the caption"
     assert "p0005_13" in out[0], "the fight's own panels must survive"
     # No boundary -> untouched.
-    assert clamp_to_time_blocks(lists, paras, ordered, []) == lists
+    assert clamp_to_time_blocks(lists, paras, ordered, [])[0] == lists
 
 
 def test_time_block_clamp_never_strands_a_paragraph():
@@ -282,7 +282,7 @@ def test_time_block_clamp_never_strands_a_paragraph():
     ordered = [f"p0001_{i:02d}" for i in range(1, 9)]
     paras = ["Opening.", "Twenty-five years later, a museum."]
     # para 2's panels all sit in block 0 — clamping would empty it.
-    out = clamp_to_time_blocks([ordered[0:4], ordered[0:2]], paras, ordered, ["p0001_05"])
+    out, _tb = clamp_to_time_blocks([ordered[0:4], ordered[0:2]], paras, ordered, ["p0001_05"])
     assert out[1], "a clamped paragraph must fall back to its own block, not vanish"
     assert all(p >= "p0001_05" for p in out[1])
 
@@ -299,7 +299,7 @@ def test_clamped_paragraph_falls_back_to_the_end_it_overran():
         "The Frost Queen crumbles into nothing.",
         "Seventy-six hours earlier, the team stands at the stairs.",
     ]
-    out = clamp_to_time_blocks(
+    out, _tb = clamp_to_time_blocks(
         [ordered[0:12], ordered[14:17], ordered[15:18]], paras, ordered, ["p0005_14"]
     )
     assert out[1][0] in ("p0005_11", "p0005_12", "p0005_13"), out[1][:2]
@@ -313,7 +313,7 @@ def test_jump_paragraph_opens_on_the_caption_panel():
 
     ordered = [f"p0005_{i:02d}" for i in range(1, 15)] + [f"p0006_{i:02d}" for i in range(1, 5)]
     paras = ["The queen stands tall.", "Seventy-six hours earlier, the team stands."]
-    out = clamp_to_time_blocks([ordered[0:12], ordered[15:18]], paras, ordered, ["p0005_14"])
+    out, _tb = clamp_to_time_blocks([ordered[0:12], ordered[15:18]], paras, ordered, ["p0005_14"])
     assert out[1][0] == "p0005_14"
 
 
@@ -421,8 +421,8 @@ def test_blocks_are_assigned_by_position_not_by_jump_phrases():
     lists = [ordered[i * 12 : (i + 1) * 12] for i in range(10)] + [
         ordered[120:135], ordered[135:150]
     ]
-    clamp_to_time_blocks(lists, paras, ordered, [ordered[120]])
-    blocks = clamp_to_time_blocks.last_block_of
+    _, _tb = clamp_to_time_blocks(lists, paras, ordered, [ordered[120]])
+    blocks = _tb.block_of
     assert blocks.count(0) == 10 and blocks.count(1) == 2, blocks
     assert blocks == sorted(blocks), "narration runs forward through blocks"
 
@@ -440,12 +440,12 @@ def test_block_crossing_uses_text_and_position_together():
 
     # Frozen Player shape: para 2 narrates the fight but was aligned past the boundary.
     fp = [f"p0005_{i:02d}" for i in range(1, 15)] + [f"p0006_{i:02d}" for i in range(1, 5)]
-    clamp_to_time_blocks(
+    _, _tb = clamp_to_time_blocks(
         [fp[0:12], fp[14:17], fp[15:18]],
         ["The queen stands.", "The Frost Queen crumbles.", "Seventy-six hours earlier, they stand."],
         fp, ["p0005_14"],
     )
-    assert clamp_to_time_blocks.last_block_of == [0, 0, 1]
+    assert _tb.block_of == [0, 0, 1]
 
     # Solo Leveling shape: an incidental phrase early, the real skip late.
     sl = [f"p{p:04d}_{i:02d}" for p in range(1, 16) for i in range(1, 11)]
@@ -453,8 +453,8 @@ def test_block_crossing_uses_text_and_position_together():
         "Twenty-five years later, a museum.", "The hall is quiet."
     ]
     lists = [sl[i * 12 : (i + 1) * 12] for i in range(10)] + [sl[120:135], sl[135:150]]
-    clamp_to_time_blocks(lists, paras, sl, [sl[120]])
-    blocks = clamp_to_time_blocks.last_block_of
+    _, _tb = clamp_to_time_blocks(lists, paras, sl, [sl[120]])
+    blocks = _tb.block_of
     assert blocks.count(0) == 10 and blocks.count(1) == 2, blocks
 
 

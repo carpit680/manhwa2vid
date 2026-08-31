@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -227,12 +228,44 @@ def distribute_within_blocks(
     ]
 
 
+@dataclass
+class TimeBlocks:
+    """How a chapter's art divides into printed time blocks, and where narration sits.
+
+    Returned rather than stashed on the function: `clamp_to_time_blocks.last_blocks` and
+    `.last_block_of` were mutable module state, and `_retry_once` can run the align stage
+    twice — a failed first attempt left its attributes behind for the retry to read.
+
+    `block_of` is the paragraph -> block map. It starts monotonic (a chapter told in page
+    order) and MAY become non-monotonic when a paragraph is confirmed to return to an
+    earlier block; `visits` is that sequence with consecutive duplicates collapsed, which
+    is what the planner and the reading-order gate reason about.
+    """
+
+    blocks: list[tuple[int, int]]
+    boundary_ids: list[str]
+    block_of: list[int]
+    announcing: list[bool] = field(default_factory=list)
+    crossings: list[int] = field(default_factory=list)
+
+    @property
+    def visits(self) -> list[int]:
+        out: list[int] = []
+        for b in self.block_of:
+            if not out or out[-1] != b:
+                out.append(b)
+        return out
+
+    def bounds_of(self, block_idx: int) -> tuple[int, int]:
+        return self.blocks[block_idx]
+
+
 def clamp_to_time_blocks(
     panel_lists: list[list[str]],
     para_texts: list[str],
     ordered_ids: list[str],
     boundary_ids: list[str],
-) -> list[list[str]]:
+) -> tuple[list[list[str]], TimeBlocks]:
     """Keep each paragraph's panels inside the time block its narration is in.
 
     Without this the picture crossed a printed time skip a whole beat before the
@@ -244,7 +277,13 @@ def clamp_to_time_blocks(
         {ordered_ids.index(b) for b in boundary_ids if b in ordered_ids}
     )
     if not cuts:
-        return panel_lists
+        return panel_lists, TimeBlocks(
+            blocks=[(0, len(ordered_ids))],
+            boundary_ids=[],
+            block_of=[0] * len(para_texts),
+            announcing=[False] * len(para_texts),
+            crossings=[],
+        )
     edges = [0, *cuts, len(ordered_ids)]
     blocks = [(edges[i], edges[i + 1]) for i in range(len(edges) - 1)]
 
@@ -284,8 +323,6 @@ def clamp_to_time_blocks(
     for i in range(len(para_texts)):
         block_of.append(sum(1 for c in crossings if c <= i))
 
-    clamp_to_time_blocks.last_blocks = blocks          # reused by the caller
-    clamp_to_time_blocks.last_block_of = block_of
 
     # A paragraph that opens a block should lead with the caption that prints the jump —
     # otherwise the chapter's own "76 HOURS AGO" panel is the one image nobody shows.
@@ -312,7 +349,13 @@ def clamp_to_time_blocks(
         if caption and first_para_of_block.get(block_idx) == len(out) and caption not in kept:
             kept = [caption, *kept]
         out.append(kept)
-    return out
+    return out, TimeBlocks(
+        blocks=blocks,
+        boundary_ids=list(boundary_ids),
+        block_of=block_of,
+        announcing=announces,
+        crossings=crossings,
+    )
 
 
 def _nearest_page(ordered_pages: list[str], page: str) -> str:
@@ -612,15 +655,19 @@ def align_script(
         p.id for p in sorted(panels, key=lambda x: x.id) if p.id not in empty_ids
     ]
     if boundary_ids:
-        panel_lists = clamp_to_time_blocks(
+        panel_lists, time_blocks = clamp_to_time_blocks(
             panel_lists, para_texts, ordered_ids, boundary_ids
         )
-        blocks = clamp_to_time_blocks.last_blocks
-        block_of = clamp_to_time_blocks.last_block_of
         console.print(f"[dim]Align: time blocks cut at {boundary_ids}[/]")
     else:
-        blocks = [(0, len(ordered_ids))]
-        block_of = [0] * len(para_texts)
+        time_blocks = TimeBlocks(
+            blocks=[(0, len(ordered_ids))],
+            boundary_ids=[],
+            block_of=[0] * len(para_texts),
+            announcing=[False] * len(para_texts),
+            crossings=[],
+        )
+    blocks, block_of = time_blocks.blocks, time_blocks.block_of
     panel_lists = distribute_within_blocks(
         panel_lists, ordered_ids, block_of, blocks, min_panels
     )
