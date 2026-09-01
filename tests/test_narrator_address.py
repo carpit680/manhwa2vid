@@ -75,3 +75,35 @@ def test_gate_band_brackets_the_field_not_the_raw_you_count():
     assert _ADDRESS_MIN_PER_1K < 0.75 < _ADDRESS_MAX_PER_1K, "our FP script must pass"
     assert _ADDRESS_MAX_PER_1K >= 1.01, "the field's highest video must pass"
     assert _ADDRESS_MAX_PER_1K < 5.0, "a tic ceiling, not a raw-you target"
+
+
+def test_presence_counts_first_person_as_turning_outward():
+    """The gate asks "does this narrator ever step out of the story to speak to you?".
+    The writer-narrator does that in the first person — "I should explain this" — and
+    the old frame-only counter scored it 0.0 while it was the most present voice the
+    pipeline had produced. Presence is the sum of both."""
+    from manhwa2vid.measure.script_text import narrator_address_rate
+    from manhwa2vid.script.story_first import (
+        _ADDRESS_MAX_PER_1K, _ADDRESS_MIN_PER_1K,
+    )
+    from manhwa2vid.script.trim import first_person_rate
+
+    # Realistic proportions: one writer aside in a few hundred words of story, which
+    # is what the measured arms actually produce (1.85-2.64 per 1000 words).
+    story = "He steps through the gate and the party follows him inside. " * 40
+    writer = "I should explain the ranking system before this gets confusing. " + story
+    presence = (narrator_address_rate(writer)["per_1k"]
+                + first_person_rate(writer)["per_1k"])
+    assert narrator_address_rate(writer)["per_1k"] == 0.0, "no address frames here"
+    assert _ADDRESS_MIN_PER_1K <= presence <= _ADDRESS_MAX_PER_1K
+
+
+def test_character_dialogue_never_counts_as_narrator_presence():
+    """"I'll kill you" is a character speaking. Both halves of the sum must ignore it,
+    or a fight scene would read as an intrusive narrator."""
+    from manhwa2vid.measure.script_text import narrator_address_rate
+    from manhwa2vid.script.trim import first_person_rate
+
+    fight = 'She screams "I will kill you and end this nightmare" and swings again. ' * 4
+    assert first_person_rate(fight)["count"] == 0
+    assert narrator_address_rate(fight)["per_1k"] == 0.0

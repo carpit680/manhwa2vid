@@ -60,7 +60,21 @@ _SHORT_MIN_PCT = 18.0
 #: NOT set from a raw "you" count — that read 17.74 on the field's biggest video, almost
 #: all of it quoted dialogue between characters rather than address.
 _ADDRESS_MIN_PER_1K = 0.3
-_ADDRESS_MAX_PER_1K = 2.0
+#: Re-derived 2026-09-01 from the writer-narrator arms, which turn outward through the
+#: first person rather than through address frames: measured presence 1.85-2.64 per 1k
+#: across four arms on two titles (address + first person), against 1.34 for the voice
+#: that shipped before. The old 2.0 ceiling was set on address frames ALONE and would
+#: fail the persona for doing exactly what it was asked to do. 4.0 leaves headroom and
+#: still catches a script that has become a podcast about a manhwa.
+_ADDRESS_MAX_PER_1K = 4.0
+
+#: Writer asides per 1000 words — explaining a rule, comparing to life outside the book,
+#: recalling an earlier scene, noting a translation, judging the writing or the art.
+#: Measured across the four bake-off arms: 1.85, 2.42, 2.57, 3.37. The FLOOR matters
+#: most: the first light and medium budgets read as prohibitions and produced zero, and
+#: nothing in the pipeline noticed the persona had failed to show up.
+_META_MIN_PER_1K = 0.8
+_META_MAX_PER_1K = 5.0
 
 #: Sentence-case words that open a sentence are not evidence of a name.
 _CAPITALISED_RE = re.compile(r"\b([A-Z][a-z]+(?:[- ][A-Z][a-z]+)*)\b")
@@ -419,14 +433,39 @@ def generate_story_first_script(
     # characters. On address proper that video runs 1.01 and ours 0.78.
     from manhwa2vid.measure.script_text import narrator_address_rate
 
+    from manhwa2vid.script.trim import first_person_rate, meta_aside_rate
+
     address = narrator_address_rate(text)
+    first = first_person_rate(text)
+    # Address frames and first person are two ways of doing ONE thing: the narrator
+    # stepping out of the story to speak to you. The old gate counted only the frames,
+    # so the writer-narrator — whose whole turn outward is "I should explain this" —
+    # scored 0.0 and warned while being MORE present than any script before it.
+    presence = round(address["per_1k"] + first["per_1k"], 2)
     report.add(
-        "narrator-address",
-        True if _ADDRESS_MIN_PER_1K <= address["per_1k"] <= _ADDRESS_MAX_PER_1K else "warn",
-        f"{address['per_1k']} narrator-to-viewer asides per 1000 words "
-        f"(want {_ADDRESS_MIN_PER_1K}-{_ADDRESS_MAX_PER_1K}; field median 0.16, "
-        f"highest video 1.01) — a recap that never turns outward reads as a synopsis",
-        **address,
+        "narrator-presence",
+        True if _ADDRESS_MIN_PER_1K <= presence <= _ADDRESS_MAX_PER_1K else "warn",
+        f"{presence} narrator turns outward per 1000 words "
+        f"({address['per_1k']} address + {first['per_1k']} first person; want "
+        f"{_ADDRESS_MIN_PER_1K}-{_ADDRESS_MAX_PER_1K}) — a recap that never turns "
+        f"outward reads as a synopsis, one that always does reads as a podcast",
+        presence_per_1k=presence, first_person_per_1k=first["per_1k"], **address,
+    )
+
+    # How much of the script is the writer talking about the work rather than telling
+    # the story. A FLOOR as well as a ceiling, and the floor is the load-bearing half:
+    # the first writer_light and writer_medium prompts produced ZERO asides because
+    # their budgets were worded as prohibitions, and nothing in the pipeline noticed
+    # that the persona had silently failed to appear.
+    # NOT named `meta` — that is this function's ProjectMeta parameter, and shadowing
+    # it broke record_part at the very end of the stage.
+    asides = meta_aside_rate(text)
+    report.add(
+        "persona-voice",
+        True if _META_MIN_PER_1K <= asides["per_1k"] <= _META_MAX_PER_1K else "warn",
+        f"{asides['per_1k']} writer asides per 1000 words (want {_META_MIN_PER_1K}-"
+        f"{_META_MAX_PER_1K}) — explaining, comparing, recalling, or judging the work",
+        **asides,
     )
 
     residual = (record.get("revision") or {}).get("residual") or []
