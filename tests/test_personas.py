@@ -104,16 +104,15 @@ def test_an_unknown_length_errs_toward_more_voice():
     assert aside_rate_per_1k(0) == aside_rate_per_1k(None)
 
 
-def test_the_budget_is_stated_as_a_rate_not_a_total():
-    """The first budgets said "about three or four times across the whole script",
-    which means a dense 6-minute recap and an almost silent 52-minute one from the
-    same words. The instruction the model receives must scale."""
+def test_the_budget_scales_with_the_script_it_is_written_for():
+    """The first budgets said "about three or four times across the whole script" — a
+    fixed total, which means a dense 6-minute recap and an almost silent 52-minute one
+    from the same words. Whatever the phrasing, the instruction must DIFFER by length;
+    that is the property, not any particular sentence."""
     short = voice_block("writer_light", 1100)
     long = voice_block("writer_light", 11000)
-    assert "once every" in short and "once every" in long
     assert short != long, "the same instruction was given for both lengths"
-    for block in (short, long):
-        assert "across the whole script" not in block
+    assert "every" in short and "every" in long, "the rate is what scales"
 
 
 def test_the_control_arm_gets_no_aside_budget():
@@ -165,3 +164,26 @@ def test_quotable_block_is_silent_without_scene_cards(tmp_path):
 
     assert _quotable_block({}, []) == ""
     assert _quotable_block({"scene_json": tmp_path / "missing.json"}, []) == ""
+
+
+def test_the_budget_states_a_count_as_well_as_a_rate():
+    """Measured on the first 20-chapter run: a budget stated only as an interval
+    ("about once every 830 words") produced ZERO asides in 13,637 words, while the
+    earlier absolute phrasing produced 3 on a 1,100-word script and 9 on a 2,700-word
+    one. A large interval reads as permission to skip; a total reads as a target."""
+    for words, expected in ((1265, "3 times"), (12649, "15 times")):
+        block = voice_block("writer_light", words)
+        assert expected in block, words
+        assert "every" in block, "the rate must survive too — it is what scales"
+
+
+def test_the_count_scales_with_length_and_intensity():
+    from manhwa2vid.script.personas import voice_block as vb
+
+    def total(arm, words):
+        line = [l for l in vb(arm, words).splitlines() if "BUDGET" in l][0]
+        return int(line.split("about ")[1].split(" times")[0])
+
+    assert total("writer_light", 1265) < total("writer_light", 12649)
+    assert total("writer_light", 3162) < total("writer_bold", 3162)
+    assert total("writer_light", 500) >= 2, "a short script still gets a voice"

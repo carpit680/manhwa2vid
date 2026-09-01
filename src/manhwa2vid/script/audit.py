@@ -255,7 +255,25 @@ def audit_script(
     max_pages = int(get_nested(config, "audit", "max_pages_per_call", default=60))
     windows = _page_windows(pages, max_pages)
     chapters = _chapter_span(paths)
-    prompt = f"{_AUDIT_SYSTEM}{_facts_block(facts, chapters)}\n\nRECAP NARRATION:\n\n{text}"
+    # A window sees a SLICE of the pages but the WHOLE narration, because a finding is a
+    # claim about narration and we cannot know which pages a sentence refers to before
+    # the aligner has run. Without saying so, the window does the obvious thing: it reads
+    # narration about chapter 15, finds no page supporting it among chapters 1-5, and
+    # reports an error. Measured on the first 20-chapter run: 119 majors against 1 for a
+    # 2-chapter script — an inflation created entirely by windowing, and the reason this
+    # note exists.
+    slice_note = (
+        "\n\nIMPORTANT — THESE PAGES ARE A SLICE. The narration below covers a longer "
+        "chapter range than the pages you can see. Judge ONLY sentences describing what "
+        "is on THESE pages. If a sentence describes events that are not here, it belongs "
+        "to another slice: say nothing about it. The absence of a page is NEVER evidence "
+        "that the narration is wrong."
+        if len(windows) > 1 else ""
+    )
+    prompt = (
+        f"{_AUDIT_SYSTEM}{slice_note}{_facts_block(facts, chapters)}"
+        f"\n\nRECAP NARRATION:\n\n{text}"
+    )
     findings: list[dict[str, Any]] = []
     for i, window in enumerate(windows, start=1):
         provider.set_json_budget(_JSON_BUDGET_TOKENS)

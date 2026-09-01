@@ -187,12 +187,26 @@ def aside_rate_per_1k(words_target: int | None) -> float:
 
 
 def _budget_block(arm: str, words_target: int | None) -> str:
+    """A rate AND a count. Both, deliberately.
+
+    Measured on the first 20-chapter run: a budget stated only as an interval ("about
+    once every 830 words") produced ZERO asides in 13,637 words, while the earlier
+    absolute phrasing ("three or four times across the whole script") produced 3 on a
+    1,100-word script and 9 on a 2,700-word one. A large interval reads as permission
+    to skip; a total reads as a target to hit. The interval is what scales, so it
+    stays — with the total it implies spelled out beside it.
+    """
     rate = aside_rate_per_1k(words_target) * _ARM_INTENSITY.get(arm, 1.0)
     every = int(round(1000 / rate / 10.0) * 10)
-    return (
-        f"\nBUDGET — use the six moves above about once every {every} words, and really "
-        f"use them.{_BUDGET_SHAPE}"
-    )
+    if words_target and words_target > 0:
+        total = max(2, int(round(words_target * rate / 1000)))
+        ask = (
+            f"use the six moves above about {total} times across this whole script — "
+            f"roughly one every {every} words — and really use them."
+        )
+    else:
+        ask = f"use the six moves above about once every {every} words, and really use them."
+    return f"\nBUDGET — {ask}{_BUDGET_SHAPE}"
 
 
 #: name -> voice block. `current` must stay first-class: it is the control arm and the
