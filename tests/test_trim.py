@@ -161,3 +161,20 @@ def test_a_compound_that_can_carry_plot_survives():
     this genre, not a description of what someone looks like."""
     text = "He is a one-armed veteran of the second floor."
     assert apply_trim_pass(text)[0] == text
+
+
+def test_extras_identified_by_clothing_or_hair_lose_the_description():
+    """From a real script: three unnamed examiners were each introduced by what they
+    were wearing. The vocabularies stopped at garments and at a short list of nouns,
+    so a recruiter in a leather jacket and a man with dreadlocks both survived."""
+    assert (apply_trim_pass("A younger recruiter in a leather jacket pulls up his profile.")[0]
+            == "A younger recruiter pulls up his profile.")
+    assert (apply_trim_pass("A man with dreadlocks asks who this guy is.")[0]
+            == "A man asks who this guy is.")
+
+
+def test_a_named_character_keeps_their_role_clause():
+    """Stripping must not eat the role — "the party's healer" tells the viewer
+    something the picture does not."""
+    text = "Deok-gu, the association president, sips his coffee."
+    assert apply_trim_pass(text)[0] == text

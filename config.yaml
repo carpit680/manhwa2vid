@@ -222,7 +222,7 @@ script:
   # rough translation and says when the work stumbles, at three different budgets.
   # MUST match personas.DEFAULT_PERSONA — a default that differs from this file changes
   # behaviour silently the moment the key is absent.
-  persona: current
+  persona: writer_light
   max_required_lines_per_beat: 4  # 4 x 10 words = 40, leaving ~20 of the 60-word ceiling
                                   # for spine and stakes. Asking for all 6 a beat may
                                   # carry fills the budget and produces list-recitation.

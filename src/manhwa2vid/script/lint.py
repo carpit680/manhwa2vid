@@ -3320,7 +3320,12 @@ def lock_transition_line(
 # writer passes the label straight through.
 _ANON_NOUN = (
     r"hunter|man|woman|guy|person|figure|worker|vendor|bystander|onlooker|passerby|"
-    r"newcomer|leader|healer|veteran|fighter|mage|kid|youth|boy|girl|stranger"
+    r"newcomer|leader|healer|veteran|fighter|mage|kid|youth|boy|girl|stranger|"
+    # Added 2026-09-01 from a real script: three unnamed examiners were each
+    # identified by clothing ("a younger recruiter in a leather jacket"), which the
+    # list could not reach. Generic occupation words only — no series vocabulary.
+    r"recruiter|examiner|applicant|official|clerk|guard|soldier|nurse|doctor|"
+    r"receptionist|attendant|reporter|student|customer|passenger"
 )
 _GARMENT = (
     r"collar|jacket|cap|hat|coat|shirt|hoodie|glasses|hair|beard|goatee|backpack|"
@@ -3329,7 +3334,10 @@ _GARMENT = (
     # pattern: "A young boy in a beige sweater" and "a man in a black suit with black
     # hair" both matched every part of _ANON_APPEARANCE_RE except the garment word.
     r"sweater|suit|tie|robe|robes|armor|armour|dress|skirt|apron|helmet|goggles|"
-    r"eyepatch|earrings|necklace|gown|cloak|coveralls|slacks|trousers|jeans"
+    r"eyepatch|earrings|necklace|gown|cloak|coveralls|slacks|trousers|jeans|"
+    # Hairstyles are appearance exactly as hats are; "a man with dreadlocks" was the
+    # case that showed the list stopped at garments.
+    r"dreadlocks|ponytail|braid|braids|moustache|mustache|sideburns|bun"
 )
 _ANON_APPEARANCE_RE = re.compile(
     # "a/an/another/one" + optional adjectives + optional noun, then a garment phrase.

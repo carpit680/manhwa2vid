@@ -1,0 +1,78 @@
+{
+ "arms": {
+  "current": {
+   "words": 2917,
+   "verbs": 25.03,
+   "quoted": 1.34,
+   "mean": 11.31,
+   "short": 24.2,
+   "addr": 1.34,
+   "first": 0.0,
+   "meta": 0.0,
+   "pron_open": 37.6,
+   "b2b": 15.4,
+   "conn": 12.8,
+   "repeat": 6
+  },
+  "writer_light": {
+   "words": 2668,
+   "verbs": 5.84,
+   "quoted": 1.83,
+   "mean": 10.78,
+   "short": 32.7,
+   "addr": 0.37,
+   "first": 2.64,
+   "meta": 3.37,
+   "pron_open": 32.7,
+   "b2b": 9.4,
+   "conn": 9.1,
+   "repeat": 8
+  },
+  "writer_medium": {
+   "words": 2160,
+   "verbs": 4.95,
+   "quoted": 1.8,
+   "mean": 13.21,
+   "short": 20.8,
+   "addr": 0.9,
+   "first": 1.87,
+   "meta": 1.85,
+   "pron_open": 34.5,
+   "b2b": 8.9,
+   "conn": 7.7,
+   "repeat": 6
+  },
+  "writer_bold": {
+   "words": 2719,
+   "verbs": 6.48,
+   "quoted": 0.36,
+   "mean": 12.34,
+   "short": 22.7,
+   "addr": 0.0,
+   "first": 2.21,
+   "meta": 2.57,
+   "pron_open": 29.8,
+   "b2b": 8.0,
+   "conn": 8.4,
+   "repeat": 6
+  }
+ },
+ "yardsticks": {
+  "reference": {
+   "verbs": 31.34,
+   "quoted": 1.16,
+   "mean": 12.8,
+   "short": 21.5,
+   "addr": null,
+   "first": 0.24
+  },
+  "gold": {
+   "verbs": 20.8,
+   "quoted": 0.0,
+   "mean": 16.7,
+   "short": 4.1,
+   "addr": 0.0,
+   "first": 0.0
+  }
+ }
+}

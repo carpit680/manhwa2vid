@@ -83,9 +83,15 @@ The storytelling itself, which never changes:
 - Link consecutive actions: roughly 1 sentence in 7 opens with Then/But/So/After. Never
   open two sentences in a row with the same word, and fold same-subject chains ("He asks
   X. He tells Y." is a list; "He asks X, then tells Y." is a story).
-- LET PEOPLE SPEAK. Mostly reported speech — "he asks whether…", "she tells him that…",
-  "he admits he…" — roughly one says/asks/tells/explains/admits/replies-class verb every
-  40 words. Colourful synonyms season those verbs; they do not replace them.
+- LET PEOPLE SPEAK — this outranks everything below it. The story is told through
+  reported speech: "he asks whether…", "she tells him that…", "he admits he…". One
+  says/asks/tells/explains/admits/replies-class verb every 32 words, which is about one
+  per two sentences, not one per paragraph. COUNT THEM AS YOU WRITE. Prefer those exact
+  verbs — they are the register — and let colourful synonyms (warns, yells, demands)
+  season them rather than replace them. A scene summarised from outside ("they argue
+  about the vote") is always worse than the same scene with people speaking in it. If a
+  paragraph has nobody speaking, that is the first thing to fix, before any of the six
+  moves below.
 - Quote a printed line verbatim, in double quotes, when the line itself is sharper than
   any paraphrase. One clause, not a whole bubble, and never exposition.
 - Casual register is correct — "bro", "our guy", "dude" — and mild profanity is fine
