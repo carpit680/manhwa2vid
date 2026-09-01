@@ -134,3 +134,65 @@ def callback_panels(shotlist: dict[str, Any]) -> set[str]:
         if sent.get("callback")
         for pid in (sent.get("panels") or [])
     }
+
+
+#: A closing run this long (in sentences) with nothing new to show is a freeze, not a
+#: held beat. Three is what Frozen Player ch3-4 produced: one matched sentence and then
+#: the outro, 19.1 seconds on the chapter's final panel.
+_CODA_MIN_SENTENCES = 2
+
+
+def resolve_closing_coda(
+    sentences: list[dict[str, Any]], ordered_panel_ids: list[str]
+) -> dict[str, Any] | None:
+    """Give the closing ask its own picture instead of freezing the last story panel.
+
+    Measured on both titles whose renders exceeded the hold limit: the >18s holds are
+    the FINAL run on the FINAL panel. The narration's last sentences — usually the outro,
+    which is narrator-to-viewer and panel-grounded by nothing — inherit whatever the
+    story ended on, and the planner cannot help, because `_gap_spare` looks forward into
+    an empty range (there is nothing after the last panel) and backward only within
+    SCENE_RADIUS, where everything is already shown.
+
+    There IS material: ch3-4 had 11 unused panels in its last 40, the nearest 18
+    positions back. Eighteen back is a rewind, which is why the planner refuses it and
+    why this must be marked rather than smuggled in — a coda is a deliberate edit, the
+    same category as a callback, and it rides the same gate exemption. Closing on
+    earlier art over the sign-off is what the reference channel does.
+
+    Prefers an unused panel (new art beats a repeat); falls back to replaying the beat's
+    opening shot. Returns the row it changed, or None when the closing run is short
+    enough to be a normal held beat.
+    """
+    scored = [s for s in sentences if not s.get("outro")]
+    closing = [s for s in sentences if s.get("outro")]
+    if not closing:
+        # No marked outro: fall back to the trailing run of unbound sentences.
+        trailing: list[dict[str, Any]] = []
+        for row in reversed(sentences):
+            if row.get("panels"):
+                break
+            trailing.append(row)
+        closing = list(reversed(trailing))
+    if len(closing) < _CODA_MIN_SENTENCES or any(c.get("panels") for c in closing):
+        return None
+
+    pos = {pid: i for i, pid in enumerate(ordered_panel_ids)}
+    claimed = {pid for s in sentences for pid in (s.get("panels") or [])}
+    last_shown = max((pos[p] for p in claimed if p in pos), default=None)
+    if last_shown is None:
+        return None
+
+    unused = [p for p in ordered_panel_ids[:last_shown] if p not in claimed]
+    pick = unused[-1] if unused else None
+    if pick is None:
+        first_claimed = min((pos[p] for p in claimed if p in pos), default=None)
+        if first_claimed is None:
+            return None
+        pick = ordered_panel_ids[first_claimed]
+
+    row = closing[0]
+    row["panels"] = [pick]
+    row["callback"] = True
+    row["coda"] = True
+    return row

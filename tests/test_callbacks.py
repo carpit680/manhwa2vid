@@ -134,3 +134,69 @@ def test_a_scene_transition_is_not_a_callback():
     assert not is_recall("Back in his hospital room, Jun-Ho sits on his bed.")
     assert not is_recall("Back in the blood-stained temple, the situation deteriorates.")
     assert is_recall("Back when the party first stepped through the gate, nobody worried.")
+
+
+# --- the closing coda -----------------------------------------------------------------
+
+class TestClosingCoda:
+    """The outro must not freeze the story's last panel.
+
+    Measured on both titles that exceeded the hold limit: the >18s holds were the FINAL
+    run on the FINAL panel, because the closing sentences inherit whatever the story
+    ended on and the planner cannot help — `_gap_spare` looks forward into an empty
+    range and backward only within SCENE_RADIUS, all of it already shown. Frozen Player
+    ch3-4 held one image for 19.1 seconds this way.
+    """
+
+    def _rows(self, n_story=5, n_outro=2):
+        rows = [{"number": i, "beat_id": 1, "block": 0, "text": f"Story {i}.",
+                 "panels": [f"p{i:02d}"]} for i in range(1, n_story + 1)]
+        rows += [{"number": n_story + j, "beat_id": 2, "block": 0,
+                  "text": "Subscribe for more.", "panels": [], "outro": True}
+                 for j in range(1, n_outro + 1)]
+        return rows
+
+    def test_the_outro_takes_an_unused_panel_rather_than_the_last_story_shot(self):
+        from manhwa2vid.script.callbacks import resolve_closing_coda
+
+        rows = self._rows()
+        rows[2]["panels"] = []            # p03 never claimed — real unused art
+        order = [f"p{i:02d}" for i in range(1, 6)]
+        coda = resolve_closing_coda(rows, order)
+        assert coda is not None
+        assert coda["panels"] == ["p03"], "new art beats a repeat"
+        assert coda["coda"] and coda["callback"]
+
+    def test_it_replays_only_when_there_is_nothing_unused(self):
+        """A repeat is the fallback, not the first choice — and it must be marked so
+        the no-repeated-panels gate permits it deliberately."""
+        from manhwa2vid.script.callbacks import callback_panels, resolve_closing_coda
+
+        rows = self._rows()
+        order = [f"p{i:02d}" for i in range(1, 6)]
+        coda = resolve_closing_coda(rows, order)
+        assert coda["panels"] == ["p01"], "falls back to the opening shot"
+        assert coda["panels"][0] in callback_panels({"sentences": rows})
+
+    def test_a_short_closing_run_is_left_as_a_normal_held_beat(self):
+        """One trailing sentence on the last panel is ordinary editing, not a freeze."""
+        from manhwa2vid.script.callbacks import resolve_closing_coda
+
+        rows = self._rows(n_outro=1)
+        assert resolve_closing_coda(rows, [f"p{i:02d}" for i in range(1, 6)]) is None
+
+    def test_a_closing_run_that_already_has_art_is_untouched(self):
+        from manhwa2vid.script.callbacks import resolve_closing_coda
+
+        rows = self._rows()
+        rows[-1]["panels"] = ["p05"]
+        assert resolve_closing_coda(rows, [f"p{i:02d}" for i in range(1, 6)]) is None
+
+    def test_nothing_happens_without_a_shot_list_to_close_on(self):
+        from manhwa2vid.script.callbacks import resolve_closing_coda
+
+        rows = [{"number": 1, "beat_id": 1, "block": 0, "text": "x", "panels": [],
+                 "outro": True},
+                {"number": 2, "beat_id": 1, "block": 0, "text": "y", "panels": [],
+                 "outro": True}]
+        assert resolve_closing_coda(rows, ["p01"]) is None

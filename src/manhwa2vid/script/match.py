@@ -662,6 +662,22 @@ def build_shotlist(
     from manhwa2vid.script.callbacks import resolve_callbacks
 
     callbacks = resolve_callbacks(shotlist["sentences"])
+
+    # ...and give the closing ask a picture of its own. Without this the outro rides
+    # whatever the story ended on, which measured 19.1s and 18.3s of one frozen image
+    # on the two titles that exceeded the hold limit.
+    from manhwa2vid.script.callbacks import resolve_closing_coda
+
+    last_block = max((int(s.get("block", 0)) for s in shotlist["sentences"]), default=0)
+    coda = resolve_closing_coda(
+        shotlist["sentences"],
+        [p.id for p in (blocks_panels[last_block] if last_block < len(blocks_panels) else [])],
+    )
+    if coda:
+        console.print(
+            f"[cyan]Closing coda[/] — s{coda['number']} closes on {coda['panels'][0]} "
+            f"instead of holding the final panel"
+        )
     if callbacks:
         console.print(
             f"[cyan]Callbacks[/] — {len(callbacks)} sentence(s) replay an earlier shot: "
