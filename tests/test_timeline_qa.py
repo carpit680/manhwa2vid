@@ -472,3 +472,102 @@ class TestReadingOrderAcrossTimeBlocks:
         )
         gates = _gates(tmp_path, self._beats(ids), self._panels(), timeline)
         assert gates["reading-order"]["status"] == FAIL
+
+
+def test_a_marked_callback_may_replay_its_shot(tmp_path: Path) -> None:
+    """The narration asked for this picture back ("this is the same guy from the food
+    truck"), so showing it is the edit a human editor would make. Same timeline as
+    test_a_panel_returning_later_is_caught, with a shot list that marks the second
+    appearance a callback — that one difference must flip the gate."""
+    import json
+
+    from manhwa2vid.models import Timeline, TimelineEntry, project_paths
+
+    def entry(pid, start, dur, beat):
+        return TimelineEntry(panel_id=pid, panel_path=f"panels/{pid}.png", start=start,
+                             end=start + dur, duration=dur, beat_id=beat,
+                             subtitle_text="x")
+
+    timeline = Timeline(
+        entries=[entry("p0001_01", 0.0, 3.0, 1),
+                 entry("p0001_02", 3.0, 3.0, 1),
+                 entry("p0001_01", 6.0, 3.0, 2)],
+        total_duration=9.0,
+    )
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p0001_01", "p0001_02"], narration="a b"),
+             ScriptBeat(beat_id=2, panel_ids=["p0001_01"], narration="c d")]
+    panels = [_panel("p0001_01", 1), _panel("p0001_02", 1)]
+
+    paths = project_paths(tmp_path)
+    paths["script_shotlist_json"].write_text(json.dumps({"sentences": [
+        {"number": 1, "beat_id": 1, "panels": ["p0001_01"]},
+        {"number": 2, "beat_id": 1, "panels": ["p0001_02"]},
+        {"number": 3, "beat_id": 2, "panels": ["p0001_01"], "callback": True},
+    ]}))
+    gates = _gates(tmp_path, beats, panels, timeline)
+    assert gates["no-repeated-panels"]["status"] == PASS
+    assert gates["no-repeated-panels"]["data"]["callback_replays"] == ["p0001_01"]
+
+
+def test_an_unmarked_repeat_still_fails_beside_a_marked_one(tmp_path: Path) -> None:
+    """The narrowing must not become a loosening: a shot list containing ONE callback
+    does not license every other repeat in the video."""
+    import json
+
+    from manhwa2vid.models import Timeline, TimelineEntry, project_paths
+
+    def entry(pid, start, dur, beat):
+        return TimelineEntry(panel_id=pid, panel_path=f"panels/{pid}.png", start=start,
+                             end=start + dur, duration=dur, beat_id=beat,
+                             subtitle_text="x")
+
+    timeline = Timeline(
+        entries=[entry("p0001_01", 0.0, 3.0, 1), entry("p0001_02", 3.0, 3.0, 1),
+                 entry("p0001_01", 6.0, 3.0, 2),      # the marked callback
+                 entry("p0001_03", 9.0, 3.0, 2),
+                 entry("p0001_02", 12.0, 3.0, 3)],    # nobody asked for this one
+        total_duration=15.0,
+    )
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p0001_01", "p0001_02"], narration="a b"),
+             ScriptBeat(beat_id=2, panel_ids=["p0001_01", "p0001_03"], narration="c d"),
+             ScriptBeat(beat_id=3, panel_ids=["p0001_02"], narration="e f")]
+    panels = [_panel(f"p0001_0{i}", 1) for i in (1, 2, 3)]
+
+    paths = project_paths(tmp_path)
+    paths["script_shotlist_json"].write_text(json.dumps({"sentences": [
+        {"number": 3, "beat_id": 2, "panels": ["p0001_01"], "callback": True},
+    ]}))
+    gates = _gates(tmp_path, beats, panels, timeline)
+    assert gates["no-repeated-panels"]["status"] == FAIL
+    assert "p0001_02" in gates["no-repeated-panels"]["details"]
+    assert "p0001_01" not in gates["no-repeated-panels"]["details"]
+
+
+def test_a_third_appearance_is_never_legal(tmp_path: Path) -> None:
+    """A callback licenses ONE return, not a motif."""
+    import json
+
+    from manhwa2vid.models import Timeline, TimelineEntry, project_paths
+
+    def entry(pid, start, dur, beat):
+        return TimelineEntry(panel_id=pid, panel_path=f"panels/{pid}.png", start=start,
+                             end=start + dur, duration=dur, beat_id=beat,
+                             subtitle_text="x")
+
+    timeline = Timeline(
+        entries=[entry("p0001_01", 0.0, 3.0, 1), entry("p0001_02", 3.0, 3.0, 1),
+                 entry("p0001_01", 6.0, 3.0, 2), entry("p0001_02", 9.0, 3.0, 2),
+                 entry("p0001_01", 12.0, 3.0, 3)],
+        total_duration=15.0,
+    )
+    beats = [ScriptBeat(beat_id=b, panel_ids=["p0001_01"], narration="a b")
+             for b in (1, 2, 3)]
+    panels = [_panel("p0001_01", 1), _panel("p0001_02", 1)]
+
+    paths = project_paths(tmp_path)
+    paths["script_shotlist_json"].write_text(json.dumps({"sentences": [
+        {"number": 3, "beat_id": 2, "panels": ["p0001_01"], "callback": True},
+    ]}))
+    gates = _gates(tmp_path, beats, panels, timeline)
+    assert gates["no-repeated-panels"]["status"] == FAIL
+    assert "p0001_01 shown 3x" in gates["no-repeated-panels"]["details"]

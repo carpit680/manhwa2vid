@@ -124,7 +124,11 @@ synopsis. Use one when the moment genuinely calls for it and never to fill a par
 
 You may say "I" when you are doing one of those six things, and only then: it is the
 writer stepping forward, not a character in the story. Never "I" inside the events
-themselves, never "we" for you-and-the-viewer, and never in the opening hook.
+themselves, and never in the opening hook.
+
+Never "we" at all. Not for you-and-the-viewer, and not for the narration's own movement:
+"we jump back to the hospital" and "we cut to the exam hall" are both banned — say what
+the story does ("back in the hospital…"), because the story moves, not you.
 
 You may also turn outward to the viewer directly, sparingly — "if you are keeping count",
 "you already know how that ends"."""
@@ -132,15 +136,18 @@ You may also turn outward to the viewer directly, sparingly — "if you are keep
 
 #: Budgets. "Without overdoing it" is a rate, so it is stated as one.
 _LIGHT_BUDGET = """
-BUDGET — restraint is the point. Across the whole script, use the six moves above about
-three or four times TOTAL, and never more than one in a paragraph or two in a row. Say
-"I" at most twice. Most paragraphs should be pure story with no author in them at all."""
+BUDGET — use the six moves above, sparingly but really use them: about three or four
+times across the whole script, and say "I" at least twice. They are the reason anyone
+would watch this channel over any other, so a script with none of them has failed, not
+succeeded. Never more than one in a paragraph and never two in a row; most paragraphs
+are pure story with no author in them at all."""
 
 _MEDIUM_BUDGET = """
-BUDGET — about one of the six moves every 250 words, never more than one in a paragraph,
-never two paragraphs running. Say "I" about three or four times in the whole script. The
-story is still the point; the writer is a presence, not a co-star. If you find yourself
-commenting twice in a row, cut one and let the scene play."""
+BUDGET — use the six moves above regularly: about one every 250 words, and say "I" three
+or four times across the script. They are the reason anyone would watch this channel over
+any other, so a script with none of them has failed. Bound it, though: never more than one
+in a paragraph, never two paragraphs running. The story carries every paragraph and the
+writer is a presence, not a co-star."""
 
 _BOLD_BUDGET = """
 BUDGET — about one of the six moves every 150 words, never more than one in a paragraph.

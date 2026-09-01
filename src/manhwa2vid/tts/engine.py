@@ -283,11 +283,28 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
     for run in runs_all:
         seen_at.setdefault(run["panel_id"], []).append(clock)
         clock += run["seconds"]
+    # A panel a CALLBACK sentence deliberately replays is allowed to appear exactly
+    # twice — the narration asked for it ("this is the same guy from the food truck"),
+    # and showing the recalled shot is the edit a human would make. Everything else
+    # still fails: accidental reuse is what this gate was built for, and a callback
+    # cannot be produced by accident (script/callbacks.py requires a recall frame AND a
+    # resolved origin). Three appearances are never legal, callback or not.
+    import json as _cb_json
+
+    from manhwa2vid.script.callbacks import callback_panels
+
+    _cb_path = paths["script_shotlist_json"]
+    _cb_pids = (
+        callback_panels(_cb_json.loads(_cb_path.read_text(encoding="utf-8")))
+        if _cb_path.exists() else set()
+    )
     repeats = [
         f"{pid} shown {len(times)}x at " + ", ".join(f"{t:.1f}s" for t in times[:3])
         for pid, times in seen_at.items()
-        if len(times) > 1
+        if len(times) > 1 and not (pid in _cb_pids and len(times) == 2)
     ]
+    replays = sorted(pid for pid, times in seen_at.items()
+                     if pid in _cb_pids and len(times) == 2)
     report.add(
         "no-repeated-panels",
         # FAIL, not warn (user decision 2026-08-30): after the gap rule in the shot
@@ -300,6 +317,7 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
         else "",
         repeats=repeats,
         repeated_panels=len(repeats),
+        callback_replays=replays,
     )
 
     # The panels must appear in READING ORDER. Watched twice before it was measured:
@@ -342,6 +360,12 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
         if prev_run is not None:
             clock += prev_run["seconds"]
         pos = order_of.get(run["panel_id"])
+        # A callback replays a shot from behind the high-water mark on purpose. It is
+        # excluded from the sequence entirely rather than tolerated inside it: letting
+        # it set `high` would drag the mark backwards and turn the NEXT legitimate
+        # forward cut into a reported inversion.
+        if run["panel_id"] in _cb_pids and observed:
+            continue
         blk = _block_at(pos)
         if not observed or observed[-1] != blk:
             observed.append(blk)

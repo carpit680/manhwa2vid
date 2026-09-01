@@ -640,6 +640,20 @@ def build_shotlist(
             "returns": moves,
         },
     }
+    # A sentence that recalls an earlier scene may put that earlier picture back on
+    # screen (script/callbacks.py). Runs LAST, on sentences the matcher left unbound,
+    # so it can never take a panel away from narration that describes what is actually
+    # on the page. Every callback is recorded for review — a replayed shot is the one
+    # edit that used to mean a bug.
+    from manhwa2vid.script.callbacks import resolve_callbacks
+
+    callbacks = resolve_callbacks(shotlist["sentences"])
+    if callbacks:
+        console.print(
+            f"[cyan]Callbacks[/] — {len(callbacks)} sentence(s) replay an earlier shot: "
+            + "; ".join(f"s{c['number']}->s{c['callback_of']}" for c in callbacks[:4])
+        )
+
     save_json(paths["script_shotlist_json"], shotlist)
     matched = sum(1 for s in shotlist["sentences"] if s["panels"])
     console.print(

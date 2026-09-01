@@ -69,10 +69,18 @@ def scan_order(project: Path) -> tuple[list[str], dict[str, int]]:
     # re-opens its own high-water. A chapter told out of page order makes the return a
     # legitimate large backward jump.
     sl_path = project / "script.shotlist.json"
-    meta = {}
+    meta, shotlist = {}, {}
     if sl_path.exists():
-        meta = (json.loads(sl_path.read_text()).get("time_blocks") or {})
+        shotlist = json.loads(sl_path.read_text())
+        meta = (shotlist.get("time_blocks") or {})
     cuts = sorted({order[b] for b in (meta.get("boundaries") or []) if b in order})
+    # Mirrors the no-repeated-panels gate exactly: a panel a CALLBACK sentence replays
+    # is allowed to appear twice, and is skipped by the order walk because it is a
+    # deliberate rewind. This file and tts/engine.py must move together — a scan that
+    # does not know about callbacks reports false failures on a correct render.
+    from manhwa2vid.script.callbacks import callback_panels
+
+    cb_pids = callback_panels(shotlist)
     block_at = lambda pos: sum(1 for c in cuts if c <= pos)
 
     runs = merged_runs(tl)
@@ -81,6 +89,8 @@ def scan_order(project: Path) -> tuple[list[str], dict[str, int]]:
         if prev is not None:
             clock += prev["seconds"]
         b = order.get(run["panel_id"])
+        if run["panel_id"] in cb_pids and prev_block is not None:
+            continue
         blk = block_at(b) if b is not None else 0
         if blk != prev_block:
             high = -1
@@ -90,7 +100,11 @@ def scan_order(project: Path) -> tuple[list[str], dict[str, int]]:
         if b is not None:
             high = max(high, b)
         prev_block = blk
-    repeats = {k: v for k, v in Counter(r["panel_id"] for r in runs).items() if v > 1}
+    counts = Counter(r["panel_id"] for r in runs)
+    repeats = {
+        k: v for k, v in counts.items()
+        if v > 1 and not (k in cb_pids and v == 2)
+    }
     return inversions, repeats
 
 

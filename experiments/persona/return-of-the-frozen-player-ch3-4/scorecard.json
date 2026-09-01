@@ -1,0 +1,50 @@
+{
+ "arms": {
+  "writer_light": {
+   "words": 1059,
+   "verbs": 4.56,
+   "quoted": 0.0,
+   "mean": 11.54,
+   "short": 35.8,
+   "addr": 0.91,
+   "first": 1.89,
+   "meta": 2.83,
+   "pron_open": 29.5,
+   "b2b": 8.4,
+   "conn": 2.1,
+   "repeat": 5
+  },
+  "writer_medium": {
+   "words": 1196,
+   "verbs": 5.61,
+   "quoted": 0.0,
+   "mean": 12.87,
+   "short": 17.5,
+   "addr": 2.4,
+   "first": 0.0,
+   "meta": 2.51,
+   "pron_open": 29.9,
+   "b2b": 4.1,
+   "conn": 4.1,
+   "repeat": 0
+  }
+ },
+ "yardsticks": {
+  "reference": {
+   "verbs": 31.34,
+   "quoted": 1.16,
+   "mean": 12.8,
+   "short": 21.5,
+   "addr": null,
+   "first": 0.24
+  },
+  "gold": {
+   "verbs": 20.8,
+   "quoted": 0.0,
+   "mean": 16.7,
+   "short": 4.1,
+   "addr": 0.0,
+   "first": 0.0
+  }
+ }
+}
