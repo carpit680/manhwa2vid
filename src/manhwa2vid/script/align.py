@@ -34,6 +34,12 @@ from manhwa2vid.script.sentences import split_sentences
 
 console = Console()
 
+#: Output-token budget for this stage's one big JSON answer. The provider default
+#: (4096) was sized for a 16-panel window; this stage answers about every page in
+#: the range at once. See LLMProvider.set_json_budget.
+_JSON_BUDGET_TOKENS = 16384
+
+
 _SYSTEM = """You match paragraphs of a finished recap narration to the manhwa pages they
 describe. You are not writing or editing text — only pointing at pages.
 
@@ -77,11 +83,15 @@ def request_alignment(
     provider.temperature = 0.0
 
     numbered = "\n\n".join(f"[paragraph {i}]\n{t}" for i, t in enumerate(para_texts, start=1))
+    provider.set_json_budget(_JSON_BUDGET_TOKENS)
     raw = provider.describe_labeled_panels(
         [(f"[page {p.stem}]", p) for p in pages],
         f"{_SYSTEM}\n\nPARAGRAPHS:\n\n{numbered}",
         max_width=page_max_width(config),
     )
+    # The paragraph->page map is one object covering every paragraph; truncated, it
+    # comes back short and the aligner silently scopes later paragraphs to nothing.
+    provider.raise_if_truncated("alignment map")
     data = json.loads(raw) if isinstance(raw, str) else raw
     return list(data.get("map") or [])
 

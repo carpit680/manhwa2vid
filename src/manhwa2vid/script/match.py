@@ -119,6 +119,7 @@ def collect_claims(
     valid_numbers = {n for n, _ in sentences}
 
     claims: list[tuple[int, str]] = []
+    truncated_windows = 0
     for batch in _window(panels, window_size):
         scoped = _window_sentences(sentences, batch, sentence_pages)
         numbered = "\n".join(f"[{n}] {t}" for n, t in scoped)
@@ -126,6 +127,13 @@ def collect_claims(
             [(f"[{p.id}]", paths["root"] / p.image_path) for p in batch],
             f"{system or _SYSTEM}\n\nSENTENCES:\n{numbered}",
         )
+        # NOT raise_if_truncated: this loop makes one call per 16-panel window and a
+        # truncated window is a partial loss, not a corrupt artifact — aborting would
+        # throw away a hundred good calls over one. It must still be COUNTED, because
+        # the symptom (a few sentences quietly unmatched) is invisible in the gates,
+        # which only see a slightly lower match rate.
+        if getattr(provider, "last_finish_reason", "") == "length":
+            truncated_windows += 1
         try:
             data = json.loads(raw) if isinstance(raw, str) else raw
         except (TypeError, ValueError):
@@ -151,6 +159,12 @@ def collect_claims(
             for pid in (claim.get("panels") or [])[:3]:
                 if number in valid_numbers and pid in batch_ids and pid in valid_ids:
                     claims.append((number, str(pid)))
+    if truncated_windows:
+        console.print(
+            f"[yellow]Matcher[/] — {truncated_windows} of "
+            f"{len(_window(panels, window_size))} window(s) hit the output cap; their "
+            f"claims are incomplete and those sentences will fall back to the fill"
+        )
     return claims
 
 

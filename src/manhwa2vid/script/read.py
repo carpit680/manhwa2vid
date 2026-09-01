@@ -34,6 +34,12 @@ from manhwa2vid.models import ProjectMeta, save_json
 
 console = Console()
 
+#: Output-token budget for this stage's one big JSON answer. The provider default
+#: (4096) was sized for a 16-panel window; this stage answers about every page in
+#: the range at once. See LLMProvider.set_json_budget.
+_JSON_BUDGET_TOKENS = 16384
+
+
 _SYSTEM = """You are cataloguing what a manhwa chapter's pages literally show, for a
 fact-check that runs after someone else writes the recap. You are not writing prose and
 not describing artwork.
@@ -97,9 +103,13 @@ def read_chapter_facts(
     # page binding is positional in the message rather than a count the model has to
     # maintain — the same reason the scene pass uses it (a 59-image run once came back
     # correct but bound three positions off).
+    provider.set_json_budget(_JSON_BUDGET_TOKENS)
     raw = provider.describe_labeled_panels(
         [(f"[page {p.stem}]", p) for p in pages], _SYSTEM, max_width=page_max_width(config)
     )
+    # One call, one object: a truncated body salvages into a partial dict whose
+    # missing keys read downstream as "this chapter has no system messages".
+    provider.raise_if_truncated("read pass (chapter facts)")
     facts = json.loads(raw) if isinstance(raw, str) else raw
     facts.setdefault("system_messages", [])
     facts.setdefault("key_dialogue", [])

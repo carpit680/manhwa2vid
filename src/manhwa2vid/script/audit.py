@@ -32,6 +32,12 @@ from manhwa2vid.models import save_json
 
 console = Console()
 
+#: Output-token budget for this stage's one big JSON answer. The provider default
+#: (4096) was sized for a 16-panel window; this stage answers about every page in
+#: the range at once. See LLMProvider.set_json_budget.
+_JSON_BUDGET_TOKENS = 16384
+
+
 #: Distinctive words a system message needs before the recap is held to it.
 _MIN_SPINE_WORDS = 3
 
@@ -219,11 +225,16 @@ def audit_script(
     # while chapter_facts.json plainly said "Song Chi-Yul loses his arm in the initial
     # attack". Re-deriving from a drawing of a bloodied figure is exactly the judgement
     # the read pass already made, with more context than the auditor has.
+    provider.set_json_budget(_JSON_BUDGET_TOKENS)
     raw = provider.describe_labeled_panels(
         [(f"[page {p.stem}]", p) for p in pages],
         f"{_AUDIT_SYSTEM}{_facts_block(facts)}\n\nRECAP NARRATION:\n\n{text}",
         max_width=page_max_width(config),
     )
+    # A truncated audit returns zero findings, which is indistinguishable from a
+    # clean script — the most dangerous silent failure here, because it produces a
+    # green grounding gate over narration nobody checked.
+    provider.raise_if_truncated("audit pass (findings)")
     data = json.loads(raw) if isinstance(raw, str) else raw
     findings = [f for f in (data.get("findings") or []) if isinstance(f, dict)]
     majors = [f for f in findings if str(f.get("severity", "")).lower() == "major"]

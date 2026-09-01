@@ -35,6 +35,16 @@ def _parse_retry_after(msg: str) -> float | None:
     return minutes * 60.0 + seconds
 
 
+class TruncatedResponse(RuntimeError):
+    """The model stopped because it hit its output cap, so the answer is incomplete.
+
+    Raised only by callers whose output is ONE indivisible object — see
+    `LLMProvider.raise_if_truncated`. `_extract_json_object` will happily salvage a
+    parseable fragment from a truncated body, which is right for a panel window and
+    catastrophic for a whole-chapter facts pass.
+    """
+
+
 class BillingExhausted(RuntimeError):
     """Provider credits are gone. Permanent until a human tops up — never retried,
     never swallowed by a stage's graceful-degradation path."""
@@ -210,9 +220,53 @@ class LLMProvider(ABC):
         webtoon page under the longest-side cap instead — the exact 800x10060 page ->
         40px sliver failure `llm/vision_utils.py` documents.
         """
+
         return self.describe_panels(
             [path for _label, path in labeled], prompt, max_width=max_width
         )
+
+    #: Why the last call stopped ("stop" | "length" | ...). "length" means truncated.
+    last_finish_reason: str = ""
+    last_completion_tokens: int = 0
+
+    def set_json_budget(self, tokens: int) -> None:
+        """Raise the OUTPUT cap for a stage whose answer is one large JSON object.
+
+        The default `MAX_VISION_TOKENS` of 4096 was sized for a 16-panel scene-card
+        window. The read pass, the audit and the alignment map each answer about EVERY
+        page in one call, so their JSON grows with the chapter range: a 20-chapter
+        alignment map alone needs one entry per paragraph, of which there are well over
+        a hundred. Raising the cap does not remove the cliff — `raise_if_truncated` is
+        what makes hitting it visible — it just moves it past the real product size.
+
+        A no-op on providers with no cap to set (the mock), so callers need no guard.
+        """
+        if hasattr(self, "MAX_VISION_TOKENS"):
+            self.MAX_VISION_TOKENS = int(tokens)
+
+    def raise_if_truncated(self, what: str) -> None:
+        """Fail loudly when the last call was cut off mid-answer.
+
+        `_record_finish` has recorded `last_finish_reason` since the day a 28-beat
+        narration came back cut at the 4096-token cap and the salvage path "silently
+        yielded zero beats for three straight runs" — and until 2026-09-01 NOTHING
+        read it. The signal existed, the failure kept being silent, and the stages most
+        exposed to it are the ones whose whole output is a single JSON object: a
+        truncated read pass hands back an empty spine, a truncated audit hands back zero
+        findings, and every downstream gate then reports a clean run.
+
+        Callers whose output is one indivisible object call this. Callers that produce
+        many independent results (the matcher's 16-panel windows) do not — for them a
+        truncated window is a partial loss to count and report, not a reason to abandon
+        a hundred good calls.
+        """
+        if self.last_finish_reason == "length":
+            raise TruncatedResponse(
+                f"{what}: the model hit its output cap ({self.last_completion_tokens} "
+                f"tokens) and the answer is incomplete. Raise the token cap for this "
+                f"stage or give it less to answer about in one call — do NOT treat the "
+                f"partial object as the result."
+            )
 
     def describe_labeled_panels_text(
         self, labeled: list[tuple[str, Path]], system: str, user: str,
@@ -316,10 +370,6 @@ class OpenAICompatProvider(LLMProvider):
     #: 939 words were wanted.
     MAX_PROSE_TOKENS: int = 32768
 
-    #: Why the last call stopped ("stop" | "length" | ...). "length" means truncated.
-    last_finish_reason: str = ""
-    last_completion_tokens: int = 0
-
     def __init__(self, text_model: str | None = None, vision_model: str | None = None) -> None:
         from openai import OpenAI
 
@@ -367,6 +417,16 @@ class OpenAICompatProvider(LLMProvider):
             self.last_completion_tokens = int(resp.usage.completion_tokens)
         except Exception:
             self.last_completion_tokens = 0
+        if self.last_finish_reason == "length":
+            # Warn unconditionally. Some callers legitimately tolerate a truncated
+            # body; none of them should have to discover it from the artifact.
+            from rich.console import Console
+
+            Console().print(
+                f"[yellow]Truncated response[/] — {getattr(self, 'vision_model', '?')} "
+                f"stopped at its output cap after {self.last_completion_tokens} tokens; "
+                f"the JSON below is incomplete"
+            )
 
     def available_models(self) -> list[str]:
         """Model ids this key can actually reach — availability is key-dependent."""
