@@ -209,3 +209,37 @@ def test_the_pass_never_runs_twice(tmp_path, monkeypatch):
     assert out == text
     assert record.get("skipped") == "already applied"
     assert called["n"] == 0, "the provider must not even be constructed"
+
+
+def test_a_writer_narrator_paragraph_is_never_targeted():
+    """An explainer or a translation note is verb-poor BY DESIGN — nobody is speaking in
+    it. Rewriting it into reported speech would delete exactly what the persona adds,
+    which is this project's most repeated defect class."""
+    from manhwa2vid.script.density import apply_density_pass
+
+    called = []
+    import manhwa2vid.script.density as D
+
+    orig = D._rewrite_paragraphs if hasattr(D, "_rewrite_paragraphs") else None
+    para = ("I should explain the ranking system before this gets confusing. "
+            "Hunters are graded from E up to S, and the grade decides which gates you "
+            "are allowed to walk into and how much the guild pays you for it. "
+            "Nobody in this world questions the scale; they just live inside it. "
+            "The whole economy of the story rests on that one letter.")
+    out, rec = apply_density_pass(para, {}, {})
+    assert out == para
+    assert rec.get("targets") == [], "a persona paragraph was sent for re-voicing"
+
+
+def test_a_rewrite_that_drops_the_narrator_is_rejected():
+    """Belt and braces with the targeting rule: even a qualifying paragraph may carry
+    the writer's voice, and a candidate that launders it out trades persona for metric."""
+    from manhwa2vid.script.density import _accept
+
+    original = ("I should explain this: fiends are players who use their powers to "
+                "commit crimes, and nobody can contain them now.")
+    laundered = ("He explains that fiends are players who use their powers to commit "
+                 "crimes, and he says nobody can contain them now.")
+    ok, reason = _accept(original, laundered)
+    assert not ok
+    assert "voice" in reason or "first person" in reason

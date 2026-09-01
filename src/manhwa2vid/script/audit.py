@@ -54,6 +54,14 @@ time reference wrong. Everything else — compression, omission, an interpretive
 a stylistic aside, casual or profane register — is NOT a finding. A recap is allowed to
 leave things out, to editorialise, and to be crude; it is not allowed to be wrong.
 
+The narrator may also step forward AS A WRITER and speak in the first person: explaining
+a rule the chapter assumes, comparing something to life outside the book, reminding the
+viewer of an earlier scene, remarking that a printed line reads awkwardly in translation,
+saying the chapter rushes a beat, or judging the art. None of that is a finding either,
+even when you disagree with the opinion. Judge only claims about WHAT HAPPENS on these
+pages. An opinion cannot be factually wrong; a translation remark is about the lettering,
+not the events.
+
 Do not report a claim as unsupported merely because a detail is small or off-page-centre.
 Report only what you can see is WRONG.
 

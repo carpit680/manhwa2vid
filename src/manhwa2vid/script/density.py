@@ -95,6 +95,15 @@ def _accept(original: str, candidate: str) -> tuple[bool, str]:
     q1 = quoted_span_rate(candidate)["quoted_spans"]
     if q1 < q0:
         return False, f"quotes lost ({q0} -> {q1})"
+    # Belt and braces with the targeting rule above: even a paragraph that qualified
+    # may contain the narrator's own voice, and a rewrite that quietly drops it trades
+    # the persona for a metric. Same reasoning as the quote check.
+    from manhwa2vid.script.trim import first_person_rate, meta_aside_rate
+
+    if meta_aside_rate(candidate)["count"] < meta_aside_rate(original)["count"]:
+        return False, "the narrator's own voice was rewritten away"
+    if first_person_rate(candidate)["count"] < first_person_rate(original)["count"]:
+        return False, "first person lost"
     from manhwa2vid.models import ScriptBeat
     from manhwa2vid.script.lint import lint_broken_sentences
 
@@ -128,11 +137,20 @@ def apply_density_pass(
         console.print("[dim]Density pass already applied — skipping[/]")
         return text, {"skipped": "already applied"}
 
+    from manhwa2vid.script.trim import meta_aside_rate
+
     paras = paragraphs(text)
     targets = {
         i: p for i, p in enumerate(paras)
         if len(p.split()) >= _MIN_WORDS
         and dialogue_verb_density(p)["per_1k"] < VERBS_MIN_PER_1K
+        # A paragraph carrying the writer-narrator's own voice — an explainer, a
+        # translation note, a remark about the art — is verb-poor BY DESIGN: nobody is
+        # speaking in it. Rewriting it into reported speech would delete exactly the
+        # thing the persona exists to add, which is this project's most repeated defect
+        # class (a later pass undoing an earlier pass's work). Its low density is not a
+        # fault to repair.
+        and meta_aside_rate(p)["count"] == 0
         # The outro is the narrator talking to the viewer — no dialogue to report. The
         # pass runs before append_outro on a fresh run, but a CACHED freeform already
         # carries its outro, so the exclusion must be explicit (same signature as the
