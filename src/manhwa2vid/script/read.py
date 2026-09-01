@@ -67,10 +67,38 @@ Rules:
 - cast: only characters actually named or clearly addressed on the page. Use the name
   as printed. Do not invent names for unnamed characters — describe them in `note` and
   leave `name` as the printed descriptor.
-- plot_spine: 8-25 entries, each a plain sentence, in the order events occur ON THE
-  PAGE (not story chronology). This is a checklist, not narration.
+- plot_spine: {spine_lo}-{spine_hi} entries, each a plain sentence, in the order events
+  occur ON THE PAGE (not story chronology). This is a checklist, not narration.
 Report only what is on the pages. If you cannot read something, omit it rather than
 guessing."""
+
+
+def _merge_facts(into: dict[str, Any], part: dict[str, Any]) -> None:
+    """Fold one window's facts into the accumulator, in page order.
+
+    Concatenation, not summarisation: every window's findings are kept whole, because
+    the whole point of windowing is that no single call has to compress the range. Only
+    exact repeats are dropped — the same character named in three windows is one cast
+    entry, the same line printed twice is one line — and the comparison is on the
+    entry's identifying text so a dict and its re-statement do not both survive.
+    """
+    def key(item: Any) -> str:
+        if isinstance(item, dict):
+            for k in ("name", "line", "text", "marker"):
+                if item.get(k):
+                    return str(item[k]).strip().lower()
+            return json.dumps(item, sort_keys=True)
+        return str(item).strip().lower()
+
+    for field in ("system_messages", "key_dialogue", "time_markers", "cast", "plot_spine"):
+        merged = list(into.get(field) or [])
+        seen = {key(x) for x in merged}
+        for item in part.get(field) or []:
+            k = key(item)
+            if k and k not in seen:
+                seen.add(k)
+                merged.append(item)
+        into[field] = merged
 
 
 def read_chapter_facts(
@@ -98,19 +126,51 @@ def read_chapter_facts(
         provider.vision_model = model
     provider.temperature = 0.0
 
-    console.print(f"[cyan]Reading[/] {len(pages)} page(s) for chapter facts")
-    # describe_labeled_panels interleaves each label immediately before its image, so the
-    # page binding is positional in the message rather than a count the model has to
-    # maintain — the same reason the scene pass uses it (a 59-image run once came back
-    # correct but bound three positions off).
-    provider.set_json_budget(_JSON_BUDGET_TOKENS)
-    raw = provider.describe_labeled_panels(
-        [(f"[page {p.stem}]", p) for p in pages], _SYSTEM, max_width=page_max_width(config)
-    )
-    # One call, one object: a truncated body salvages into a partial dict whose
+    # Windowed since 2026-09-01. This was ONE call carrying every page in the range,
+    # which is fine at 19-60 pages and untested past that: a 20-chapter project has 235.
+    # The output is what breaks first — the facts JSON grows with the material while the
+    # token cap does not — and a truncated body salvages into a partial dict whose
     # missing keys read downstream as "this chapter has no system messages".
-    provider.raise_if_truncated("read pass (chapter facts)")
-    facts = json.loads(raw) if isinstance(raw, str) else raw
+    #
+    # Windows are merged rather than summarised: every window contributes its own facts
+    # and they are concatenated in page order, so nothing is compressed away. The spine
+    # allowance scales with the range for the same reason — 25 entries is a checklist
+    # for two chapters and a severe silent compression for twenty.
+    from manhwa2vid.script.freeform import _chapter_count, _page_windows
+
+    max_pages = int(get_nested(config, "read", "max_pages_per_call", default=60))
+    windows = _page_windows(pages, max_pages)
+    n_chapters = _chapter_count(meta)
+    spine_lo, spine_hi = 8 * len(windows), min(25 * n_chapters, 120)
+    # .replace, not .format: the prompt shows the model a JSON skeleton, and every
+    # brace in it would be read as a format placeholder.
+    system = (_SYSTEM.replace("{spine_lo}", str(spine_lo))
+                     .replace("{spine_hi}", str(spine_hi)))
+
+    console.print(
+        f"[cyan]Reading[/] {len(pages)} page(s) for chapter facts"
+        + (f" in {len(windows)} window(s)" if len(windows) > 1 else "")
+    )
+    facts: dict[str, Any] = {}
+    for i, window in enumerate(windows, start=1):
+        if len(windows) > 1:
+            console.print(
+                f"[dim]  window {i}/{len(windows)} "
+                f"(pages {window[0].stem}–{window[-1].stem})[/]"
+            )
+        provider.set_json_budget(_JSON_BUDGET_TOKENS)
+        # describe_labeled_panels interleaves each label immediately before its image, so
+        # the page binding is positional in the message rather than a count the model has
+        # to maintain — the same reason the scene pass uses it (a 59-image run once came
+        # back correct but bound three positions off).
+        raw = provider.describe_labeled_panels(
+            [(f"[page {p.stem}]", p) for p in window], system,
+            max_width=page_max_width(config),
+        )
+        provider.raise_if_truncated(f"read pass (chapter facts, window {i}/{len(windows)})")
+        part = json.loads(raw) if isinstance(raw, str) else raw
+        _merge_facts(facts, part if isinstance(part, dict) else {})
+
     facts.setdefault("system_messages", [])
     facts.setdefault("key_dialogue", [])
     facts.setdefault("time_markers", [])

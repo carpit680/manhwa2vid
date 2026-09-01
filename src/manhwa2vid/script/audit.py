@@ -163,7 +163,7 @@ def _undelivered_spine(text: str, facts: dict[str, Any]) -> list[str]:
     return missing
 
 
-def _facts_block(facts: dict[str, Any] | None) -> str:
+def _facts_block(facts: dict[str, Any] | None, chapters: int = 2) -> str:
     """The read pass's own account of these pages, as a who-did-what checklist.
 
     Keys are `plot_spine` and `cast`, not `spine` — `key_dialogue` and `cast` hold dicts,
@@ -176,9 +176,12 @@ def _facts_block(facts: dict[str, Any] | None) -> str:
     if not facts:
         return ""
 
-    spine = [str(x).strip() for x in (facts.get("plot_spine") or []) if str(x).strip()][:30]
-    cast = [c for c in (facts.get("cast") or []) if isinstance(c, dict)][:15]
-    lines = [d for d in (facts.get("key_dialogue") or []) if isinstance(d, dict)][:15]
+    # Slices scale with the range. 30/15/15 is a checklist for two chapters and a
+    # silent content drop for twenty, where the cast alone runs past fifteen.
+    span = max(1, chapters)
+    spine = [str(x).strip() for x in (facts.get("plot_spine") or []) if str(x).strip()][:15 * span]
+    cast = [c for c in (facts.get("cast") or []) if isinstance(c, dict)][:8 * span]
+    lines = [d for d in (facts.get("key_dialogue") or []) if isinstance(d, dict)][:8 * span]
     if not (spine or cast or lines):
         return ""
 
@@ -203,6 +206,23 @@ def _facts_block(facts: dict[str, Any] | None) -> str:
     return "\n".join(out)
 
 
+def _chapter_span(paths: dict[str, Path]) -> int:
+    """How many chapters this project covers, for the facts-block allowances.
+
+    Read from project.json rather than threaded through every caller: the audit's
+    signature is used in several tests and a required argument would rewrite them all
+    to say the same thing. Absent or unreadable, two — the size this pass was tuned at.
+    """
+    try:
+        from manhwa2vid.script.freeform import _chapter_count
+
+        meta_path = Path(paths.get("root", ".")) / "project.json"
+        raw = json.loads(meta_path.read_text(encoding="utf-8"))
+        return _chapter_count(type("_M", (), {"chapters": raw.get("chapters", "")})())
+    except Exception:  # noqa: BLE001 — allowances, not correctness
+        return 2
+
+
 def audit_script(
     text: str,
     paths: dict[str, Path],
@@ -225,18 +245,43 @@ def audit_script(
     # while chapter_facts.json plainly said "Song Chi-Yul loses his arm in the initial
     # attack". Re-deriving from a drawing of a bloodied figure is exactly the judgement
     # the read pass already made, with more context than the auditor has.
-    provider.set_json_budget(_JSON_BUDGET_TOKENS)
-    raw = provider.describe_labeled_panels(
-        [(f"[page {p.stem}]", p) for p in pages],
-        f"{_AUDIT_SYSTEM}{_facts_block(facts)}\n\nRECAP NARRATION:\n\n{text}",
-        max_width=page_max_width(config),
-    )
-    # A truncated audit returns zero findings, which is indistinguishable from a
-    # clean script — the most dangerous silent failure here, because it produces a
-    # green grounding gate over narration nobody checked.
-    provider.raise_if_truncated("audit pass (findings)")
-    data = json.loads(raw) if isinstance(raw, str) else raw
-    findings = [f for f in (data.get("findings") or []) if isinstance(f, dict)]
+    # Windowed since 2026-09-01, for the reason this file already documents about
+    # itself: at 19-156 pages in one call, 5 of 8 findings checked by hand were false.
+    # A 20-chapter range is 235 pages. The narration and the facts go to EVERY window —
+    # a finding is a claim about the narration as a whole — while the pages are split,
+    # so each call answers about a range it can actually attend to.
+    from manhwa2vid.script.freeform import _page_windows
+
+    max_pages = int(get_nested(config, "audit", "max_pages_per_call", default=60))
+    windows = _page_windows(pages, max_pages)
+    chapters = _chapter_span(paths)
+    prompt = f"{_AUDIT_SYSTEM}{_facts_block(facts, chapters)}\n\nRECAP NARRATION:\n\n{text}"
+    findings: list[dict[str, Any]] = []
+    for i, window in enumerate(windows, start=1):
+        provider.set_json_budget(_JSON_BUDGET_TOKENS)
+        raw = provider.describe_labeled_panels(
+            [(f"[page {p.stem}]", p) for p in window],
+            prompt,
+            max_width=page_max_width(config),
+        )
+        # A truncated audit returns zero findings, which is indistinguishable from a
+        # clean script — the most dangerous silent failure here, because it produces a
+        # green grounding gate over narration nobody checked.
+        provider.raise_if_truncated(f"audit pass (findings, window {i}/{len(windows)})")
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        findings.extend(
+            f for f in ((data or {}).get("findings") or []) if isinstance(f, dict)
+        )
+    # The same drift can be reported from two windows that both show the page; the
+    # verification stage would then pay for it twice and the reviser would see it twice.
+    seen: set[tuple[str, str]] = set()
+    deduped: list[dict[str, Any]] = []
+    for f in findings:
+        key = (str(f.get("quote", "")).strip().lower(), str(f.get("page", "")).strip())
+        if key not in seen:
+            seen.add(key)
+            deduped.append(f)
+    findings = deduped
     majors = [f for f in findings if str(f.get("severity", "")).lower() == "major"]
     confirmed, unverified = verify_majors(majors, paths, config, provider=provider, facts=facts)
     return {
