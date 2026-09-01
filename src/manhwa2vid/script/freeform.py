@@ -38,7 +38,7 @@ console = Console()
 #: Register targets are stated as measured numbers because the reference channel was
 #: measured, and because prompt-only voice steering failed twice when it was phrased as
 #: vibes (see reference/style_profile.md and the project's voice memos).
-_SYSTEM = """You are the narrator-writer for a manhwa recap channel. You are handed a
+_PREAMBLE = """You are the narrator-writer for a manhwa recap channel. You are handed a
 chapter range's full pages in reading order. Read the WHOLE thing first as a story —
 who wants what, what changes, what it is actually about — and only then write.
 
@@ -46,45 +46,10 @@ You decide what a storyteller decides: what to include, what to compress into a 
 what to skip, what to foreshadow, where to dwell. You are NOT required to mention every
 page or panel; a good recap leaves things out. If the source re-explains something the
 viewer already saw — a chapter opening that restates the premise, a recap page — fold it
-into a clause or drop it entirely rather than replaying it as new plot.
+into a clause or drop it entirely rather than replaying it as new plot."""
 
-VOICE — wry, confident, gen-Z-coded. Measured targets from the reference channel:
-- Present tense, third person. Past tense only for genuine backstory.
-- Mean sentence ~12 words; about 1 in 4 sentences under 7 words. Vary the rhythm.
-- Link consecutive actions with connectors: about 1 sentence in 7 opens with Then/
-  But/So/After — the reference's own rate. Never open two sentences in a row with
-  the same word; fold same-subject chains ("He asks X. He tells Y." reads as a
-  list — "He asks X, then tells Y." reads as a story).
-- LET PEOPLE SPEAK. This is the single biggest gap between this channel and the
-  reference. Mostly reported speech ("he asks whether…", "she tells him that…",
-  "he admits he…") — one says/asks/tells/explains/admits/replies-class verb every 32
-  words, which is roughly one per two sentences, not one per paragraph. Count them as
-  you write. Prefer those exact verbs: they ARE the register, and colourful synonyms
-  (warns, yells, demands) should season them, not replace them.
-- QUOTE THE PUNCHY LINES VERBATIM, in double quotes, about once per 900 words. The
-  reference does this and it lands: "That's right.", "This can't be happening.",
-  "I'll kill you and end this nightmare." Short, sharp, a line a character actually
-  says. Do not quote exposition and do not read a whole bubble aloud — one clause.
-- A dry read on events is wanted, about 8 evaluative asides per 1000 words: "which is
-  probably smart when you're the weakest in the room". Casual register is correct —
-  "bro", "our guy", "dude" — and mild profanity is fine where the moment earns it.
-  Do not force it; do not sanitise it either.
-- Similes are welcome (~2 per 1000 words). Zero first person: never "I" or "we".
-- TALK TO THE VIEWER, about once per 1000 words — no more. A single turn outward:
-  "if you are keeping count", "you already know how that ends", "imagine being the guy
-  who signed off on this". It is a spice, not a habit: the reference channel's biggest
-  video runs 1.0 per 1000 words and most run far less, so more than a couple per video
-  reads as a tic. Never "I" or "we" — the narrator addresses you, never himself.
-- On-screen system messages (bracketed game-like text) are STORY EVENTS. Deliver what
-  they say — they are usually the chapter's spine and the most commonly dropped thing.
-- Never describe artwork as artwork: no "panel", "scene", "we see", "the image shows".
-  Describe a character's look at most ONCE, when first naming them — it helps the
-  viewer attach the name to a face; after that, never mention clothes or hair again
-  unless they changed and the change matters.
-- Name characters from the glossary once they are introduced; use a role epithet
-  ("the healer") only before a name exists. Never invent a name.
-
-SHAPE:
+#: Structure and output format. Shared by every persona: this is craft, not voice.
+_SHAPE = """SHAPE:
 - Cold open mid-tension. The first ~85 words hook; they do not set up.
 - Honour every explicit time jump the pages print ("76 HOURS EARLIER", "25 YEARS
   LATER"). Flattening two jumps into one tells a different story.
@@ -93,6 +58,19 @@ SHAPE:
 
 Write plain prose paragraphs, one per story movement. No headings, no beat numbers, no
 metadata, no bullet points. Only the words the voice actor reads aloud."""
+
+
+def _system_for(persona: str | None) -> str:
+    """Preamble + the persona's VOICE block + shape/format.
+
+    The voice section used to be hard-coded here, which meant trying a different
+    narrator meant editing this file — global, unversioned and unmeasurable. It now
+    comes from `script/personas.py`, selected by `script.persona`, defaulting to the
+    block that shipped so an unconfigured run is byte-identical.
+    """
+    from manhwa2vid.script.personas import voice_block
+
+    return f"{_PREAMBLE}\n\n{voice_block(persona)}\n\n{_SHAPE}"
 
 
 def _budget_words(meta: ProjectMeta, config: dict[str, Any], n_chapters: int) -> tuple[int, int]:
@@ -108,6 +86,71 @@ def _glossary_block(paths: dict[str, Path]) -> str:
     data = json.loads(path.read_text(encoding="utf-8"))
     return "CHARACTER / TERM GLOSSARY (use these names):\n" + json.dumps(
         data, indent=1, ensure_ascii=False
+    )
+
+
+#: How many printed lines to offer the writer per call. Enough to choose from, few
+#: enough that the list cannot become a script to read aloud.
+_QUOTABLE_LINES = 30
+
+#: A bubble split across two balloons reaches us truncated — "THE JOB WHERE YOUR LIFE'S
+#: ON THE" is a real example from the shipped scene cards. Offering it to the writer
+#: invites quoting half a sentence, so a line ending on a function word is dropped.
+_DANGLING_TAIL = {
+    "the", "a", "an", "and", "or", "but", "of", "on", "in", "to", "with", "for", "at",
+    "from", "my", "your", "his", "her", "their", "its", "is", "was", "that", "this",
+}
+
+
+def _quotable_block(paths: dict[str, Path], pages: list[Path]) -> str:
+    """Short printed lines from THESE pages, verbatim, as material the writer may quote.
+
+    The prompt has asked for verbatim quotes for months and the writer lands about one
+    per thousand words — right at the reference channel's rate, but always at the
+    obvious climaxes, because it is working from the pictures and re-reading lettering
+    off an image is the hardest thing we ask of it. Handing it the exact strings is
+    giving it DATA it lacks rather than repeating an instruction it already follows.
+
+    It doubles as the raw material for the writer-narrator's source notes: you cannot
+    remark that a line reads awkwardly if you never had the line.
+
+    Sourced from `scene_cards.json` (`SceneCard.source_text`), not `ocr.json` — the OCR
+    artifact is empty on every project built so far, because dialogue is read by the
+    vision pass instead. Absent cards mean no block, never an error.
+    """
+    cards_path = paths.get("scene_json")
+    if not cards_path or not Path(cards_path).exists():
+        return ""
+    try:
+        from manhwa2vid.models import SceneCard
+        from manhwa2vid.script.grounding import quoted_lines_for_panels
+
+        raw = json.loads(Path(cards_path).read_text(encoding="utf-8"))
+        cards = [SceneCard.model_validate(c) for c in raw]
+    except Exception:  # noqa: BLE001 — quotable lines are a bonus, never a blocker
+        return ""
+    # A card covers one or more panels; panel ids are "p<page>_<n>", so the page stem
+    # is what ties a card to this window.
+    stems = {p.stem for p in pages}
+    ids = [
+        pid for c in cards for pid in c.panel_ids
+        if pid.split("_")[0].lstrip("p") in stems
+    ]
+    if not ids:
+        ids = [pid for c in cards for pid in c.panel_ids]
+    lines = [
+        ln for ln in quoted_lines_for_panels(ids, cards)
+        if len(ln.split()) <= 12
+        and ln.split()[-1].strip(".,!?\"'…").lower() not in _DANGLING_TAIL
+    ]
+    if not lines:
+        return ""
+    picked = lines[:_QUOTABLE_LINES]
+    return (
+        "LINES THESE PAGES ACTUALLY PRINT (a few of them — you may quote one verbatim "
+        "when it is sharper than any paraphrase, and you may remark when one reads "
+        "awkwardly in English; most of them you will simply not need):\n"
+        + "\n".join(f'- "{ln}"' for ln in picked)
     )
 
 
@@ -166,6 +209,14 @@ def write_freeform_script(
         get_nested(config, "script", "narration_temperature", default=0.9)
     )
 
+    from manhwa2vid.script.personas import DEFAULT_PERSONA, PERSONAS
+
+    persona = str(get_nested(config, "script", "persona", default=DEFAULT_PERSONA))
+    system = _system_for(persona)
+    if persona != DEFAULT_PERSONA:
+        known = "" if persona in PERSONAS else " (unknown — using the default voice)"
+        console.print(f"[dim]Narrator persona: {persona}{known}[/]")
+
     glossary = _glossary_block(paths)
     written: list[str] = []
     per_window_lo, per_window_hi = lo // len(windows), hi // len(windows)
@@ -180,6 +231,9 @@ def write_freeform_script(
             console.print(f"[cyan]Writing[/] {len(pages)} page(s) in one pass")
 
         parts = [glossary] if glossary else []
+        quotable = _quotable_block(paths, window)
+        if quotable:
+            parts.append(quotable)
         # What the viewer already watched, from EARLIER chapter ranges of this series.
         # Distinct from "the recap so far" below, which is this video's own text: that
         # one says "do not repeat yourself", this one says "these people have already
@@ -205,7 +259,7 @@ def write_freeform_script(
 
         raw = provider.describe_labeled_panels_text(
             [(f"[page {p.stem}]", p) for p in window],
-            _SYSTEM,
+            system,
             "\n\n".join(parts),
             max_width=page_max_width(config),
         )

@@ -134,8 +134,15 @@ def test_quoted_span_counter_ignores_apostrophes(tmp_path: Path) -> None:
 def test_the_writer_is_told_to_quote_because_the_reference_does(tmp_path: Path) -> None:
     """The prompt used to forbid verbatim quotes outright. Re-measuring the reference with
     a working counter found 87 real double-quoted lines in 75k words — short, sharp ones
-    like "That's right." — so the instruction contradicted the channel being imitated."""
-    from manhwa2vid.script.freeform import _SYSTEM
+    like "That's right." — so the instruction contradicted the channel being imitated.
 
-    assert "Never quote a line" not in _SYSTEM
-    assert "QUOTE THE PUNCHY LINES VERBATIM" in _SYSTEM
+    Pinned across EVERY persona (2026-08-31): the voice block is selectable now, and a
+    new narrator that quietly reinstated the ban would undo this silently."""
+    from manhwa2vid.script.freeform import _system_for
+    from manhwa2vid.script.personas import PERSONAS
+
+    for name in PERSONAS:
+        system = _system_for(name)
+        assert "Never quote a line" not in system, name
+        lowered = system.lower()
+        assert "verbatim" in lowered and "quote" in lowered, name
