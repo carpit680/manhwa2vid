@@ -31,7 +31,7 @@ from manhwa2vid.measure.frames import (
     iter_frames,
     lettering_masks,
 )
-from manhwa2vid.measure.shots import detect_cuts, shot_lengths
+from manhwa2vid.measure.shots import detect_cuts, merged_runs, shot_lengths
 from manhwa2vid.qa import QAReport, enforce, qa_forced
 
 console = Console()
@@ -138,6 +138,15 @@ _LUFS_FAIL_MIN, _LUFS_FAIL_MAX = -30.0, -10.0
 _MEDIAN_MIN_S, _MEDIAN_MAX_S = 2.0, 3.5
 _ACCENT_MIN_PCT = 15.0
 _CADENCE_MIN, _CADENCE_MAX = 12.0, 22.0     # brief said 12-20; reference W1 is 20.08
+# Re-checked 2026-09-01 against the RUNS measure (see `_longest_hold_seconds`), which
+# replaced the scene detector as this gate's authority. The detector had reported
+# 8.6-8.9s on all three shipped renders while one image actually sat for 16.2-19.1s, so
+# these numbers had never been tested against a truthful input. They hold up: the
+# reference channel's own longest is 16.37s, and measured on our renders the >18s holds
+# are exactly two, both the FINAL run on the FINAL panel of their chapter (a tail
+# phenomenon with no forward panel to cut to), while mid-video holds top out at 16.2s
+# and there is one of those across 488 runs. So 12 warns on something worth looking at
+# and 18 fails on something the reference never does.
 _SHOT_MAX_WARN_S, _SHOT_MAX_FAIL_S = 12.0, 18.0   # brief said fail at 12; reference is 16.37
 _LONGTAIL_WARN_PCT, _LONGTAIL_FAIL_PCT = 18.0, 25.0  # brief said 15; reference reaches 22.2
 
@@ -228,6 +237,23 @@ def measure_video(video: Path) -> dict[str, Any]:
         metrics["shot_under_1_5s_pct"] = round(100.0 * sum(x < 1.5 for x in s) / len(s), 1)
         metrics["shot_longest_s"] = round(s[-1], 2)
     return metrics
+
+
+def _longest_hold_seconds(paths: dict[str, Path]) -> float | None:
+    """Longest single image on screen, from the planned timeline. None if unavailable.
+
+    Returns None rather than 0.0 when there is no timeline, so the caller can fall back
+    to the detector instead of silently gating on a number that means "no data".
+    """
+    tl_path = paths.get("timeline_json")
+    if not tl_path or not Path(tl_path).exists():
+        return None
+    try:
+        entries = json.loads(Path(tl_path).read_text(encoding="utf-8")).get("entries") or []
+        runs = merged_runs(entries)
+    except Exception:  # noqa: BLE001 — a malformed timeline falls back to the detector
+        return None
+    return round(max((r["seconds"] for r in runs), default=0.0), 2) if runs else None
 
 
 def enforce_render_qa(
@@ -522,15 +548,37 @@ def enforce_render_qa(
             f"{cadence} cuts/min (reference 16.2-20.1; band {_CADENCE_MIN}-{_CADENCE_MAX})",
             cuts_per_min=cadence,
         )
-    if "shot_longest_s" in metrics:
-        longest = metrics["shot_longest_s"]
+    # How long ONE IMAGE was actually on screen — not how long the scene detector went
+    # without seeing a change.
+    #
+    # This gate used to read `shot_longest_s`, which comes from ffmpeg scene detection
+    # on the finished file (`measure_video`). The renderer defeats that measure on
+    # purpose: `render._long_hold_segments` cuts a long same-panel run into alternating
+    # fill/letterbox framings so a held image does not read as a frozen frame, and the
+    # detector counts each framing change as a cut. Measured on Frozen Player ch3-4:
+    # p0019_04 held for 19.14 continuous seconds and this gate reported "longest shot
+    # 8.83s" and passed, while the timeline-side `no-invisible-cuts` and `hold-run`
+    # gates both warned about the same 19.14s. Two measures of "shot length", and the
+    # blind one was gating the render.
+    #
+    # `merged_runs` fuses consecutive same-panel timeline entries and is already the
+    # single implementation every timeline gate reads (measure/shots.py). The detector
+    # number stays as reported DATA — it still describes what the eye sees between
+    # framing changes — but the run decides.
+    hold_longest = _longest_hold_seconds(paths)
+    if hold_longest is not None:
+        metrics["hold_longest_s"] = hold_longest
+    gated = hold_longest if hold_longest is not None else metrics.get("shot_longest_s")
+    if gated is not None:
+        source = "one image on screen" if hold_longest is not None else "detector"
         report.add(
             "shot-max-duration",
-            True if longest <= _SHOT_MAX_WARN_S
-            else ("warn" if longest <= _SHOT_MAX_FAIL_S else False),
-            f"longest shot {longest}s (reference's own longest is 16.37s; warn over "
+            True if gated <= _SHOT_MAX_WARN_S
+            else ("warn" if gated <= _SHOT_MAX_FAIL_S else False),
+            f"longest {source} {gated}s (reference's own longest is 16.37s; warn over "
             f"{_SHOT_MAX_WARN_S}s, fail over {_SHOT_MAX_FAIL_S}s)",
-            longest_s=longest,
+            longest_s=gated,
+            detector_longest_s=metrics.get("shot_longest_s"),
         )
     if "shot_over_8s_runtime_pct" in metrics:
         longtail = metrics["shot_over_8s_runtime_pct"]

@@ -211,3 +211,62 @@ class TestLongHoldSegments:
         assert len(set(indices)) >= 3, "a 27s hold must land at least 3 distinct segments"
         longest = max(sec for sec, _i in a + b)
         assert longest <= 9.0, f"a continuous piece is still {longest}s"
+
+
+class TestHoldMeasurementAuthority:
+    """`shot-max-duration` must measure ONE IMAGE ON SCREEN, not detector cuts.
+
+    The renderer deliberately defeats scene detection: `_long_hold_segments` cuts a long
+    same-panel run into alternating fill/letterbox framings so a held image does not read
+    as a frozen frame. The detector counts each framing change as a cut, so the gate that
+    exists to catch long holds was reading a number the renderer had already scrubbed.
+    Measured on the three shipped renders: detector 8.6/8.83/8.93s against real holds of
+    18.3/19.14/16.2s. Every one passed.
+    """
+
+    def _paths(self, tmp_path, entries):
+        import json
+
+        from manhwa2vid.models import project_paths
+
+        paths = project_paths(tmp_path)
+        paths["timeline_json"].write_text(json.dumps({"entries": entries}))
+        return paths
+
+    def _entry(self, pid, dur, beat=1):
+        return {"panel_id": pid, "panel_path": f"panels/{pid}.png", "start": 0.0,
+                "end": dur, "duration": dur, "beat_id": beat, "subtitle_text": "x"}
+
+    def test_consecutive_entries_on_one_panel_are_one_hold(self, tmp_path):
+        """The exact ch3-4 shape: two entries, one image, 19.14 seconds."""
+        from manhwa2vid.video.qa_visual import _longest_hold_seconds
+
+        paths = self._paths(tmp_path, [
+            self._entry("p0019_04", 8.82, 16),
+            self._entry("p0019_04", 10.32, 17),
+            self._entry("p0020_01", 3.0, 17),
+        ])
+        assert _longest_hold_seconds(paths) == 19.14
+
+    def test_a_missing_timeline_falls_back_rather_than_reporting_zero(self, tmp_path):
+        """Returning 0.0 would mean "no long holds" — a pass on no evidence."""
+        from manhwa2vid.models import project_paths
+        from manhwa2vid.video.qa_visual import _longest_hold_seconds
+
+        assert _longest_hold_seconds(project_paths(tmp_path)) is None
+
+    def test_a_malformed_timeline_falls_back_too(self, tmp_path):
+        from manhwa2vid.models import project_paths
+        from manhwa2vid.video.qa_visual import _longest_hold_seconds
+
+        paths = project_paths(tmp_path)
+        paths["timeline_json"].write_text("{not json")
+        assert _longest_hold_seconds(paths) is None
+
+    def test_the_fail_threshold_is_reachable_and_the_reference_would_pass(self):
+        """A band the reference channel itself would fail is a band that is wrong: its
+        own longest shot is 16.37s. And 18 must be reachable — our worst is 19.14s."""
+        from manhwa2vid.video.qa_visual import _SHOT_MAX_FAIL_S, _SHOT_MAX_WARN_S
+
+        assert _SHOT_MAX_WARN_S < 16.37 < _SHOT_MAX_FAIL_S
+        assert _SHOT_MAX_FAIL_S < 19.14, "our measured worst hold must actually fail"
