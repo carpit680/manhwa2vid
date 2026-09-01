@@ -53,6 +53,11 @@ _APPEARANCE_CLAUSE_RE = re.compile(
     re.I,
 )
 
+#: "an orange-haired healer", "the silver-haired villain" — appearance welded onto the
+#: noun, so the with/in/wearing pattern never sees it. Only -haired and -eyed: both are
+#: unambiguously the picture's job, where "-armed" or "-handed" can carry plot.
+_COMPOUND_LOOK_RE = re.compile(r"\b[\w'’-]+-(?:haired|eyed)\s+", re.I)
+
 #: What is left when every appearance clause is gone and the sentence said nothing else:
 #: "He is a scruffy guy." Dropped whole. A role noun ("hunter", "healer", "leader") is
 #: NOT in this list — "He is a veteran hunter." is information the viewer cannot see.
@@ -74,7 +79,9 @@ _EVALUATIVE = (
 #: Bounded hard: dummy subject, copula, at most two words of hedging, an evaluative head.
 _STATED_REGISTER_RE = re.compile(
     rf"^(?:it|this|that|the\s+[\w'’-]+)\s+(?:is|was|are|were)\s+"
-    rf"(?:(?:a|an|the)\s+)?(?:[\w'’-]+\s+){{0,2}}(?:{_EVALUATIVE})"
+    # ",?" because the filler is often a coordinate adjective — "a small, pathetic
+    # indignity" slipped through until the writer-narrator arms produced it.
+    rf"(?:(?:a|an|the)\s+)?(?:[\w'’-]+,?\s+){{0,2}}(?:{_EVALUATIVE})"
     rf"(?:\s+[\w'’-]+){{0,2}}\s*[.!?]?$",
     re.I,
 )
@@ -131,8 +138,22 @@ def _appearance_edit(sentence: str) -> str | None:
         lambda m: f"{m.group(1)} {m.group(2)}".strip(), sentence
     )
     edited = _APPEARANCE_CLAUSE_RE.sub("", edited)
+    edited = _COMPOUND_LOOK_RE.sub("", edited)
     edited = re.sub(r"\s{2,}", " ", edited).strip()
     edited = re.sub(r"\s+([,.!?])", r"\1", edited)
+    # Removing the adjective can strand the wrong article — "an orange-haired healer"
+    # would leave "an healer". Same re-agreement lint.strip_placeholder_descriptors
+    # does for its own deletions.
+    edited = re.sub(
+        r"\b([Aa])n\s+(?=[bcdfghjklmnpqrstvwxyz])", r"\1 ", edited
+    )
+    # "a" -> "an" only before a vowel that is actually pronounced as one. "u" is
+    # excluded wholesale (a unique, a university) and so is "one" (a one-armed
+    # veteran), which this rule turned into "an one-armed veteran" the first time it
+    # ran against a bake-off script.
+    edited = re.sub(
+        r"\b([Aa])\s+(?=(?!one\b|once\b|eu)[aeio])", r"\1n ", edited
+    )
     return edited if edited and edited != sentence else None
 
 

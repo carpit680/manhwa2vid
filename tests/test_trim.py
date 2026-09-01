@@ -138,3 +138,26 @@ def test_a_craft_remark_is_not_a_register_statement():
         out, rec = apply_trim_pass(text)
         assert out == text, craft
         assert rec["stated_register"] == [], craft
+
+
+def test_a_coordinate_adjective_does_not_hide_a_register_statement():
+    """"It is a small, pathetic indignity." — the comma broke the filler match until the
+    writer-narrator arms produced this exact sentence in a bake-off."""
+    out, rec = apply_trim_pass("He asks for coffee. It is a small, pathetic indignity.")
+    assert out == "He asks for coffee."
+    assert rec["stated_register"] == ["It is a small, pathetic indignity."]
+
+
+def test_compound_appearance_adjectives_go_with_the_article_fixed():
+    """"an orange-haired healer" — appearance welded onto the noun, so the
+    with/in/wearing pattern never sees it. Removing it must not strand "an"."""
+    assert apply_trim_pass("She is an orange-haired healer.")[0] == "She is a healer."
+    assert (apply_trim_pass("A black-haired man in a blue jacket waves.")[0]
+            == "A man waves.")
+
+
+def test_a_compound_that_can_carry_plot_survives():
+    """-armed and -handed are deliberately excluded: losing an arm is a story event in
+    this genre, not a description of what someone looks like."""
+    text = "He is a one-armed veteran of the second floor."
+    assert apply_trim_pass(text)[0] == text
