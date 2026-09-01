@@ -73,8 +73,13 @@ _ADDRESS_MAX_PER_1K = 4.0
 #: Measured across the four bake-off arms: 1.85, 2.42, 2.57, 3.37. The FLOOR matters
 #: most: the first light and medium budgets read as prohibitions and produced zero, and
 #: nothing in the pipeline noticed the persona had failed to show up.
-_META_MIN_PER_1K = 0.8
-_META_MAX_PER_1K = 5.0
+#:
+#: Re-banded 2026-09-01 with the length taper (personas.aside_rate_per_1k). The asked-for
+#: rate is now 2.4/1k on a short recap falling to 1.2/1k at 20 chapters, so ONE band has
+#: to accept both ends: 0.6 sits below the long-form target with margin, 3.5 above the
+#: short-form one. A tighter band would fail a script for being the length it is.
+_META_MIN_PER_1K = 0.6
+_META_MAX_PER_1K = 3.5
 
 #: Sentence-case words that open a sentence are not evidence of a name.
 _CAPITALISED_RE = re.compile(r"\b([A-Z][a-z]+(?:[- ][A-Z][a-z]+)*)\b")

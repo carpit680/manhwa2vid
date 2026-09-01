@@ -60,17 +60,23 @@ Write plain prose paragraphs, one per story movement. No headings, no beat numbe
 metadata, no bullet points. Only the words the voice actor reads aloud."""
 
 
-def _system_for(persona: str | None) -> str:
+def _system_for(persona: str | None, words_target: int | None = None) -> str:
     """Preamble + the persona's VOICE block + shape/format.
 
     The voice section used to be hard-coded here, which meant trying a different
     narrator meant editing this file — global, unversioned and unmeasurable. It now
     comes from `script/personas.py`, selected by `script.persona`, defaulting to the
     block that shipped so an unconfigured run is byte-identical.
+
+    `words_target` is the whole script's word budget, not this window's: the writer
+    arms state their aside budget as a rate that thins as the script grows, and that
+    taper has to key off the finished length rather than the chunk in hand — otherwise
+    a 20-chapter script written in four windows would use the SHORT-script rate four
+    times over and land at four times the intended density.
     """
     from manhwa2vid.script.personas import voice_block
 
-    return f"{_PREAMBLE}\n\n{voice_block(persona)}\n\n{_SHAPE}"
+    return f"{_PREAMBLE}\n\n{voice_block(persona, words_target)}\n\n{_SHAPE}"
 
 
 def _budget_words(meta: ProjectMeta, config: dict[str, Any], n_chapters: int) -> tuple[int, int]:
@@ -212,7 +218,9 @@ def write_freeform_script(
     from manhwa2vid.script.personas import DEFAULT_PERSONA, PERSONAS
 
     persona = str(get_nested(config, "script", "persona", default=DEFAULT_PERSONA))
-    system = _system_for(persona)
+    # The FULL script's budget, so the aside rate tapers on the finished length rather
+    # than on each window in isolation.
+    system = _system_for(persona, words_target=hi)
     if persona != DEFAULT_PERSONA:
         known = "" if persona in PERSONAS else " (unknown — using the default voice)"
         console.print(f"[dim]Narrator persona: {persona}{known}[/]")

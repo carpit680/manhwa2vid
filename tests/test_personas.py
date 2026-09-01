@@ -72,10 +72,55 @@ def test_the_writer_personas_carry_all_six_human_moves():
 def test_each_writer_arm_states_a_budget():
     """"Without overdoing it" is a rate, so every arm has to state one — otherwise the
     three arms are the same prompt and the bake-off measures nothing."""
-    budgets = [voice_block(n) for n in ("writer_light", "writer_medium", "writer_bold")]
+    budgets = [voice_block(n, 2750) for n in ("writer_light", "writer_medium", "writer_bold")]
     for block in budgets:
         assert "BUDGET" in block
     assert len({b for b in budgets}) == 3, "the arms are not actually different"
+
+
+def test_the_aside_rate_thins_as_the_script_grows():
+    """The approved 6-minute render ran 2.42 asides per 1000 words and was called good;
+    the ask was for roughly half OVER LONG VIDEOS. A flat halving would have thinned the
+    short video too, so the rate tapers: a 20-chapter script gets about half the density
+    of a 2-chapter one, and the short one is left as approved."""
+    from manhwa2vid.script.personas import aside_rate_per_1k
+
+    short, long = aside_rate_per_1k(1100), aside_rate_per_1k(11000)
+    assert short > long, "the rate must thin with length"
+    assert 2.2 <= short <= 2.6, "the approved short-form density must survive"
+    assert long <= short / 1.9, "long form must land near half"
+    # Monotone, so no length is accidentally denser than a shorter one.
+    rates = [aside_rate_per_1k(w) for w in (500, 1100, 2750, 5500, 11000, 22000)]
+    assert rates == sorted(rates, reverse=True)
+
+
+def test_an_unknown_length_errs_toward_more_voice():
+    """A persona that fails to appear is invisible to everything except the
+    persona-voice floor; one that appears too often is obvious on first listen. When
+    the length is unknown, err toward the side that gets noticed."""
+    from manhwa2vid.script.personas import aside_rate_per_1k
+
+    assert aside_rate_per_1k(None) >= aside_rate_per_1k(11000)
+    assert aside_rate_per_1k(0) == aside_rate_per_1k(None)
+
+
+def test_the_budget_is_stated_as_a_rate_not_a_total():
+    """The first budgets said "about three or four times across the whole script",
+    which means a dense 6-minute recap and an almost silent 52-minute one from the
+    same words. The instruction the model receives must scale."""
+    short = voice_block("writer_light", 1100)
+    long = voice_block("writer_light", 11000)
+    assert "once every" in short and "once every" in long
+    assert short != long, "the same instruction was given for both lengths"
+    for block in (short, long):
+        assert "across the whole script" not in block
+
+
+def test_the_control_arm_gets_no_aside_budget():
+    """`current` has no asides to budget, and appending one would quietly change the
+    control arm of the bake-off."""
+    assert "BUDGET" not in voice_block("current", 2750)
+    assert voice_block("current", 2750) == voice_block("current", None) == CURRENT
 
 
 def test_no_persona_names_a_development_series():

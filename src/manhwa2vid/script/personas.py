@@ -141,45 +141,87 @@ You may also turn outward to the viewer directly, sparingly — "if you are keep
 
 
 #: Budgets. "Without overdoing it" is a rate, so it is stated as one.
-_LIGHT_BUDGET = """
-BUDGET — use the six moves above, sparingly but really use them: about three or four
-times across the whole script, and say "I" at least twice. They are the reason anyone
-would watch this channel over any other, so a script with none of them has failed, not
-succeeded. Never more than one in a paragraph and never two in a row; most paragraphs
-are pure story with no author in them at all."""
+#: Structural rules that are not rates, shared by every writer budget. These are what
+#: "without overdoing it" means locally — a rate alone permits three asides in one
+#: paragraph and none for the next thousand words.
+_BUDGET_SHAPE = """ They are the reason anyone would watch this channel over any other,
+so a script with none of them has failed, not succeeded — but never more than one in a
+paragraph, never two in a row, and never in the opening hook. Most paragraphs are pure
+story with no author in them at all, and an aside earns its place only by being worth
+more than the beat it displaces."""
 
-_MEDIUM_BUDGET = """
-BUDGET — use the six moves above regularly: about one every 250 words, and say "I" three
-or four times across the script. They are the reason anyone would watch this channel over
-any other, so a script with none of them has failed. Bound it, though: never more than one
-in a paragraph, never two paragraphs running. The story carries every paragraph and the
-writer is a presence, not a co-star."""
+#: Per-arm intensity, as a MULTIPLIER on the length-tapered base rate rather than an
+#: absolute count. The first version of these budgets said "about three or four times
+#: across the whole script", which cannot scale: the same instruction means a dense
+#: 6-minute recap and an almost silent 52-minute one.
+_ARM_INTENSITY: dict[str, float] = {
+    "writer_light": 1.0,
+    "writer_medium": 1.6,
+    "writer_bold": 2.4,
+}
 
-_BOLD_BUDGET = """
-BUDGET — about one of the six moves every 150 words, never more than one in a paragraph.
-Say "I" freely where one of the six moves calls for it, roughly six to eight times in the
-script. Be willing to hold a real opinion about the writing and the art, and to spend two
-sentences explaining something the chapter fumbled. Even here the story carries every
-paragraph — an aside earns its place by being worth more than the beat it displaces."""
+#: Asides per 1000 words, tapering with script length. Measured basis: the approved
+#: Frozen Player ch3-4 render ran 2.42/1k and the user called it good, then asked for
+#: roughly half "over long videos". A flat halving would have thinned the short video
+#: they had just approved, so the rate tapers instead — ~2.4/1k on a 6-minute recap,
+#: 1.2/1k at 20 chapters. That is one aside every ~4 minutes of runtime at full length
+#: and every ~2.5 minutes on a short one.
+_ASIDE_RATE_SHORT = 2.5
+_ASIDE_RATE_LONG = 1.2
+#: Words at which the taper bottoms out — 20 chapters at the 550-word chapter budget.
+_TAPER_FULL_WORDS = 11000
+
+
+def aside_rate_per_1k(words_target: int | None) -> float:
+    """Asides per 1000 words for a script of this length. See `_ASIDE_RATE_SHORT`.
+
+    `None` (length unknown) returns the short-script rate: erring toward MORE voice is
+    the safe direction, because a persona that fails to appear is invisible to everyone
+    except the `persona-voice` floor, whereas one that appears too often is obvious on
+    first listen.
+    """
+    if not words_target or words_target <= 0:
+        return _ASIDE_RATE_SHORT
+    span = max(0.0, min(1.0, words_target / _TAPER_FULL_WORDS))
+    return round(_ASIDE_RATE_SHORT - (_ASIDE_RATE_SHORT - _ASIDE_RATE_LONG) * span, 2)
+
+
+def _budget_block(arm: str, words_target: int | None) -> str:
+    rate = aside_rate_per_1k(words_target) * _ARM_INTENSITY.get(arm, 1.0)
+    every = int(round(1000 / rate / 10.0) * 10)
+    return (
+        f"\nBUDGET — use the six moves above about once every {every} words, and really "
+        f"use them.{_BUDGET_SHAPE}"
+    )
 
 
 #: name -> voice block. `current` must stay first-class: it is the control arm and the
 #: default, so an unconfigured run is unchanged.
 PERSONAS: dict[str, str] = {
     "current": CURRENT,
-    "writer_light": WRITER_CORE + _LIGHT_BUDGET,
-    "writer_medium": WRITER_CORE + _MEDIUM_BUDGET,
-    "writer_bold": WRITER_CORE + _BOLD_BUDGET,
+    "writer_light": WRITER_CORE,
+    "writer_medium": WRITER_CORE,
+    "writer_bold": WRITER_CORE,
 }
 
 DEFAULT_PERSONA = "current"
 
 
-def voice_block(persona: str | None) -> str:
+def voice_block(persona: str | None, words_target: int | None = None) -> str:
     """The VOICE section for `persona`, falling back to the shipped default.
+
+    `words_target` is the script's word budget; the writer arms use it to state their
+    aside budget as a rate that thins as the script grows (`aside_rate_per_1k`). The
+    `current` arm takes no budget block — it has no asides to budget.
 
     An unknown name falls back rather than raising: a typo in config.yaml should not
     take down a run that has already paid for its read pass, and the resolved name is
     recorded by the caller either way.
     """
-    return PERSONAS.get((persona or DEFAULT_PERSONA).strip(), CURRENT)
+    arm = (persona or DEFAULT_PERSONA).strip()
+    block = PERSONAS.get(arm)
+    if block is None:
+        return CURRENT
+    if arm in _ARM_INTENSITY:
+        return block + _budget_block(arm, words_target)
+    return block
