@@ -208,6 +208,14 @@ def generate_story_first_script(
 
     text, _density_record = apply_density_pass(text, paths, config)
 
+    # Subtractive trim: appearance the frame already shows, and narration stating its
+    # own emotional register (script/trim.py). Deletions only. After density — density
+    # rewrites paragraphs, and trimming first would give it less to work with — and
+    # before rhythm, so rhythm merges the sentences that actually survive.
+    from manhwa2vid.script.trim import apply_trim_pass
+
+    text, _trim_record = apply_trim_pass(text, paths, config)
+
     # Opener-rhythm repair: fold same-subject reported-speech chains and break
     # back-to-back openers with "Then" (script/rhythm.py). Deterministic, function
     # words only. After density (it edits the sentences density may rewrite), before
