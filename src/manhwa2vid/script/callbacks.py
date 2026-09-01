@@ -34,10 +34,15 @@ from typing import Any
 #: narrator, and must never trigger a replay.
 _RECALL_RE = re.compile(
     r"(?:^|[,;—-]\s*)(?:"
-    r"remember(?:\s+(?:when|what|that|the|how))?"
-    r"|if you remember"
-    r"|as you (?:may )?(?:remember|recall)"
-    r"|back (?:when|in|at|on)"
+    # "\b" after the verb or "Remembering the weeks in hospital" — the CHARACTER
+    # remembering — matched, which is the one thing this detector must never do.
+    r"remember\b(?:\s+(?:when|what|that|the|how))?"
+    r"|if you remember\b"
+    r"|as you (?:may )?(?:remember|recall)\b"
+    # "back when" is temporal recall; "back in the hospital room" is a scene
+    # transition and one of the most common sentence openers in a recap. Only the
+    # temporal form survives.
+    r"|back when\b"
     r"|this is the same\b"
     r"|that(?:'s| is) the same\b"
     r"|the same (?:\w+\s+){0,2}(?:who|that|from)\b"

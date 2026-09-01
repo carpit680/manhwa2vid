@@ -118,3 +118,19 @@ def test_a_shotlist_with_no_callbacks_exempts_nothing():
     """The default path must be exactly as strict as before this feature existed."""
     assert callback_panels({"sentences": [{"number": 1, "panels": ["p0001_01"]}]}) == set()
     assert callback_panels({}) == set()
+
+
+def test_a_character_remembering_never_triggers_a_replay():
+    """"Remembering the weeks spent in a hospital bed makes him shiver" is the STORY
+    remembering. The first regex matched it because the verb had no closing word
+    boundary — found by running the detector over a real generated script."""
+    assert not is_recall("Remembering the weeks spent in a hospital bed makes him shiver.")
+    assert not is_recall("He remembers his mother and keeps walking.")
+
+
+def test_a_scene_transition_is_not_a_callback():
+    """"Back in the hospital room" is one of the commonest openers in a recap and means
+    "we have moved", not "you have seen this before"."""
+    assert not is_recall("Back in his hospital room, Jun-Ho sits on his bed.")
+    assert not is_recall("Back in the blood-stained temple, the situation deteriorates.")
+    assert is_recall("Back when the party first stepped through the gate, nobody worried.")
