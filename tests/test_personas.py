@@ -202,3 +202,8 @@ def test_assistant_chatter_at_a_window_boundary_is_dropped():
     assert "Would you like" not in out
     assert "let me know" in out, "a mid-sentence phrase is not chatter"
     assert out.count("\n\n") == 1
+
+
+def test_the_budget_demands_rotation_across_moves():
+    block = voice_block("writer_light", 3000)
+    assert "ROTATE" in block and "a third" in block

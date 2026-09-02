@@ -178,3 +178,25 @@ def test_a_named_character_keeps_their_role_clause():
     something the picture does not."""
     text = "Deok-gu, the association president, sips his coffee."
     assert apply_trim_pass(text)[0] == text
+
+
+def test_an_aside_kind_that_dominates_is_reported_as_one_note():
+    """All seven asides on the 20-chapter probe were "The art…" — a tic, not a writer.
+    Report-only, like every other aside rule."""
+    paras = ["He walks in. The art here shifts to cold blues.",
+             "She sits. The art frames her against the window.",
+             "They argue. The art shifts to a silhouette.",
+             "He leaves. The art visualizes this beautifully.",
+             "It ends. I should explain the ranking system."]
+    _, rec = apply_trim_pass("\n\n".join(paras))
+    notes = [f for f in rec["meta"] if f["rule"] == "meta-one-note"]
+    assert notes and notes[0]["kind"] == "art" and notes[0]["count"] == 4
+
+
+def test_a_rotated_persona_is_not_one_note():
+    paras = ["He walks in. The art here shifts to cold blues.",
+             "She sits. I should explain the ranking system.",
+             "They argue. The translation here is rough.",
+             "He leaves. This chapter rushes the reveal."]
+    _, rec = apply_trim_pass("\n\n".join(paras))
+    assert not [f for f in rec["meta"] if f["rule"] == "meta-one-note"]

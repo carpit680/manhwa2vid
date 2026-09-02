@@ -98,6 +98,23 @@ _META_RE = re.compile(
 
 #: Meta-asides allowed in one paragraph before the record flags it for a human cut.
 _META_MAX_PER_PARAGRAPH = 1
+
+#: The six moves, as detectable frames, for the one-note report. On the 20-chapter
+#: probe all seven asides were "The art…": a tic, not a writer. Report-only, like every
+#: other aside rule — the record names it and a human decides.
+_MOVE_FRAMES = {
+    "art": re.compile(r"\b(?:the art|art style|artwork|the panel work|the drawing)\b", re.I),
+    "explain": re.compile(r"\b(?:i should explain|let me explain|to explain|i'll explain|"
+                          r"if you are new to|for anyone new)\b", re.I),
+    "translation": re.compile(r"\btranslat", re.I),
+    "critique": re.compile(r"\b(?:the writing|the chapter|this chapter|pacing|rushes|rushed|"
+                           r"the author|the story (?:rushes|fumbles|stumbles))\b", re.I),
+    "self": re.compile(r"\b(?:my retelling|i(?:'m| am) (?:skipping|glossing|smoothing)|"
+                       r"i(?:'ll| will) (?:skip|spare you))\b", re.I),
+}
+#: An aside kind may take at most this share of all asides before it is a tic.
+_ONE_NOTE_MAX_SHARE = 0.5
+_ONE_NOTE_MIN_ASIDES = 4
 #: Words at the head of the script where a meta-aside is never appropriate — the cold
 #: open has ~85 words to hook and cannot spend them on the narrator.
 _HOOK_WORDS = 85
@@ -161,6 +178,22 @@ def _meta_findings(paras: list[str]) -> list[dict[str, Any]]:
     """Structural over-budget report: too many per paragraph, back-to-back, or in the
     hook. Reported for a human to cut — never deleted here."""
     findings: list[dict[str, Any]] = []
+    # One-note check over the whole script first.
+    all_meta = [s for p in paras for s in split_sentences(p) if _META_RE.search(_strip_quoted(s))]
+    if len(all_meta) >= _ONE_NOTE_MIN_ASIDES:
+        kinds: dict[str, int] = {}
+        for s in all_meta:
+            for kind, rx in _MOVE_FRAMES.items():
+                if rx.search(s):
+                    kinds[kind] = kinds.get(kind, 0) + 1
+                    break
+        for kind, n in kinds.items():
+            if n / len(all_meta) > _ONE_NOTE_MAX_SHARE:
+                findings.append({
+                    "rule": "meta-one-note", "kind": kind, "count": n,
+                    "of": len(all_meta),
+                    "sentences": [s for s in all_meta if _MOVE_FRAMES[kind].search(s)][:6],
+                })
     seen_words = 0
     for i, para in enumerate(paras):
         sents = split_sentences(para)

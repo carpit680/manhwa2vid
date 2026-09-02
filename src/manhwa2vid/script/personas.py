@@ -146,9 +146,11 @@ You may also turn outward to the viewer directly, sparingly — "if you are keep
 #: paragraph and none for the next thousand words.
 _BUDGET_SHAPE = """ They are the reason anyone would watch this channel over any other,
 so a script with none of them has failed, not succeeded — but never more than one in a
-paragraph, never two in a row, and never in the opening hook. Most paragraphs are pure
-story with no author in them at all, and an aside earns its place only by being worth
-more than the beat it displaces."""
+paragraph, never two in a row, and never in the opening hook. ROTATE THEM: no single one
+of the six may be more than a third of your asides, and "I" must appear at least twice —
+a script whose every aside is about the art has found the cheapest move and leaned on
+it. Most paragraphs are pure story with no author in them at all, and an aside earns its
+place only by being worth more than the beat it displaces."""
 
 #: Per-arm intensity, as a MULTIPLIER on the length-tapered base rate rather than an
 #: absolute count. The first version of these budgets said "about three or four times

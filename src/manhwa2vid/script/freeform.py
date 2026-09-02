@@ -152,7 +152,12 @@ def _quotable_block(paths: dict[str, Path], pages: list[Path]) -> str:
     ]
     if not lines:
         return ""
-    picked = lines[:_QUOTABLE_LINES]
+    # Spread across the window's pages. Taking the first N gave a 59-page window
+    # thirty lines from its opening few pages and nothing from the rest — measured as
+    # 0.0 quoted spans per 1000 words on the 20-chapter probe, where 2-5 chapter runs
+    # sat at the reference rate with the same block.
+    step = max(1, len(lines) // _QUOTABLE_LINES)
+    picked = lines[::step][:_QUOTABLE_LINES]
     return (
         "LINES THESE PAGES ACTUALLY PRINT (a few of them — you may quote one verbatim "
         "when it is sharper than any paraphrase, and you may remark when one reads "
@@ -228,9 +233,16 @@ def write_freeform_script(
 
     glossary = _glossary_block(paths)
     written: list[str] = []
-    per_window_lo, per_window_hi = lo // len(windows), hi // len(windows)
-
     for i, window in enumerate(windows, start=1):
+        # Each window is asked for what is LEFT of the budget, split over the windows
+        # still to come — not a fixed quarter. With a fixed split, per-window over- or
+        # under-shoot compounds with no correction: the same 20-chapter prompt produced
+        # 13,637 words (8% over the ceiling) on one run and 7,688 (22% under the floor)
+        # on the next. Dividing the remainder makes window 4 make up for window 2.
+        done = sum(len(w.split()) for w in written)
+        remaining = max(1, len(windows) - i + 1)
+        per_window_lo = max(150, (lo - done) // remaining)
+        per_window_hi = max(per_window_lo + 100, (hi - done) // remaining)
         if len(windows) > 1:
             console.print(
                 f"[cyan]Writing[/] window {i}/{len(windows)} "
