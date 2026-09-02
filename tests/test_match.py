@@ -1024,3 +1024,27 @@ def test_short_gap_with_a_wide_window_is_left_to_the_fill():
     finally:
         M.collect_claims = orig
     assert out == [] and not called, "a 12-panel window was probed anyway"
+
+
+def test_a_run_bracketed_by_one_panel_holds_instead_of_filling():
+    """A co-claim pair (filter_monotonic phase 3) shows ONE panel across two adjacent
+    sentences, and any unclaimed sentence between them must hold it. The bounded fill's
+    reach-back searched behind the anchor and handed the middle sentence a different
+    panel, so the pair stopped being adjacent and the same image played twice six
+    seconds apart — p0182_05 at 907.0s and 912.7s on the 20-chapter probe, the only
+    repeat in 642 runs and a blocking gate failure."""
+    shotlist = {"sentences": [
+        {"number": 1, "beat_id": 1, "block": 0, "text": "a", "panels": ["p5"]},
+        {"number": 2, "beat_id": 1, "block": 0, "text": "b", "panels": []},
+        {"number": 3, "beat_id": 1, "block": 0, "text": "c", "panels": ["p5"]},
+        {"number": 4, "beat_id": 1, "block": 0, "text": "d", "panels": ["p9"]},
+    ]}
+    segs = {1: [{"seconds": 3.0}] * 4}
+    plan = plan_shots(
+        shotlist, segs, floor=1.0,
+        panel_order=["p1", "p2", "p3", "p4", "p5", "p9"], max_shot=0.0,
+    )
+    assert plan is not None
+    shown = [pid for pid, _sec in plan[1]]
+    assert shown.count("p5") == 1, f"the co-claim pair was split: {shown}"
+    assert shown == ["p5", "p9"], shown

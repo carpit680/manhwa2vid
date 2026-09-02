@@ -1,0 +1,36 @@
+{
+ "arms": {
+  "writer_light": {
+   "words": 10819,
+   "verbs": 37.74,
+   "quoted": 0.18,
+   "mean": 10.88,
+   "short": 25.9,
+   "addr": 0.54,
+   "first": 0.83,
+   "meta": 1.02,
+   "pron_open": 49.9,
+   "b2b": 25.5,
+   "conn": 2.7,
+   "repeat": 5
+  }
+ },
+ "yardsticks": {
+  "reference": {
+   "verbs": 31.34,
+   "quoted": 1.16,
+   "mean": 12.8,
+   "short": 21.5,
+   "addr": null,
+   "first": 0.24
+  },
+  "gold": {
+   "verbs": 20.8,
+   "quoted": 0.0,
+   "mean": 16.7,
+   "short": 4.1,
+   "addr": 0.0,
+   "first": 0.0
+  }
+ }
+}

@@ -972,6 +972,17 @@ def plan_shots_with_sentences(
                 (p for k in range(j, len(flat)) for p in flat[k]["panels"] if p in pos),
                 None,
             )
+            # A run BRACKETED BY THE SAME PANEL is a co-claim pair holding one shot
+            # (filter_monotonic phase 3), and it must stay one shot. Filling it puts a
+            # different panel between the two showings, so the fold cannot merge them
+            # and the same image appears twice seconds apart — measured on the
+            # 20-chapter probe: p0182_05 at 907.0s and 912.7s, the only repeat in 642
+            # runs, and a blocking gate failure. The forward gap here is empty by
+            # construction, but the fill's reach-back (same session) searches BEHIND
+            # the anchor and found one. Two correct rules, jointly wrong.
+            if prev_anchor is not None and prev_anchor == next_anchor:
+                i = j
+                continue
             if prev_anchor is not None and next_anchor is not None:
                 lo, hi = pos[prev_anchor], pos[next_anchor]
                 # The gap intersects the RUN'S OWN BLOCK. Without this the fill can
