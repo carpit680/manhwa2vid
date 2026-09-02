@@ -94,6 +94,26 @@ def _window_sentences(
     return scoped or sentences
 
 
+_MATCHER_PROVIDER: Any = None
+
+
+def _matcher_provider(config: dict[str, Any]) -> Any:
+    """One provider for the whole matching stage, so its usage totals are one number.
+
+    `collect_claims` used to build a fresh provider per call — ~100 of them on a
+    20-chapter range — which made "what did matching cost" unanswerable. Cached on the
+    module for the process lifetime; tests that stub `collect_claims` never reach it.
+    """
+    global _MATCHER_PROVIDER
+    if _MATCHER_PROVIDER is None:
+        from manhwa2vid.llm.provider import get_llm_provider
+
+        _MATCHER_PROVIDER = get_llm_provider(
+            get_nested(config, "align", "provider", default=None), config
+        )
+    return _MATCHER_PROVIDER
+
+
 def collect_claims(
     sentences: list[tuple[int, str]],
     panels: list[Panel],
@@ -106,9 +126,7 @@ def collect_claims(
 
     `system` overrides the prompt — the second pass (`_second_pass_claims`) asks with a
     more willing framing than the conservative first pass."""
-    from manhwa2vid.llm.provider import get_llm_provider
-
-    provider = get_llm_provider(get_nested(config, "align", "provider", default=None), config)
+    provider = _matcher_provider(config)
     model = get_nested(config, "align", "match_model", default=None)
     if model:
         provider.vision_model = model
@@ -685,6 +703,8 @@ def build_shotlist(
         )
 
     save_json(paths["script_shotlist_json"], shotlist)
+    if _MATCHER_PROVIDER is not None:
+        console.print(f"[dim]{_MATCHER_PROVIDER.usage_line('Matcher')}[/]")
     matched = sum(1 for s in shotlist["sentences"] if s["panels"])
     console.print(
         f"[green]Shot list[/] — {matched}/{len(numbered)} sentence(s) matched, "

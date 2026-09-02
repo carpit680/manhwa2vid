@@ -176,6 +176,7 @@ def read_chapter_facts(
     facts.setdefault("time_markers", [])
     facts.setdefault("cast", [])
     facts.setdefault("plot_spine", [])
+    console.print(f"[dim]{provider.usage_line('Read pass')}[/]")
 
     merge_cast_into_glossary(facts.get("cast", []), paths)
     # ...and up to the series, so the next chapter range inherits this cast and any

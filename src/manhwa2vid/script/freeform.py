@@ -274,6 +274,7 @@ def write_freeform_script(
         written.append(raw.strip())
 
     text = "\n\n".join(written).strip()
+    console.print(f"[dim]{provider.usage_line('Writer')}[/]")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(text + "\n", encoding="utf-8")
     console.print(

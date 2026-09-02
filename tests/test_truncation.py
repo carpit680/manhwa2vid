@@ -152,6 +152,9 @@ def test_the_matcher_counts_truncated_windows_instead_of_aborting(tmp_path, monk
 
     provider = _Truncating(json.dumps({"claims": [{"sentence": 1, "panels": ["p1"]}]}))
     monkeypatch.setattr("manhwa2vid.llm.provider.get_llm_provider", lambda *a, **k: provider)
+    # The matcher caches ONE provider per process for usage accounting; a stub must
+    # replace it, not sit behind it.
+    monkeypatch.setattr(M, "_MATCHER_PROVIDER", None)
     panels = [Panel(id="p1", page_num=1, bbox=PanelBBox(x=0, y=0, width=9, height=9),
                     image_path="panels/p1.png", ink_ratio=0.5, dark_ratio=0.5)]
     claims = M.collect_claims([(1, "A sentence.")], panels,

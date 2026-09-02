@@ -2377,6 +2377,47 @@ _TRUNCATED_SPEECH_RE = re.compile(
 )
 
 
+#: The speech verb + content-clause shape that proves something WAS said: "explains that",
+#: "asks whether", "tells him to", "warns her about". If one of these precedes a
+#: trailing "telling him." in the same sentence, the trailing verb is a motive clause,
+#: not a hole.
+_SPEECH_WITH_CONTENT_RE = re.compile(
+    r"\b(?:explain|say|tell|ask|admit|repl|answer|warn|remind|note|state|insist|"
+    r"claim|add|mention|point|confirm|declare|report|argue|suggest|promise|complain)"
+    r"\w*\s+(?:(?:him|her|them|it|[A-Z][\w'’-]*)\s+)?"
+    r"(?:that|whether|if|to|about|how|why|what|where|when)\b",
+)
+
+#: Subordinators that turn a trailing speech verb into a reason, not a report:
+#: "which is why she is telling him", "because he keeps asking her".
+_MOTIVE_LEAD_RE = re.compile(
+    r"\b(?:which is why|that is why|that's why|because|so that|before|after|while|"
+    r"without|instead of|rather than|despite|keeps?|kept|stops?|stopped)\s+"
+    r"(?:\w+\s+){0,4}$",
+)
+
+
+def is_truncated_speech(sentence: str) -> bool:
+    """A speech verb naming its listener with nothing said — and NOTHING ELSE.
+
+    The regex alone fired on the 20-chapter probe's beat 342, "Then she explains that
+    the Association probably doesn't know yet, which is why she is telling him." —
+    a complete sentence whose trailing "telling him" is the reason for the report, not
+    a report with the content missing. At 1021 sentences a rare false positive in a
+    BLOCKING gate is a near-certain block, so the two shapes that make a trailing
+    speech verb legitimate are excluded: a content clause earlier in the sentence
+    ("explains that…"), or a motive subordinator directly before the verb.
+    """
+    m = _TRUNCATED_SPEECH_RE.search(sentence)
+    if not m:
+        return False
+    before = sentence[: m.start()]
+    if _SPEECH_WITH_CONTENT_RE.search(before):
+        return False
+    if _MOTIVE_LEAD_RE.search(before + " "):
+        return False
+    return True
+
 # "They grit his teeth." — a plural subject carrying a singular possessive for the same
 # person. Narrow by construction: subject pronoun, then a short verb-and-modifier span
 # with no second subject in it, then a gendered possessive.
@@ -2472,7 +2513,7 @@ def lint_broken_sentences(beats: list[ScriptBeat]) -> dict[int, list[str]]:
         issues = [f"fragment: {s[:60]}" for s in sentence_fragments(beat.narration)]
         for sent in _SENTENCE_SPLIT_RE.split(beat.narration.strip()):
             sent = sent.strip()
-            if _TRUNCATED_SPEECH_RE.search(sent):
+            if is_truncated_speech(sent):
                 issues.append(f"truncated_speech: {sent[:60]}")
             # "The they explain that the other hunters held higher ranks" shipped in a
             # 5-chapter run. _ARTICLE_PRONOUN_RE has always detected this, but only
@@ -2516,7 +2557,7 @@ def narration_defects(text: str) -> list[str]:
     defects += [
         f"truncated_speech: {sent.strip()[:60]}"
         for sent in _SENTENCE_SPLIT_RE.split((text or "").strip())
-        if _TRUNCATED_SPEECH_RE.search(sent.strip())
+        if is_truncated_speech(sent.strip())
     ]
     stripped = (text or "").strip()
     if stripped and stripped.split() and stripped.split()[0][:1].islower():

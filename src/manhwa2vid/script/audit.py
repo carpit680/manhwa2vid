@@ -302,6 +302,7 @@ def audit_script(
     findings = deduped
     majors = [f for f in findings if str(f.get("severity", "")).lower() == "major"]
     confirmed, unverified = verify_majors(majors, paths, config, provider=provider, facts=facts)
+    console.print(f"[dim]{provider.usage_line('Audit + verification')}[/]")
     return {
         "findings": findings,
         "majors": confirmed,

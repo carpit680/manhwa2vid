@@ -228,6 +228,25 @@ class LLMProvider(ABC):
     #: Why the last call stopped ("stop" | "length" | ...). "length" means truncated.
     last_finish_reason: str = ""
     last_completion_tokens: int = 0
+    last_prompt_tokens: int = 0
+    last_cached_tokens: int = 0
+    #: Running totals across every call this provider instance has made. Until
+    #: 2026-09-01 only completion tokens were recorded, per call, and nothing summed
+    #: them — so "what does a 20-chapter run cost, and which stage dominates" had no
+    #: answer. Image-heavy prompts are where the money is, and they are prompt tokens.
+    total_prompt_tokens: int = 0
+    total_cached_tokens: int = 0
+    total_completion_tokens: int = 0
+    total_calls: int = 0
+
+    def usage_line(self, label: str = "") -> str:
+        """One line a stage can print: calls, prompt/cached/completion tokens so far."""
+        return (
+            f"{label + ': ' if label else ''}{self.total_calls} call(s), "
+            f"{self.total_prompt_tokens:,} prompt tok "
+            f"({self.total_cached_tokens:,} cached), "
+            f"{self.total_completion_tokens:,} completion tok"
+        )
 
     def set_json_budget(self, tokens: int) -> None:
         """Raise the OUTPUT cap for a stage whose answer is one large JSON object.
@@ -417,6 +436,19 @@ class OpenAICompatProvider(LLMProvider):
             self.last_completion_tokens = int(resp.usage.completion_tokens)
         except Exception:
             self.last_completion_tokens = 0
+        try:
+            self.last_prompt_tokens = int(resp.usage.prompt_tokens or 0)
+        except Exception:
+            self.last_prompt_tokens = 0
+        try:
+            details = getattr(resp.usage, "prompt_tokens_details", None)
+            self.last_cached_tokens = int(getattr(details, "cached_tokens", 0) or 0)
+        except Exception:
+            self.last_cached_tokens = 0
+        self.total_prompt_tokens += self.last_prompt_tokens
+        self.total_cached_tokens += self.last_cached_tokens
+        self.total_completion_tokens += self.last_completion_tokens
+        self.total_calls += 1
         if self.last_finish_reason == "length":
             # Warn unconditionally. Some callers legitimately tolerate a truncated
             # body; none of them should have to discover it from the artifact.

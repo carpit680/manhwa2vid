@@ -2586,3 +2586,39 @@ def test_near_homophone_ignores_plurals():
         "Mr. Song counts the hands. He asks how about Mr. Sung.",
         {"Song Chi-Yul", "Sung Jin-Woo"},
     ) == ["Song / Sung"]
+
+
+class TestTruncatedSpeechGuards:
+    """The detector alone blocked the first 20-chapter probe on a complete sentence.
+
+    "Then she explains that the Association probably doesn't know yet, which is why
+    she is telling him." — the trailing "telling him" is a motive clause, not a report
+    with the content missing. At 1021 sentences a rare false positive in a blocking
+    gate is a near-certain block, which only a long run reveals.
+    """
+
+    def test_a_motive_clause_after_a_content_clause_is_not_truncated(self):
+        from manhwa2vid.script.lint import is_truncated_speech
+
+        assert not is_truncated_speech(
+            "Then she explains that the Association probably doesn't know yet, "
+            "which is why she is telling him."
+        )
+
+    def test_a_motive_subordinator_alone_is_enough(self):
+        from manhwa2vid.script.lint import is_truncated_speech
+
+        assert not is_truncated_speech("He keeps asking her.")
+        assert not is_truncated_speech("She leaves without telling him.")
+
+    def test_the_real_defect_is_still_caught(self):
+        """The shape this exists for: a listener named, nothing said, nothing else."""
+        from manhwa2vid.script.lint import is_truncated_speech
+
+        assert is_truncated_speech("Jin-Woo offers a weak smile, telling Lee Joo-hee.")
+        assert is_truncated_speech("Deok-gu tells him.")
+
+    def test_the_honorific_false_positive_stays_dead(self):
+        from manhwa2vid.script.lint import is_truncated_speech
+
+        assert not is_truncated_speech("Bak asks Mr. Kim if Jin-Woo is coming.")
