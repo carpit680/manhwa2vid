@@ -627,6 +627,30 @@ class GeminiProvider(OpenAICompatProvider):
     DEFAULT_VISION_MODEL = "gemini-2.5-flash"
 
 
+class OpenAIChatProvider(OpenAICompatProvider):
+    """OpenAI's own models through the SAME interleaving path every other provider uses.
+
+    `OpenAIProvider` (above) extends `LLMProvider` directly, so it inherits the BASE
+    `describe_labeled_panels`, which DROPS the labels and forwards to `describe_panels`.
+    That is the exact failure the interleaving exists to prevent: handing a model N
+    images plus a text list of N ids does not bind them, and the annotations came back
+    shifted +3 positions at 59 images. The matcher lives or dies on that binding, so an
+    OpenAI model can only be evaluated for it through this class, never through
+    `OpenAIProvider`.
+
+    Kept separate rather than changing `OpenAIProvider`'s base: that one is also the TTS
+    path's client and is reached by `provider: openai`, and silently changing how a
+    shipped provider sends images is not a thing to do while chasing a cheaper model.
+    """
+
+    BASE_URL = "https://api.openai.com/v1"
+    API_KEY_ENVS = ("OPENAI_API_KEY",)
+    TEXT_MODEL_ENVS = ("OPENAI_TEXT_MODEL",)
+    VISION_MODEL_ENVS = ("OPENAI_VISION_MODEL",)
+    DEFAULT_TEXT_MODEL = "gpt-5.6-luna"
+    DEFAULT_VISION_MODEL = "gpt-5.6-luna"
+
+
 class MistralProvider(OpenAICompatProvider):
     """Mistral — very large monthly token allowance on the free tier, but a low
     requests-per-minute ceiling, so it suits long unattended batches."""
@@ -1185,6 +1209,19 @@ def get_llm_provider(provider: str | None = None, config: dict[str, Any] | None 
 
     if name == "ollama":
         return OllamaProvider()
+
+    if name in ("openai-chat", "openai_compat"):
+        # The label-interleaving path — see OpenAIChatProvider. Deliberately a distinct
+        # name so `provider: openai` keeps meaning exactly what it meant before.
+        if not os.getenv("OPENAI_API_KEY"):
+            console.print(
+                "[yellow]Warning:[/] OPENAI_API_KEY is missing — using mock LLM."
+            )
+            return MockLLMProvider()
+        return OpenAIChatProvider(
+            text_model=get_nested(config, "llm", "openai", "text_model"),
+            vision_model=get_nested(config, "llm", "openai", "vision_model"),
+        )
 
     if not os.getenv("OPENAI_API_KEY"):
         console.print(

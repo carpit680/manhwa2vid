@@ -423,3 +423,35 @@ def test_apply_stage_model_sets_the_stage_temperature():
     llm = _P()
     apply_stage_model(llm, "script", {"llm": {"temperature": 0.0}})
     assert llm.temperature == 0.0
+
+
+def test_only_the_compat_path_interleaves_panel_labels():
+    """Handing a model N images plus a text list of N ids does not bind them — the
+    annotations came back shifted +3 positions at 59 images, which is why every image
+    carries its label immediately before it. `OpenAIProvider` extends LLMProvider
+    directly and inherits the BASE fallback, which drops the labels; a matcher run on
+    it would misbind silently. `OpenAIChatProvider` exists so an OpenAI model can be
+    evaluated for that stage at all."""
+    from manhwa2vid.llm.provider import (
+        GeminiProvider, LLMProvider, OpenAIChatProvider, OpenAIProvider,
+        OpenAICompatProvider,
+    )
+
+    def owner(cls):
+        return cls.describe_labeled_panels.__qualname__.split(".")[0]
+
+    assert owner(OpenAIProvider) == "LLMProvider", "unlabelled fallback — do not use for panels"
+    for cls in (GeminiProvider, OpenAIChatProvider):
+        assert owner(cls) == "OpenAICompatProvider", cls.__name__
+    assert issubclass(OpenAIChatProvider, OpenAICompatProvider)
+    assert OpenAIChatProvider.BASE_URL.startswith("https://api.openai.com")
+
+
+def test_the_plain_openai_name_still_resolves_to_the_old_provider(monkeypatch):
+    """`provider: openai` must keep meaning what it meant before — swapping a shipped
+    provider's image path while chasing a cheaper model is how a silent regression
+    ships."""
+    from manhwa2vid.llm.provider import OpenAIProvider, get_llm_provider
+
+    monkeypatch.setenv("OPENAI_API_KEY", "x")
+    assert isinstance(get_llm_provider("openai", {}), OpenAIProvider)
