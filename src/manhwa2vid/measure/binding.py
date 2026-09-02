@@ -42,6 +42,48 @@ def match_rate(shotlist: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def coverage_gaps(story_panel_ids: list[str], entries: list[Any]) -> dict[str, Any]:
+    """Runs of consecutive story panels the video never shows — the DISCONNECT measure.
+
+    `panel_utilisation` answers "what share of the art reached the screen", which is the
+    wrong question for a long recap: at 20 chapters a 550-word-per-chapter budget yields
+    ~640 shots for ~1640 panels, so 39% is arithmetic, not a defect. What a viewer
+    actually notices is a HOLE — the narration jumping over a stretch of the story.
+
+    Measured on the first 20-chapter probe: median gap 2 panels (healthy sampling) but a
+    single run of 165 consecutive panels — 27 pages — that no paragraph covered at all,
+    because the writer skipped the sequence. The two shipped short videos have longest
+    gaps of 8 and 10 panels. So the distribution, not the total, is the signal.
+    """
+    def get(e: Any, key: str) -> Any:
+        return e.get(key) if isinstance(e, dict) else getattr(e, key)
+
+    shown = {get(e, "panel_id") for e in entries}
+    gaps: list[dict[str, Any]] = []
+    run = 0
+    for i, pid in enumerate(story_panel_ids):
+        if pid in shown:
+            if run:
+                gaps.append({"panels": run, "from": story_panel_ids[i - run],
+                             "to": story_panel_ids[i - 1]})
+            run = 0
+        else:
+            run += 1
+    if run:
+        gaps.append({"panels": run, "from": story_panel_ids[-run],
+                     "to": story_panel_ids[-1]})
+    ordered = sorted(gaps, key=lambda g: -g["panels"])
+    lengths = [g["panels"] for g in gaps]
+    lengths.sort()
+    median = lengths[len(lengths) // 2] if lengths else 0
+    return {
+        "gaps": len(gaps),
+        "longest_gap": ordered[0]["panels"] if ordered else 0,
+        "median_gap": median,
+        "worst": ordered[:5],
+    }
+
+
 def panel_utilisation(story_panel_ids: list[str], entries: list[Any]) -> dict[str, Any]:
     """Share of story panels that actually reach the screen.
 

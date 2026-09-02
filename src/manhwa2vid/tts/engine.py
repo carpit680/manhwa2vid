@@ -193,7 +193,19 @@ def _ensure_segments_sidecar(narration: str, wav_path: Path) -> None:
 # 70 sits below the worst title with margin; what remains unmatched is mostly
 # narrator commentary, which is unmatched BY DESIGN.
 _MATCH_MIN_PCT = 70.0
-_UTILISATION_MIN_PCT = 60.0    # brief; measured 58.8 / 71.5
+# Re-derived 2026-09-02 after the 20-chapter probe and an explicit user decision:
+# "lesser panels are fine as long as the story is conveyed without disconnect". At 20
+# chapters the word budget buys ~640 shots for ~1640 story panels, so 39% utilisation is
+# arithmetic rather than a defect, and a 60% floor would warn on every long video for a
+# reason nobody wants fixed. The share is still reported; `story-coverage` is what now
+# carries the viewer-visible question, and it measures HOLES instead of totals.
+_UTILISATION_MIN_PCT = 35.0    # brief said 60; measured 58.8 / 71.5 short, 39.2 at 20ch
+
+#: Longest run of consecutive story panels the video may skip before it reads as the
+#: story jumping. The two shipped short videos measure 8 and 10; the 20-chapter probe
+#: measured 165 (27 pages the writer never covered) against a median of 2. 24 is well
+#: clear of healthy sampling and well under a skipped sequence.
+_COVERAGE_GAP_MAX = 24
 _HOLD_MAX_SENTENCES = 3        # brief
 _TIMING_MIN_PCT = 95.0         # replaces the brief's "80% measured": 100% today, so this
                                # guards a REGRESSION to word-proration, not a deficit
@@ -431,7 +443,9 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
     # These read the PLANNED artifacts, so they can catch a bad edit before a render is
     # paid for. Thresholds from docs/qa-hardening-brief.md, measured today at
     # match 61.1% (FP) / 48.7% (SL) and utilisation 58.8% / 71.5%.
-    from manhwa2vid.measure.binding import hold_runs, match_rate, panel_utilisation
+    from manhwa2vid.measure.binding import (
+        coverage_gaps, hold_runs, match_rate, panel_utilisation,
+    )
 
     shotlist_path = paths["script_shotlist_json"]
     if shotlist_path.exists():
@@ -456,6 +470,29 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
         f"{util['utilisation_pct']}% of story panels reach the screen "
         f"(floor {_UTILISATION_MIN_PCT}%); {len(unused)} never shown",
         **util,
+    )
+
+    # Where the video SKIPS the story, which is what a viewer actually notices.
+    # `panel-utilisation` asks what share of the art reached the screen — the wrong
+    # question at length, because a 20-chapter range has ~1640 panels and the word
+    # budget buys ~640 shots, so 39% is arithmetic. The user's standard is "fewer
+    # panels are fine as long as the story is conveyed without disconnect", and a
+    # disconnect is a HOLE: the 20-chapter probe had a healthy median gap of 2 panels
+    # and one run of 165 — 27 pages no paragraph covered at all, because the writer
+    # skipped the sequence.
+    gaps = coverage_gaps(story_ids, timeline.entries)
+    worst = gaps["worst"][0] if gaps["worst"] else None
+    report.add(
+        "story-coverage",
+        True if gaps["longest_gap"] <= _COVERAGE_GAP_MAX else "warn",
+        (
+            f"longest unshown run {gaps['longest_gap']} panels"
+            + (f" ({worst['from']}..{worst['to']})" if worst else "")
+            + f", median {gaps['median_gap']} (limit {_COVERAGE_GAP_MAX}) — a hole this "
+              f"size is the story jumping, not sampling"
+            if gaps["longest_gap"] > _COVERAGE_GAP_MAX else ""
+        ),
+        **gaps,
     )
 
     # How much NARRATION one image has to carry. Needs TimelineEntry.sentence_numbers;

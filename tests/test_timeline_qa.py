@@ -571,3 +571,29 @@ def test_a_third_appearance_is_never_legal(tmp_path: Path) -> None:
     gates = _gates(tmp_path, beats, panels, timeline)
     assert gates["no-repeated-panels"]["status"] == FAIL
     assert "p0001_01 shown 3x" in gates["no-repeated-panels"]["details"]
+
+
+def test_coverage_gaps_separate_sampling_from_a_skipped_sequence():
+    """"Fewer panels are fine as long as the story is conveyed without disconnect."
+    Utilisation cannot tell those apart: an evenly-sampled long recap and one that
+    jumps 27 pages can show the same SHARE of panels. The distribution is the signal —
+    the 20-chapter probe had a median gap of 2 and one run of 165."""
+    from manhwa2vid.measure.binding import coverage_gaps
+
+    order = [f"p{i:04d}" for i in range(100)]
+    sampled = [{"panel_id": p} for p in order[::3]]          # every third panel
+    holed = [{"panel_id": p} for p in order[:20] + order[80:]]  # 60-panel hole
+
+    a, b = coverage_gaps(order, sampled), coverage_gaps(order, holed)
+    assert a["longest_gap"] <= 3, a
+    assert b["longest_gap"] == 60, b
+    # Both show a similar share; only the gap measure separates them.
+    assert b["worst"][0]["from"] == "p0020" and b["worst"][0]["to"] == "p0079"
+
+
+def test_a_fully_shown_range_has_no_gaps():
+    from manhwa2vid.measure.binding import coverage_gaps
+
+    order = [f"p{i:04d}" for i in range(10)]
+    g = coverage_gaps(order, [{"panel_id": p} for p in order])
+    assert g["gaps"] == 0 and g["longest_gap"] == 0
