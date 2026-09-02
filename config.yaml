@@ -54,6 +54,14 @@ llm:
     text_model: gemini-3.5-flash
     vision_model: gemini-3-flash-preview  # bakeoff 2026-08-17: only 3.x candidate with
     # 3/3 speaker-grounded on the back-turned-MC trap panel; 3.5-flash lost that one
+  openai:
+    # Reached by provider "openai-chat", NOT "openai" — see llm/provider.py. The plain
+    # name keeps its old meaning (OpenAIProvider, which does NOT interleave panel labels
+    # and must never serve the matcher); openai-chat goes through the same interleaving
+    # path Gemini uses, which is the only way an OpenAI model can be evaluated for panel
+    # work. Nothing uses this yet — it exists so tools/vision_bakeoff.py can compare.
+    text_model: gpt-5.6-luna
+    vision_model: gpt-5.6-luna
   mistral:
     # Free tier: large monthly token allowance, low requests-per-minute ceiling.
     text_model: mistral-large-latest
