@@ -187,3 +187,18 @@ def test_the_count_scales_with_length_and_intensity():
     assert total("writer_light", 1265) < total("writer_light", 12649)
     assert total("writer_light", 3162) < total("writer_bold", 3162)
     assert total("writer_light", 500) >= 2, "a short script still gets a voice"
+
+
+def test_assistant_chatter_at_a_window_boundary_is_dropped():
+    """"Would you like a summary of the next chapter?" became two BEATS on the
+    20-chapter probe — read aloud, aligned to panels. Only whole paragraphs that OPEN
+    with a chat frame go; narration containing such a phrase mid-sentence stays."""
+    from manhwa2vid.script.freeform import strip_assistant_chatter
+
+    text = ("He steps through the gate.\n\n"
+            "Would you like a summary of the next chapter?\n\n"
+            "She tells him to let me know if the plan changes.")
+    out = strip_assistant_chatter(text)
+    assert "Would you like" not in out
+    assert "let me know" in out, "a mid-sentence phrase is not chatter"
+    assert out.count("\n\n") == 1

@@ -487,3 +487,38 @@ class TestMatcherFailureIsLoud:
 
         with pytest.raises(AttributeError):
             _retry_once(broken, what="Shot matching")
+
+
+class TestAnnouncerRadius:
+    """An announcing paragraph may claim a printed cut only if it is near it.
+
+    The 20-chapter probe had 12 cuts and 7 announcing paragraphs. With no distance
+    limit, the cut at panel 658 was claimed by the only announcer left, paragraph 63,
+    ~800 panels away; every later cut got one paragraph and block 3 swallowed
+    paragraphs 23-62 — 295 sentences on 42 panels, a 43% match rate.
+    """
+
+    def _run(self, n_paras, starts_pages, announces, cut_pages, panels_per_page=10):
+        from manhwa2vid.script.align import clamp_to_time_blocks
+
+        ordered = [f"p{pg:04d}_{k:02d}" for pg in range(1, 40) for k in range(1, panels_per_page + 1)]
+        panel_lists = [[f"p{pg:04d}_01"] for pg in starts_pages]
+        texts = ["25 YEARS LATER the city is rebuilt." if a else "He walks in." for a in announces]
+        boundaries = [f"p{pg:04d}_01" for pg in cut_pages]
+        _, tb = clamp_to_time_blocks(panel_lists, texts, ordered, boundaries)
+        return tb.block_of
+
+    def test_a_distant_announcer_does_not_claim_a_cut(self):
+        # 8 paragraphs on pages 2..9; the only announcer is on page 30, far from a cut
+        # at page 5. Position must decide: paragraphs at/after page 5 cross.
+        starts = [2, 3, 4, 5, 6, 7, 8, 30]
+        ann = [False] * 7 + [True]
+        block_of = self._run(8, starts, ann, cut_pages=[5])
+        assert block_of == [0, 0, 0, 1, 1, 1, 1, 1], block_of
+
+    def test_a_nearby_announcer_still_wins_over_position(self):
+        # The original rule, preserved: an announcer just before the cut crosses it.
+        starts = [2, 3, 4, 6, 7]
+        ann = [False, False, True, False, False]   # page-4 paragraph announces
+        block_of = self._run(5, starts, ann, cut_pages=[5])
+        assert block_of == [0, 0, 1, 1, 1], block_of

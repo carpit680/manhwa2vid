@@ -293,6 +293,13 @@ def return_candidates(tb: TimeBlocks) -> list[int]:
     ]
 
 
+#: How far (in panels) an announcing paragraph may sit from a printed cut and still be
+#: treated as the paragraph that crosses it. ~8 pages of webtoon: an announcement
+#: belongs to the boundary on the page it names, not one a chapter away. Measured need
+#: on the 20-chapter probe, where the unbounded rule picked an announcer ~800 panels off.
+_ANNOUNCE_RADIUS = 64
+
+
 def clamp_to_time_blocks(
     panel_lists: list[list[str]],
     para_texts: list[str],
@@ -340,10 +347,20 @@ def clamp_to_time_blocks(
         starts.append(min(positions) if positions else 0)
     announces = [bool(_TIME_JUMP_RE.search(t)) for t in para_texts]
 
+    # An announcing paragraph may claim a cut only if it is actually NEAR it. The rule
+    # "nearest announcing paragraph wins" had no distance limit, which is invisible at
+    # one or two cuts and catastrophic at twelve: on the 20-chapter probe the cut at
+    # panel 658 was claimed by the only announcer left, paragraph 63, ~800 panels away.
+    # Every later cut then got one paragraph each and block 3 swallowed paragraphs
+    # 23-62 — 295 sentences competing for 42 panels, and a 43% match rate. Beyond this
+    # radius, position decides, exactly as if nothing announced.
     crossings: list[int] = []
     after = 0
     for cut in cuts:
-        candidates = [i for i in range(after, len(para_texts)) if announces[i]]
+        candidates = [
+            i for i in range(after, len(para_texts))
+            if announces[i] and abs(starts[i] - cut) <= _ANNOUNCE_RADIUS
+        ]
         if candidates:
             crossing = min(candidates, key=lambda i: abs(starts[i] - cut))
         else:

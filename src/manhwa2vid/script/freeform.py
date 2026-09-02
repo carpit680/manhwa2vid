@@ -24,6 +24,7 @@ gate entrance.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -271,7 +272,7 @@ def write_freeform_script(
             "\n\n".join(parts),
             max_width=page_max_width(config),
         )
-        written.append(raw.strip())
+        written.append(strip_assistant_chatter(raw.strip()))
 
     text = "\n\n".join(written).strip()
     console.print(f"[dim]{provider.usage_line('Writer')}[/]")
@@ -282,6 +283,28 @@ def write_freeform_script(
         f"{len(paragraphs(text))} paragraph(s) (budget {lo}-{hi})"
     )
     return text
+
+
+#: A window's answer sometimes ends the way a chat assistant ends: "Would you like a
+#: summary of the next chapter?" On the 20-chapter probe two of these became beats —
+#: paragraphs 23 and 27 of the script, read aloud by the narrator and aligned to
+#: panels. Only ever at window boundaries, which is why 2-5 chapter runs never saw it.
+_CHATTER_RE = re.compile(
+    r"^\s*(?:would you like|do you want|shall i|should i|let me know|want me to|"
+    r"i can (?:also|continue)|here(?:'s| is) (?:the|a) (?:summary|recap|continuation)|"
+    r"\(?continued in|end of (?:part|window|chapter))\b",
+    re.I,
+)
+
+
+def strip_assistant_chatter(text: str) -> str:
+    """Drop paragraphs that are the model talking to its operator, not the narrator.
+
+    Whole paragraphs only, and only ones that OPEN with a chat frame: narration that
+    happens to contain "let me know" mid-sentence is left alone.
+    """
+    kept = [p for p in paragraphs(text) if not _CHATTER_RE.match(p)]
+    return "\n\n".join(kept)
 
 
 def _chapter_count(meta: ProjectMeta) -> int:
