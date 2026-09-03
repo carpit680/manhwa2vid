@@ -1275,32 +1275,33 @@ class TestPlannerRespectsTimeBlocks:
 
 
 class TestClaimOrderInvariant:
-    """filter_monotonic's phase 1 guarantees no repeated panel and no rewind past
-    SCENE_RADIUS, but phases 2 (scene-radius recovery) and 3 (adjacent co-claims) add
-    rows afterwards and can break either. Both gates that catch the result FAIL rather
-    than warn, so a defect here costs a full re-run of a 70-minute build."""
+    """A final order sweep after filter_monotonic's later phases.
 
-    def test_a_panel_is_never_claimed_twice(self):
-        """Measured: sentences 230, 231 and 232 all kept p0025_02, and the planner then
-        split them across a beat boundary and showed it twice, six seconds apart."""
+    It is deliberately NOT a de-duplicator. Phase 3 lets adjacent sentences share one
+    panel on purpose — 224 of 1,256 kept claims on the full-density 20-chapter script
+    are such co-claims, and they merge into a single shot in the planner. A version of
+    this that removed them cost 224 sentences their art and dropped the match rate from
+    78% to 61%. Measured, not guessed."""
+
+    def test_co_claims_are_preserved(self):
+        """The regression that version caused: adjacent sentences sharing a panel is
+        how the planner holds one image across a short exchange."""
         from manhwa2vid.script.match import enforce_claim_order
 
         order = [f"p{i:04d}" for i in range(1, 40)]
-        claims = [(230, "p0025"), (231, "p0025"), (232, "p0025"), (233, "p0027")]
-        kept = enforce_claim_order(claims, order)
-        assert [p for _n, p in kept].count("p0025") == 1, kept
-        assert ("233", "p0027") not in kept and (233, "p0027") in kept
+        claims = [(230, "p0025"), (231, "p0025"), (232, "p0027")]
+        assert enforce_claim_order(claims, order) == claims
 
     def test_a_rewind_past_the_scene_radius_is_dropped(self):
         """Measured: sentence 1183 kept p0189_02 while 1182 held p0190_04, so the screen
-        went 1426 -> 1416 -> 1427, a ten-panel rewind past the eight-panel tolerance."""
+        went 1426 -> 1416 -> 1427 — a ten-panel rewind past the eight-panel tolerance,
+        and a blocking reading-order failure that costs a full 70-minute rebuild."""
         from manhwa2vid.script.match import enforce_claim_order
 
         order = [f"p{i:04d}" for i in range(1, 40)]
         claims = [(1, "p0020"), (2, "p0030"), (3, "p0020"), (4, "p0031")]
         kept = enforce_claim_order(claims, order)
-        panels = [p for _n, p in kept]
-        assert panels == ["p0020", "p0030", "p0031"], panels
+        assert [p for _n, p in kept] == ["p0020", "p0030", "p0031"]
 
     def test_a_small_backward_step_inside_a_scene_survives(self):
         """The tolerance exists for a reason: a recap describes the close-up, then the
@@ -1309,5 +1310,4 @@ class TestClaimOrderInvariant:
 
         order = [f"p{i:04d}" for i in range(1, 40)]
         claims = [(1, "p0010"), (2, "p0008"), (3, "p0012")]
-        kept = enforce_claim_order(claims, order)
-        assert len(kept) == 3, kept
+        assert len(enforce_claim_order(claims, order)) == 3

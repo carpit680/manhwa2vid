@@ -318,34 +318,30 @@ SCENE_RADIUS = 8
 def enforce_claim_order(
     claims: list[tuple[int, str]], panel_order: list[str]
 ) -> list[tuple[int, str]]:
-    """Final sweep: no panel twice, and no rewind past SCENE_RADIUS.
+    """Drop a claim that rewinds past SCENE_RADIUS from the sentence before it.
 
-    `filter_monotonic`'s phase 1 guarantees both, but phases 2 (scene-radius recovery)
-    and 3 (adjacent co-claims) add rows afterwards and can break either. Measured on the
-    full-density 20-chapter timeline:
+    NOT a de-duplicator. `filter_monotonic` phase 3 lets ADJACENT sentences share one
+    panel on purpose — 224 of 1,256 kept claims on the full-density 20-chapter script
+    are such co-claims, and they merge into a single shot in the planner. Removing them
+    cost 224 sentences their art and dropped the match rate from 78% to 61%; measured,
+    not guessed.
 
-    - three consecutive sentences (230, 231, 232) all kept p0025_02, which the planner
-      then split across a beat boundary and showed twice, six seconds apart;
-    - sentence 1183 kept both p0189_02 and p0190_05 while 1182 held p0190_04, so the
-      screen went 1426 -> 1416 -> 1427 — a ten-panel rewind, past the eight-panel
-      tolerance, and a blocking reading-order failure.
-
-    Both gates that catch these FAIL rather than warn, so a defect here costs a full
-    re-run. Cheaper to make the invariant hold where the claims are made.
+    What stays worth enforcing is order between sentences. Sentence 1183 kept p0189_02
+    (position 1416) while 1182 held p0190_04 (1426), so the screen went 1426 -> 1416 ->
+    1427: a ten-panel rewind past the eight-panel tolerance and a blocking
+    reading-order failure that costs a full re-run of a 70-minute build.
     """
     pos = {pid: i for i, pid in enumerate(panel_order)}
     out: list[tuple[int, str]] = []
-    seen: set[str] = set()
-    high = -1
-    for number, pid in sorted(claims, key=lambda c: (c[0], pos.get(c[1], 0))):
-        if pid in seen or pid not in pos:
+    prev = -1
+    for number, pid in claims:
+        if pid not in pos:
             continue
         p = pos[pid]
-        if p < high - SCENE_RADIUS:
+        if prev >= 0 and p < prev - SCENE_RADIUS:
             continue
-        seen.add(pid)
         out.append((number, pid))
-        high = max(high, p)
+        prev = max(prev, p)
     return out
 
 
