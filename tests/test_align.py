@@ -671,3 +671,39 @@ def test_an_announcer_cannot_claim_a_cut_it_sits_behind():
             f"{tb.block_of[para]} = panels {lo}-{hi}"
         )
     assert tb.block_of == [0, 0, 1, 1], tb.block_of
+
+
+def test_an_announcer_two_paragraphs_back_does_not_take_the_cut():
+    """A paragraph containing a time phrase is not automatically the one that crosses
+    the printed caption. Paragraph 155 of the first full-density 20-chapter script says
+    "Cha drives Jun-Ho to the Choi estate", matches the jump pattern, and has art on
+    pages 124-129 — stopping 22 panels short of the cut at page 132, with paragraphs 156
+    and 157 between it and the caption. It took the cut anyway, so beats 155 and 156
+    were assigned the block AFTER their own scene, took zero claims across 11 sentences,
+    and 44 seconds of narration held on a single image.
+
+    An announcer qualifies when its art reaches the cut, or when it is the LAST
+    paragraph before it. Both of those describe a paragraph actually narrating across
+    the skip."""
+    from manhwa2vid.script.align import clamp_to_time_blocks
+
+    ordered = [f"p{pg:04d}_{k:02d}" for pg in range(1, 40) for k in range(1, 11)]
+    # Art on pages 10, 12, 14 and 20; the cut is on page 16. The page-10 paragraph
+    # announces but two paragraphs sit between it and the cut.
+    panel_lists = [["p0010_01"], ["p0012_01"], ["p0014_01"], ["p0020_01"]]
+    texts = [
+        "Meanwhile she drives him across the city.",
+        "He watches the road.",
+        "She parks outside the estate.",
+        "He lifts the sword.",
+    ]
+    _, tb = clamp_to_time_blocks(panel_lists, texts, ordered, ["p0016_01"])
+
+    index = {pid: i for i, pid in enumerate(ordered)}
+    for para, want in enumerate(["p0010_01", "p0012_01", "p0014_01", "p0020_01"]):
+        lo, hi = tb.blocks[tb.block_of[para]]
+        assert lo <= index[want] < hi, (
+            f"paragraph {para + 1} (art at {want}) landed in block "
+            f"{tb.block_of[para]} = panels {lo}-{hi}"
+        )
+    assert tb.block_of == [0, 0, 0, 1], tb.block_of

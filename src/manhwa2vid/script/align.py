@@ -364,9 +364,11 @@ def clamp_to_time_blocks(
     # position decide.
     index_of = {pid: i for i, pid in enumerate(ordered_ids)}
     starts = []
+    ends = []
     for pids in panel_lists:
         positions = [index_of[q] for q in pids if q in index_of]
         starts.append(min(positions) if positions else 0)
+        ends.append(max(positions) if positions else 0)
     announces = [bool(_TIME_JUMP_RE.search(t)) for t in para_texts]
 
     # An announcing paragraph may claim a cut only if it is actually NEAR it. The rule
@@ -395,9 +397,43 @@ def clamp_to_time_blocks(
             #
             # The flashback case this rule exists for is unaffected: there the
             # announcing paragraph opens ON the caption panel, so its start IS the cut.
-            ahead = [i for i in candidates if starts[i] >= cut]
-            pool = ahead or candidates
-            crossing = min(pool, key=lambda i: abs(starts[i] - cut))
+            # An announcing paragraph may take the cut only if its ART REACHES IT —
+            # its panel range spans the cut, or begins at or after it. A paragraph that
+            # narrates across a time skip has art on both sides by definition; one whose
+            # art ends well before the caption is simply an earlier scene that happens
+            # to contain a time phrase.
+            #
+            # Measured on the first full-density 20-chapter run: paragraph 155 says
+            # "Cha drives Jun-Ho to the Choi estate" and matches the jump pattern, but
+            # its art runs pages 124-129 and stops 22 panels before the cut at page 132.
+            # It took the cut anyway, so beats 155 and 156 were assigned the block
+            # AFTER their own scene, took ZERO claims across 11 sentences, and 44
+            # seconds of narration held on a single image.
+            # An announcing paragraph may take the cut when its art REACHES it (the
+            # range spans the cut, or begins at or after it) or when it is the LAST
+            # paragraph before it. Anything further back is simply an earlier scene
+            # that happens to contain a time phrase, and there are paragraphs between
+            # it and the caption with a better claim.
+            #
+            # Measured on the first full-density 20-chapter run: paragraph 155 says
+            # "Cha drives Jun-Ho to the Choi estate" and matches the jump pattern, but
+            # its art runs pages 124-129 and stops 22 panels short of the cut at page
+            # 132, with paragraphs 156 and 157 sitting between. It took the cut anyway,
+            # so beats 155 and 156 were assigned the block AFTER their own scene, took
+            # ZERO claims across 11 sentences, and 44 seconds of narration held on one
+            # image.
+            before = [j for j in range(after, len(para_texts)) if starts[j] < cut]
+            last_before = max(before) if before else None
+            qualified = [
+                i for i in candidates if ends[i] >= cut or i == last_before
+            ]
+            if qualified:
+                crossing = min(qualified, key=lambda i: abs(starts[i] - cut))
+            else:
+                # No announcer has a real claim — position decides, as when nothing
+                # announces at all.
+                later = [i for i in range(after, len(para_texts)) if starts[i] >= cut]
+                crossing = later[0] if later else len(para_texts)
         else:
             later = [i for i in range(after, len(para_texts)) if starts[i] >= cut]
             crossing = later[0] if later else len(para_texts)
