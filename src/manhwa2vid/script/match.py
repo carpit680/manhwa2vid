@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -456,6 +458,82 @@ _SECOND_PASS_MAX_PER_SENTENCE = 3
 #: it would be a guess. Observed windows for real short gaps run 1-6 panels.
 _SHORT_GAP_MAX_CANDIDATES = 8
 
+#: How many text-ranked spare panels a 3+-sentence unclaimed run may be shown. Sized on
+#: the probe: a text-ranked top-32 contains the panel the unbounded pass chose 50% of the
+#: time and costs 2 calls, against up to 17 for the whole pool. Kept generous rather than
+#: tight because the run is exactly where the first pass already failed.
+_SECOND_PASS_MAX_CANDIDATES = 32
+
+
+def _text_ranker(paths: dict[str, Path]):
+    """Rank panels by how well their scene-card text matches a run of sentences.
+
+    Deliberately lexical and dependency-free: this only has to ORDER a pool that a vision
+    call then judges, so a cheap signal that is right about half the time turns 17 calls
+    into 2. Falls back to reading order when no cards exist, which is what the pool was
+    before.
+    """
+    try:
+        from manhwa2vid.panels.filter import load_story_scene_cards
+
+        cards = load_story_scene_cards(paths)
+    except Exception:
+        cards = []
+    blobs: dict[str, str] = {}
+    for card in cards or []:
+        parts = [
+            getattr(card, "action", "") or "",
+            getattr(card, "dialogue_summary", "") or "",
+            getattr(card, "source_text", "") or "",
+            " ".join(getattr(card, "speakers", None) or []),
+            " ".join(getattr(card, "key_terms", None) or []),
+        ]
+        text = " ".join(x for x in parts if x).lower()
+        for pid in (getattr(card, "panel_ids", None) or []):
+            blobs[pid] = text
+    if not blobs:
+        return lambda run, spare, limit: spare[:limit]
+
+    def words(text: str) -> set[str]:
+        return {
+            w for w in re.findall(r"[a-z0-9']+", text.lower())
+            if len(w) > 2 and w not in _RANK_STOP
+        }
+
+    df: dict[str, int] = {}
+    for text in blobs.values():
+        for w in words(text):
+            df[w] = df.get(w, 0) + 1
+    total = max(1, len(blobs))
+
+    def rank(run, spare, limit):
+        query = set()
+        for _no, text in run:
+            query |= words(text)
+        if not query:
+            return spare[:limit]
+        scored = sorted(
+            spare,
+            key=lambda p: -sum(
+                math.log(1 + total / (1 + df.get(w, 0)))
+                for w in query & words(blobs.get(p.id, ""))
+            ),
+        )
+        # Keep the survivors in READING ORDER: the caller windows them, and a window
+        # whose panels jump around the chapter is harder to bind than a contiguous one.
+        best = set(p.id for p in scored[:limit])
+        return [p for p in spare if p.id in best]
+
+    return rank
+
+
+#: Words carrying no discriminating power between panels.
+_RANK_STOP = frozenset(
+    "the and but for from with that this they them his her him their she was were are "
+    "has have had not you your all who what when where which while about into out over "
+    "then than there here some just like only very can will would could should".split()
+)
+
 
 def _second_pass_claims(
     block_sents: list[tuple[int, str]],
@@ -471,7 +549,14 @@ def _second_pass_claims(
     parked all of them on a fireball for 16.5 seconds. Match rate 48.6% means half the
     video rides on fill guesswork; the expensive stretches are exactly these runs.
 
-    Bounded: runs of 3+ consecutive unclaimed sentences see the block's whole unused
+    Both branches are now bounded. A 3+-sentence run sees the `_SECOND_PASS_MAX_CANDIDATES`
+    spare panels whose scene-card text best matches it, not the block's whole unused pool
+    — that pool cost 102 of 203 calls on the 20-chapter probe for ~20 surviving claims.
+    A 1-2 sentence gap sees only the panels between its anchors, and only if there are
+    1-`_SHORT_GAP_MAX_CANDIDATES` of them.
+
+    Historical note, kept because the old wording was wrong: runs of 3+ used to see the
+    block's whole unused
     pool; SHORT gaps (1-2 sentences, added 2026-08-31) see only the unused panels
     strictly between their surrounding anchors, and only when that window holds
     1-`_SHORT_GAP_MAX_CANDIDATES` panels — a wide window means the model would be
@@ -504,9 +589,24 @@ def _second_pass_claims(
 
     pos = {p.id: i for i, p in enumerate(panels)}
     out: list[tuple[int, str]] = []
+    ranker = _text_ranker(paths)
     for run in runs:
         if len(run) >= 3:
-            candidates = spare_panels
+            # Rank the spare pool by how well each panel's TEXT matches the run, and
+            # keep the best few, instead of re-sending the whole pool as images.
+            #
+            # Measured on the 20-chapter probe: the second pass was 102 of 203 matcher
+            # calls and 1,363 images — every one of them already sent in pass 1 — and it
+            # yielded ~20 surviving claims. Five calls per claim. One 3-sentence run in
+            # a 257-panel spare pool cost 17 calls on its own.
+            #
+            # The pipeline already owns a text description of 99.8% of panels
+            # (scene_cards.json: action, dialogue summary, speakers, key terms, and the
+            # printed line for 62%). Ranking by it and keeping the top
+            # `_SECOND_PASS_MAX_CANDIDATES` retains the panel pass 2 actually chose about
+            # half the time at 2 calls per run, and 80% of it at 3. The short-gap branch
+            # below has always been bounded this way; only this branch was not.
+            candidates = ranker(run, spare_panels, _SECOND_PASS_MAX_CANDIDATES)
         else:
             first, last = run[0][0], run[-1][0]
             prev_pos = max(

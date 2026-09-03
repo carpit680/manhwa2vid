@@ -1161,3 +1161,41 @@ class TestClaimCache:
         M.reset_claim_cache()
         M.collect_claims([(1, "He walks in.")], self._panels(3), paths, {})
         assert len(calls) == 2, "a truncated window was cached"
+
+
+def test_a_long_unclaimed_run_sees_a_bounded_candidate_set(tmp_path, monkeypatch):
+    """The second pass was 102 of 203 matcher calls and 1,363 images on the 20-chapter
+    probe — every image already sent in pass 1 — for about 20 surviving claims. One
+    3-sentence run against a 257-panel spare pool cost 17 calls by itself, because that
+    branch handed over the block's ENTIRE unused pool while the short-gap branch beside
+    it had always been bounded."""
+    from manhwa2vid.models import Panel, PanelBBox
+    from manhwa2vid.script import match as M
+
+    panels = [
+        Panel(id=f"p{i:04d}", page_num=1, bbox=PanelBBox(x=0, y=0, width=10, height=10),
+              image_path=f"panels/p{i:04d}.png")
+        for i in range(1, 121)
+    ]
+    sents = [(1, "He wins."), *[(n, f"Filler {n}.") for n in range(2, 8)]]
+    seen = []
+
+    class Stub:
+        vision_model = None
+        temperature = 0.0
+        last_finish_reason = "stop"
+
+        def describe_labeled_panels(self, images, prompt):
+            seen.append(len(images))
+            return json.dumps({"claims": []})
+
+    monkeypatch.setattr(M, "_matcher_provider", lambda cfg: Stub())
+    M.reset_claim_cache()
+    M._second_pass_claims(sents, panels, [(1, "p0001")],
+                          {"root": tmp_path, "debug": tmp_path / "debug"}, {})
+
+    shown = sum(seen)
+    assert shown <= M._SECOND_PASS_MAX_CANDIDATES, (
+        f"the run saw {shown} panels; the whole spare pool is {len(panels) - 1}"
+    )
+    assert len(seen) <= 2, f"{len(seen)} calls for one run"
