@@ -315,6 +315,40 @@ def collect_claims(
 SCENE_RADIUS = 8
 
 
+def enforce_claim_order(
+    claims: list[tuple[int, str]], panel_order: list[str]
+) -> list[tuple[int, str]]:
+    """Final sweep: no panel twice, and no rewind past SCENE_RADIUS.
+
+    `filter_monotonic`'s phase 1 guarantees both, but phases 2 (scene-radius recovery)
+    and 3 (adjacent co-claims) add rows afterwards and can break either. Measured on the
+    full-density 20-chapter timeline:
+
+    - three consecutive sentences (230, 231, 232) all kept p0025_02, which the planner
+      then split across a beat boundary and showed twice, six seconds apart;
+    - sentence 1183 kept both p0189_02 and p0190_05 while 1182 held p0190_04, so the
+      screen went 1426 -> 1416 -> 1427 — a ten-panel rewind, past the eight-panel
+      tolerance, and a blocking reading-order failure.
+
+    Both gates that catch these FAIL rather than warn, so a defect here costs a full
+    re-run. Cheaper to make the invariant hold where the claims are made.
+    """
+    pos = {pid: i for i, pid in enumerate(panel_order)}
+    out: list[tuple[int, str]] = []
+    seen: set[str] = set()
+    high = -1
+    for number, pid in sorted(claims, key=lambda c: (c[0], pos.get(c[1], 0))):
+        if pid in seen or pid not in pos:
+            continue
+        p = pos[pid]
+        if p < high - SCENE_RADIUS:
+            continue
+        seen.add(pid)
+        out.append((number, pid))
+        high = max(high, p)
+    return out
+
+
 def filter_monotonic(
     claims: list[tuple[int, str]], panel_order: list[str]
 ) -> list[tuple[int, str]]:
@@ -781,7 +815,9 @@ def build_shotlist(
         if not block_sents or not panels:
             continue
         raw = collect_claims(block_sents, panels, paths, config, sentence_pages)
-        kept = filter_monotonic(raw, [p.id for p in panels])
+        kept = enforce_claim_order(
+            filter_monotonic(raw, [p.id for p in panels]), [p.id for p in panels]
+        )
         console.print(
             f"[dim]Match: block {block_idx} — {len(raw)} claim(s), "
             f"{len(kept)} after monotonic filter[/]"
@@ -810,7 +846,10 @@ def build_shotlist(
         raw, kept = entry["raw"], entry["kept"]
         second = _second_pass_claims(block_sents, panels, kept, paths, config)
         if second:
-            kept = filter_monotonic(raw + second, [p.id for p in panels])
+            kept = enforce_claim_order(
+                filter_monotonic(raw + second, [p.id for p in panels]),
+                [p.id for p in panels],
+            )
             console.print(
                 f"[dim]Match: block {block_idx} — second pass added "
                 f"{len(second)} claim(s), {len(kept)} kept[/]"

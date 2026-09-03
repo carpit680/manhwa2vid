@@ -1272,3 +1272,42 @@ class TestPlannerRespectsTimeBlocks:
         plan = plan_shots(sl, {1: [{"seconds": 3.0}] * 3}, floor=1.0,
                           panel_order=order, max_shot=0.0)
         assert plan is not None and len(plan[1]) >= 2
+
+
+class TestClaimOrderInvariant:
+    """filter_monotonic's phase 1 guarantees no repeated panel and no rewind past
+    SCENE_RADIUS, but phases 2 (scene-radius recovery) and 3 (adjacent co-claims) add
+    rows afterwards and can break either. Both gates that catch the result FAIL rather
+    than warn, so a defect here costs a full re-run of a 70-minute build."""
+
+    def test_a_panel_is_never_claimed_twice(self):
+        """Measured: sentences 230, 231 and 232 all kept p0025_02, and the planner then
+        split them across a beat boundary and showed it twice, six seconds apart."""
+        from manhwa2vid.script.match import enforce_claim_order
+
+        order = [f"p{i:04d}" for i in range(1, 40)]
+        claims = [(230, "p0025"), (231, "p0025"), (232, "p0025"), (233, "p0027")]
+        kept = enforce_claim_order(claims, order)
+        assert [p for _n, p in kept].count("p0025") == 1, kept
+        assert ("233", "p0027") not in kept and (233, "p0027") in kept
+
+    def test_a_rewind_past_the_scene_radius_is_dropped(self):
+        """Measured: sentence 1183 kept p0189_02 while 1182 held p0190_04, so the screen
+        went 1426 -> 1416 -> 1427, a ten-panel rewind past the eight-panel tolerance."""
+        from manhwa2vid.script.match import enforce_claim_order
+
+        order = [f"p{i:04d}" for i in range(1, 40)]
+        claims = [(1, "p0020"), (2, "p0030"), (3, "p0020"), (4, "p0031")]
+        kept = enforce_claim_order(claims, order)
+        panels = [p for _n, p in kept]
+        assert panels == ["p0020", "p0030", "p0031"], panels
+
+    def test_a_small_backward_step_inside_a_scene_survives(self):
+        """The tolerance exists for a reason: a recap describes the close-up, then the
+        establishing shot two panels earlier, and the reference channel cuts that way."""
+        from manhwa2vid.script.match import enforce_claim_order
+
+        order = [f"p{i:04d}" for i in range(1, 40)]
+        claims = [(1, "p0010"), (2, "p0008"), (3, "p0012")]
+        kept = enforce_claim_order(claims, order)
+        assert len(kept) == 3, kept
