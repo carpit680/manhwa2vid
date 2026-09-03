@@ -207,6 +207,14 @@ _UTILISATION_MIN_PCT = 35.0    # brief said 60; measured 58.8 / 71.5 short, 39.2
 #: clear of healthy sampling and well under a skipped sequence.
 _COVERAGE_GAP_MAX = 24
 _HOLD_MAX_SENTENCES = 3        # brief
+
+#: One image's maximum screen time. Same numbers as the render gate (qa_visual), which
+#: derived them: the reference channel's own longest shot is 16.37s across 488 runs, so
+#: 12 warns on something worth looking at and 18 fails on something it never does.
+#: Duplicated deliberately rather than imported — importing video QA into the TTS stage
+#: would drag ffmpeg-dependent code into a stage that does not need it — and pinned
+#: equal by test.
+_SHOT_MAX_WARN_S, _SHOT_MAX_FAIL_S = 12.0, 18.0
 _TIMING_MIN_PCT = 95.0         # replaces the brief's "80% measured": 100% today, so this
                                # guards a REGRESSION to word-proration, not a deficit
 
@@ -498,6 +506,31 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
     # How much NARRATION one image has to carry. Needs TimelineEntry.sentence_numbers;
     # without it the honest answer is entries-per-run, which understates the hold, so
     # hold_runs reports which basis it used and returns no verdict on the weaker one.
+    # How long ONE IMAGE stays on screen, judged here rather than after the render.
+    # The blocking version of this check lived only in render QA, so a 47.2-second hold
+    # on the first full-density 20-chapter timeline would have been reported an hour of
+    # rendering later — and everything it needs is already in the timeline. Same
+    # thresholds and the same merged_runs authority as the render gate, so the two
+    # cannot disagree; this one just runs before the money is spent.
+    from manhwa2vid.measure.shots import merged_runs as _merged_runs
+
+    runs = _merged_runs(timeline.entries)
+    longest = max((r["seconds"] for r in runs), default=0.0)
+    worst_run = max(runs, key=lambda r: r["seconds"], default=None) if runs else None
+    report.add(
+        "shot-max-duration",
+        True if longest <= _SHOT_MAX_WARN_S
+        else ("warn" if longest <= _SHOT_MAX_FAIL_S else False),
+        (
+            f"longest single image {longest:.1f}s"
+            + (f" on {worst_run['panel_id']} across beats {worst_run['beat_ids']}"
+               if worst_run else "")
+            + f" (warn {_SHOT_MAX_WARN_S}s, fail {_SHOT_MAX_FAIL_S}s)"
+        ),
+        longest_hold_seconds=round(longest, 2),
+        panel=worst_run["panel_id"] if worst_run else None,
+    )
+
     holds = hold_runs(timeline.entries, max_sentences=_HOLD_MAX_SENTENCES)
     if holds["basis"] == "sentences":
         worst = holds["over_limit"]

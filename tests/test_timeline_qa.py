@@ -113,8 +113,13 @@ def _pace_gate(tmp_path: Path, *, words: int, seconds: float, target_wpm: float)
     audio = tmp_path / "audio"
     audio.mkdir(exist_ok=True)
     _wav(audio / "beat_001.wav", seconds)
-    beats = [ScriptBeat(beat_id=1, panel_ids=["p0001_01"], narration=" ".join(["w"] * words))]
-    panels = [_panel("p0001_01", 1)]
+    # Enough panels that the beat is a sequence of normal shots, not one long hold.
+    # With a single panel a 35-second beat is a 35-second freeze, which the
+    # shot-max-duration gate now fails (correctly) at the timeline stage — and this
+    # fixture exists to measure words per minute, not to depict a hold.
+    ids = [f"p0001_{i:02d}" for i in range(1, 13)]
+    beats = [ScriptBeat(beat_id=1, panel_ids=ids, narration=" ".join(["w"] * words))]
+    panels = [_panel(pid, 1) for pid in ids]
     config = {**_config(), "script": {"target_wpm": target_wpm}}
     timeline = build_timeline(beats, panels, audio, config)
     paths = project_paths(tmp_path)
@@ -597,3 +602,42 @@ def test_a_fully_shown_range_has_no_gaps():
     order = [f"p{i:04d}" for i in range(10)]
     g = coverage_gaps(order, [{"panel_id": p} for p in order])
     assert g["gaps"] == 0 and g["longest_gap"] == 0
+
+
+def test_a_long_hold_fails_at_the_timeline_not_after_the_render(tmp_path: Path) -> None:
+    """The blocking hold check lived only in render QA, so a 47.2-second hold on the
+    first full-density 20-chapter timeline would have been reported an hour of rendering
+    later — after all the GPU and encode cost, and after the audio was already made.
+    Everything the check needs is in the timeline."""
+    import json
+
+    from manhwa2vid.qa import QAGateFailure
+
+    audio = tmp_path / "audio"
+    audio.mkdir(exist_ok=True)
+    _wav(audio / "beat_001.wav", 40.0)
+    beats = [ScriptBeat(beat_id=1, panel_ids=["p0001_01"], narration=" ".join(["w"] * 120))]
+    panels = [_panel("p0001_01", 1)]
+    config = _config()
+    timeline = build_timeline(beats, panels, audio, config)
+    paths = project_paths(tmp_path)
+    try:
+        _enforce_timeline_qa(beats, panels, timeline, paths, config)
+    except QAGateFailure:
+        pass
+    report = json.loads((tmp_path / "qa.timeline.json").read_text())
+    gate = {g["name"]: g for g in report["gates"]}["shot-max-duration"]
+    assert gate["status"] is False, gate
+    assert gate["data"]["longest_hold_seconds"] >= 18.0
+
+
+def test_the_timeline_and_render_hold_limits_agree():
+    """Two gates on one question must not disagree. The constants are duplicated rather
+    than imported (importing video QA into the TTS stage would drag ffmpeg-dependent
+    code into a stage that does not need it), so equality is pinned here."""
+    from manhwa2vid.tts.engine import _SHOT_MAX_FAIL_S as tts_fail
+    from manhwa2vid.tts.engine import _SHOT_MAX_WARN_S as tts_warn
+    from manhwa2vid.video.qa_visual import _SHOT_MAX_FAIL_S as render_fail
+    from manhwa2vid.video.qa_visual import _SHOT_MAX_WARN_S as render_warn
+
+    assert (tts_warn, tts_fail) == (render_warn, render_fail)
