@@ -818,7 +818,14 @@ def align_script(
         boundary_ids = list(time_blocks.boundary_ids)
         save_json(
             paths["script_alignment_json"],
-            {"map": entries, "time_boundaries": boundary_ids},
+            {
+                "map": entries,
+                "time_boundaries": boundary_ids,
+                # Carry the digest through. Dropping it here silently disabled the
+                # alignment cache: the first save wrote it, this one overwrote it, and
+                # every replay then refused with "no cached alignment map".
+                "para_digest": _para_digest(para_texts),
+            },
         )
         console.print(f"[dim]Align: time blocks cut at {boundary_ids}[/]")
     else:

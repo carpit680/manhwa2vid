@@ -607,3 +607,34 @@ def test_the_merged_boundary_list_is_what_downstream_sees():
     # a paragraph carries must be addressable in that block list.
     assert len(tb.blocks) == len(tb.boundary_ids) + 1
     assert max(tb.block_of) < len(tb.blocks)
+
+
+def test_the_alignment_digest_survives_the_boundary_rewrite(tmp_path):
+    """align_script saves the map twice — once after fetching it, once after the clamp
+    merges away cuts nobody crosses. The second save dropped the prose digest, which
+    silently disabled the whole alignment cache: every replay refused with "no cached
+    alignment map" and would have re-paid for the largest request the pipeline makes."""
+    import json as _json
+
+    from manhwa2vid.script.align import _cached_alignment, _para_digest
+
+    paras = ["He walks in.", "She follows."]
+    path = tmp_path / "script.alignment.json"
+    path.write_text(_json.dumps({
+        "map": [{"paragraph": 1, "first_page": "0001", "last_page": "0002"}],
+        "time_boundaries": ["p0005_01"],
+        "para_digest": _para_digest(paras),
+    }))
+    got = _cached_alignment({"script_alignment_json": path}, paras)
+    assert got is not None, "a map written for this prose was not reused"
+    assert got[1] == ["p0005_01"]
+
+    # A map for DIFFERENT prose must miss: paragraph N's pages would otherwise be
+    # applied to a different paragraph N, binding narration to art it never described.
+    assert _cached_alignment({"script_alignment_json": path}, ["Something else."]) is None
+
+    # And a map with no digest at all (written before this existed) must miss.
+    d = _json.loads(path.read_text())
+    del d["para_digest"]
+    path.write_text(_json.dumps(d))
+    assert _cached_alignment({"script_alignment_json": path}, paras) is None
