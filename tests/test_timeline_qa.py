@@ -627,7 +627,7 @@ def test_a_long_hold_fails_at_the_timeline_not_after_the_render(tmp_path: Path) 
         pass
     report = json.loads((tmp_path / "qa.timeline.json").read_text())
     gate = {g["name"]: g for g in report["gates"]}["shot-max-duration"]
-    assert gate["status"] is False, gate
+    assert gate["status"] == "fail", gate
     assert gate["data"]["longest_hold_seconds"] >= 18.0
 
 
