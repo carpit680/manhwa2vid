@@ -3149,6 +3149,50 @@ _DANGLING_TAIL = {
 }
 
 
+#: A speech verb followed by a bare echoed fragment and a question mark:
+#: "He asks D-rank?". The words exist, so this is not truncation — it is a quotation
+#: with the quotes missing, and TTS reads it exactly as written.
+_ECHOED_QUESTION_RE = re.compile(
+    r"\b(asks|repeats|echoes|repeated|asked|echoed)\s+"
+    r"(?![Ii]f\b|whether\b|that\b|why\b|how\b|what\b|where\b|when\b|who\b|"
+    r"about\b|for\b|him\b|her\b|them\b|it\b)"
+    r"([^,.\"?!]{1,24}?)\s*\?\s*$"
+)
+
+
+def repair_echoed_question(text: str, names: set[str] | None = None) -> str:
+    """Put the quotes back around an echoed line: He asks D-rank? -> He asks, "D-rank?"
+
+    Found by the beats-wellformed gate on the first full-density 20-chapter script, at
+    beat 70: the scouts read Jun-Ho's profile, one repeats the rank back in disbelief,
+    and the writer rendered it without quotation marks. The gate was right — read aloud
+    it is broken English, and the narrator would speak it as written.
+
+    It is NOT the defect the truncated-speech detector describes (a speech verb naming a
+    listener with nothing said), which is why the repair has to tell them apart. A known
+    character name after the verb IS a listener, and quoting it would invent a line
+    nobody spoke; anything else is the thing being echoed. Subordinators are excluded
+    because "asks if his skill is D-rank" is already a complete report.
+    """
+    names = {n.lower() for n in (names or set())}
+
+    def fix(sent: str) -> str:
+        m = _ECHOED_QUESTION_RE.search(sent.strip())
+        if not m:
+            return sent
+        echoed = m.group(2).strip()
+        if not echoed or echoed.lower() in names:
+            return sent          # a listener, not a quotation — a different defect
+        head = sent.strip()[: m.start(2)].rstrip()
+        head = head.rstrip(",")
+        return f'{head}, "{echoed}?"'
+
+    parts = [x for x in _SENTENCE_SPLIT_RE.split((text or "").strip()) if x.strip()]
+    if not parts:
+        return text
+    return " ".join(fix(p) for p in parts)
+
+
 def repair_truncated_sentences(beats: list[ScriptBeat]) -> list[ScriptBeat]:
     """Drop narration sentences that end mid-clause on a dangling function word.
 

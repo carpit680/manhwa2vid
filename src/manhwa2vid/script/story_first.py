@@ -250,6 +250,14 @@ def generate_story_first_script(
     # rather than asked for in the prompt. Runs after every LLM stage — including the
     # outro — and before alignment, so beats, shot list and TTS all see one text.
     text = strip_placeholder_descriptors(text)
+    # Put the quotes back around an echoed line ("He asks D-rank?"). Deterministic and
+    # after every LLM stage, because the beats-wellformed gate that catches it BLOCKS,
+    # and asking the model not to do it is the kind of rule this project has learned to
+    # enforce in code instead.
+    from manhwa2vid.script.lint import repair_echoed_question
+    from manhwa2vid.script.read import glossary_names
+
+    text = repair_echoed_question(text, glossary_names(paths))
     paths["script_freeform"].write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
 
     beats, align_report = align_script(text, paths, config)

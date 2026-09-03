@@ -2622,3 +2622,44 @@ class TestTruncatedSpeechGuards:
         from manhwa2vid.script.lint import is_truncated_speech
 
         assert not is_truncated_speech("Bak asks Mr. Kim if Jin-Woo is coming.")
+
+
+class TestEchoedQuestionRepair:
+    """"He asks D-rank?" blocked the first full-density 20-chapter script at
+    beats-wellformed. The gate was right: read aloud it is broken English and the
+    narrator speaks it as written. It is a quotation with the quotes missing, not the
+    truncated speech the detector describes, so the repair has to tell those apart."""
+
+    def test_an_echoed_fragment_gets_its_quotes_back(self):
+        from manhwa2vid.script.lint import is_truncated_speech, repair_echoed_question
+
+        out = repair_echoed_question("He asks D-rank?", {"jun-ho"})
+        assert out == 'He asks, "D-rank?"'
+        assert not is_truncated_speech(out)
+
+    def test_a_named_listener_is_left_alone(self):
+        """Quoting a listener would invent a line nobody spoke. That is a different
+        defect and must keep failing the gate."""
+        from manhwa2vid.script.lint import repair_echoed_question
+
+        assert repair_echoed_question("He asks Jun-Ho?", {"jun-ho"}) == "He asks Jun-Ho?"
+
+    def test_a_complete_report_is_untouched(self):
+        from manhwa2vid.script.lint import repair_echoed_question
+
+        for sent in (
+            "He asks if his main skill is really D-rank.",
+            "She asks whether the gate has closed.",
+            "He asks what happened to the others.",
+            "She tells him about the raid.",
+        ):
+            assert repair_echoed_question(sent, set()) == sent, sent
+
+    def test_surrounding_sentences_survive(self):
+        from manhwa2vid.script.lint import repair_echoed_question
+
+        text = "The large scout looks disappointed. He asks D-rank? Then he explains why."
+        out = repair_echoed_question(text, set())
+        assert out.startswith("The large scout looks disappointed.")
+        assert out.endswith("Then he explains why.")
+        assert '"D-rank?"' in out
