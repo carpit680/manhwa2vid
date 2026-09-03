@@ -81,7 +81,18 @@ def _system_for(persona: str | None, words_target: int | None = None) -> str:
 
 
 def _budget_words(meta: ProjectMeta, config: dict[str, Any], n_chapters: int) -> tuple[int, int]:
-    per_chapter = int(get_nested(config, "script", "words_per_chapter", default=550))
+    # 785, not 550. Every APPROVED video sits at 0.72-0.87 sentences per story panel;
+    # the 20-chapter probe came out at 0.38 and that one number is what produced 39%
+    # panel utilisation, the coverage holes, and paragraphs the aligner had to stretch
+    # over 25 pages because there were only 99 of them for 233 pages. Panels per chapter
+    # are constant across every project measured (64-85), so the density a recap ships at
+    # is set here and nowhere else.
+    #
+    #   0.8 sentences/panel x ~82 panels/chapter x ~12 words/sentence = ~785
+    #
+    # User decision 2026-09-03, having been shown that this roughly doubles a 20-chapter
+    # recap to ~75 minutes: "more words are fine as long as it is not too boring".
+    per_chapter = int(get_nested(config, "script", "words_per_chapter", default=785))
     target = per_chapter * max(1, n_chapters)
     return int(target * 0.9), int(target * 1.15)
 
@@ -241,8 +252,19 @@ def write_freeform_script(
         # on the next. Dividing the remainder makes window 4 make up for window 2.
         done = sum(len(w.split()) for w in written)
         remaining = max(1, len(windows) - i + 1)
-        per_window_lo = max(150, (lo - done) // remaining)
-        per_window_hi = max(per_window_lo + 100, (hi - done) // remaining)
+        # A FLOOR alone starves the tail. With ten windows (a 50-chapter part) one early
+        # overshoot drives `hi - done` negative, and every remaining window then collapses
+        # onto the 150-word floor — chapters 15 onward would get a paragraph each. The
+        # pages still to cover are what a window owes, so the share is bounded below by
+        # its page count as well as above by what is left.
+        pages_left = sum(len(w) for w in windows[i - 1:]) or 1
+        share = len(window) / pages_left
+        per_window_lo = max(150, int((lo - done) * share))
+        per_window_hi = max(per_window_lo + 100, int((hi - done) * share))
+        # Never let one window take so much that the rest cannot reach their own floor.
+        if remaining > 1:
+            reserve = 150 * (remaining - 1)
+            per_window_hi = max(per_window_lo + 100, min(per_window_hi, hi - done - reserve))
         if len(windows) > 1:
             console.print(
                 f"[cyan]Writing[/] window {i}/{len(windows)} "

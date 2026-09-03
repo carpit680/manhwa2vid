@@ -212,7 +212,21 @@ script:
   max_beat_words: 60
   # Chapter word budget: narration is audio-locked, so word count IS runtime.
   # Measured references: Mamoru ~490/chapter, golds 525 and 677.
-  words_per_chapter: 550
+  #
+  # Raised 550 -> 785 on 2026-09-03. The reference channels are the wrong yardstick for
+  # a LONG recap: what actually decides whether the art gets shown is sentences per story
+  # panel, and panels per chapter are constant (64-85 across every project). Every
+  # approved video measures 0.72-0.87 sentences/panel; the 20-chapter probe came out at
+  # 0.38, and that single number produced 39% panel utilisation, a 165-panel coverage
+  # hole, and paragraphs the aligner stretched over 25 pages because there were only 99
+  # of them for 233 pages.
+  #
+  #   0.8 sent/panel x ~82 panels/chapter x ~12 words/sentence ~= 785
+  #
+  # This roughly doubles a 20-chapter recap to ~75 minutes and makes a 10-chapter part
+  # ~38 minutes. User decision, having been shown that trade: "more words are fine as
+  # long as it is not too boring".
+  words_per_chapter: 785
   mc_anchor_every_beats: 2
   transition_line: ""
   # Attach each chunk's actual panels to the narration call. The writer used to compose

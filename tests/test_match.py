@@ -1199,3 +1199,76 @@ def test_a_long_unclaimed_run_sees_a_bounded_candidate_set(tmp_path, monkeypatch
         f"the run saw {shown} panels; the whole spare pool is {len(panels) - 1}"
     )
     assert len(seen) <= 2, f"{len(seen)} calls for one run"
+
+
+class TestPlannerRespectsTimeBlocks:
+    """The block-bounded planner had NO direct test: nothing constructed a shot list with
+    real `time_blocks.boundaries` and called `plan_shots_with_sentences`. That gap is
+    exactly why relaxing the fill's block bound shipped a `reading-order` failure — a
+    9-panel backward jump at 664.0s on the 20-chapter probe — with a green suite.
+
+    The bound exists so narration never plays over the next era's art: Frozen Player
+    prints "25 YEARS LATER" mid-chapter, and the returning-fight narration sits beside
+    that seam.
+    """
+
+    def _shotlist(self, sentences, boundaries, visits=None):
+        return {
+            "sentences": sentences,
+            "time_blocks": {
+                "boundaries": boundaries,
+                "visits": visits if visits is not None else sorted(
+                    {s.get("block", 0) for s in sentences}
+                ),
+                "returns": [],
+            },
+        }
+
+    def test_fill_never_crosses_a_printed_time_skip(self):
+        order = [f"p{i:02d}" for i in range(1, 21)]
+        # p11 cuts the range: block 0 is p01-p10, block 1 is p11-p20.
+        sl = self._shotlist(
+            [
+                {"number": 1, "beat_id": 1, "block": 0, "text": "a", "panels": ["p02"]},
+                {"number": 2, "beat_id": 1, "block": 0, "text": "b", "panels": []},
+                {"number": 3, "beat_id": 1, "block": 0, "text": "c", "panels": ["p08"]},
+            ],
+            boundaries=["p11"],
+        )
+        plan = plan_shots(sl, {1: [{"seconds": 3.0}] * 3}, floor=1.0,
+                          panel_order=order, max_shot=0.0)
+        assert plan is not None
+        shown = [pid for pid, _s in plan[1]]
+        assert all(int(p[1:]) <= 10 for p in shown), (
+            f"the fill crossed the time skip into the next era: {shown}"
+        )
+
+    def test_a_borrow_stays_inside_its_own_block(self):
+        order = [f"p{i:02d}" for i in range(1, 21)]
+        sl = self._shotlist(
+            [
+                {"number": 1, "beat_id": 1, "block": 1, "text": "a", "panels": ["p12"]},
+                {"number": 2, "beat_id": 1, "block": 1, "text": "b", "panels": []},
+                {"number": 3, "beat_id": 1, "block": 1, "text": "c", "panels": ["p18"]},
+            ],
+            boundaries=["p11"],
+        )
+        plan = plan_shots(sl, {1: [{"seconds": 4.0}] * 3}, floor=1.0,
+                          panel_order=order, max_shot=0.0)
+        assert plan is not None
+        shown = [pid for pid, _s in plan[1]]
+        assert all(int(p[1:]) >= 11 for p in shown), (
+            f"a shot reached back past the time skip: {shown}"
+        )
+
+    def test_no_block_metadata_keeps_the_old_global_behaviour(self):
+        """Projects built before time blocks existed must plan exactly as they did."""
+        order = [f"p{i:02d}" for i in range(1, 21)]
+        sl = {"sentences": [
+            {"number": 1, "beat_id": 1, "text": "a", "panels": ["p02"]},
+            {"number": 2, "beat_id": 1, "text": "b", "panels": []},
+            {"number": 3, "beat_id": 1, "text": "c", "panels": ["p08"]},
+        ]}
+        plan = plan_shots(sl, {1: [{"seconds": 3.0}] * 3}, floor=1.0,
+                          panel_order=order, max_shot=0.0)
+        assert plan is not None and len(plan[1]) >= 2
