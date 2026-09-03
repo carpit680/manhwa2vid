@@ -70,6 +70,21 @@ def _normalize_page(value: Any) -> str:
     return digits.zfill(4) if digits else ""
 
 
+def _print_usage(provider: Any, label: str) -> None:
+    """Report a stage's spend, and never let reporting break the stage.
+
+    These two stages built throwaway providers and printed nothing, so their cost has
+    never appeared in any total — "the matcher is 85% of the bill" was measured against
+    a denominator missing the largest single request the pipeline makes.
+    """
+    line = getattr(provider, "usage_line", None)
+    if callable(line):
+        try:
+            console.print(f"[dim]{line(label)}[/]")
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def request_alignment(
     para_texts: list[str],
     pages: list[Path],
@@ -94,6 +109,10 @@ def request_alignment(
     # The paragraph->page map is one object covering every paragraph; truncated, it
     # comes back short and the aligner silently scopes later paragraphs to nothing.
     provider.raise_if_truncated("alignment map")
+    # This stage built a throwaway provider and printed no usage line, so its spend has
+    # never appeared anywhere. "The matcher is 85% of the bill" was measured against a
+    # denominator that omitted the largest single request the pipeline makes.
+    _print_usage(provider, "Aligner")
     data = json.loads(raw) if isinstance(raw, str) else raw
     return list(data.get("map") or [])
 
@@ -173,6 +192,7 @@ def locate_boundary_panels(
             pid = None
         if pid and any(p.id == pid for p in page_panels):
             found.append(str(pid))
+    _print_usage(provider, "Boundaries")
     return found
 
 
