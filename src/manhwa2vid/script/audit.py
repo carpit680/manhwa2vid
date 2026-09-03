@@ -525,7 +525,28 @@ def revise_once(
         provider.vision_model = model
     provider.temperature = 0.0
 
-    pages = sorted(paths["pages"].glob("*.png"))
+    # Only the pages the findings actually cite, ±2 — the same scoping verify_majors
+    # already uses. This sent EVERY page in one request, which worked at 233 pages and
+    # would not at 600: `describe_labeled_panels_text` has no shrink-and-retry, so
+    # "request too large" propagates out uncaught, and `audit_and_revise` has no
+    # idempotency marker, so each retry re-pays ~50 pro-tier calls before failing in the
+    # same place. A revision also does not need pages it is not correcting.
+    all_pages = sorted(paths["pages"].glob("*.png"))
+    cited: list[Path] = []
+    seen: set[Path] = set()
+    for finding in [*majors, *missing]:
+        ref = finding.get("page") if isinstance(finding, dict) else None
+        for page in _pages_for_finding(ref, all_pages):
+            if page not in seen:
+                seen.add(page)
+                cited.append(page)
+    # No usable citation anywhere (or so many that scoping buys nothing) — fall back to
+    # the whole chapter, which is the old behaviour and still correct at short length.
+    pages = sorted(cited) if cited and len(cited) < len(all_pages) else all_pages
+    if len(pages) < len(all_pages):
+        console.print(
+            f"[dim]Revision: {len(pages)} cited page(s) of {len(all_pages)}[/]"
+        )
     revised = provider.describe_labeled_panels_text(
         [(f"[page {p.stem}]", p) for p in pages],
         _REVISE_SYSTEM,

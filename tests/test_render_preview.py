@@ -270,3 +270,31 @@ class TestHoldMeasurementAuthority:
 
         assert _SHOT_MAX_WARN_S < 16.37 < _SHOT_MAX_FAIL_S
         assert _SHOT_MAX_FAIL_S < 19.14, "our measured worst hold must actually fail"
+
+
+class TestUpscaleOOMRecovery:
+    """The 20-chapter render hit CUDA out-of-memory partway through 641 panels and
+    silently shipped a RESOLUTION-MIXED video — some panels upscaled, some at source
+    size, on one timeline — reported only as a warning per panel that scrolled past.
+    There is no empty_cache() anywhere in the project, so fragmentation accumulates and
+    late panels fail for memory earlier ones did not need."""
+
+    def test_oom_is_recognised_by_type_or_message(self):
+        from manhwa2vid.video.upscale import _is_oom
+
+        assert _is_oom(RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB"))
+        assert not _is_oom(FileNotFoundError("panels/p0001.png"))
+        assert not _is_oom(ValueError("bad shape"))
+
+    def test_the_retry_band_is_narrower_than_the_default(self):
+        import inspect
+
+        from manhwa2vid.video.upscale import _RETRY_BAND_PX, _upscale_array
+
+        default = inspect.signature(_upscale_array).parameters["band_px"].default
+        assert _RETRY_BAND_PX < default, "a retry must ask for less, or it fails again"
+
+    def test_freeing_gpu_memory_never_raises_without_cuda(self):
+        from manhwa2vid.video.upscale import _free_gpu
+
+        _free_gpu()      # must be safe on a CPU-only box and inside an except block

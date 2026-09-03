@@ -56,6 +56,29 @@ def _load_model():
     return _loaded_model
 
 
+#: Band width for a retry after out-of-memory. Half the default: the point is to fit,
+#: not to be fast.
+_RETRY_BAND_PX = 256
+
+
+def _is_oom(exc: BaseException) -> bool:
+    name = type(exc).__name__
+    return "OutOfMemory" in name or "out of memory" in str(exc).lower()
+
+
+def _free_gpu() -> None:
+    """Release cached blocks. Fragmentation across a long run is what makes late panels
+    fail for memory that early ones did not need."""
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _upscale_array(arr: np.ndarray, band_px: int = 512, overlap: int = 16) -> np.ndarray:
     """Run the x4 model over an RGB uint8 array in overlapping horizontal bands.
 
@@ -169,6 +192,8 @@ def upscale_panels(
         return mapping
 
     console.print(f"[dim]Upscaling {len(todo)} panel(s) x{scale}…[/]")
+    failed = 0
+    oom_recovered = 0
     for p in todo:
         try:
             arr = np.asarray(Image.open(p).convert("RGB"))
@@ -182,5 +207,46 @@ def upscale_panels(
             up_img.save(out)
             mapping[p.name] = out
         except Exception as exc:  # noqa: BLE001
+            # Out of memory is not a reason to give up on the panel — it is a reason to
+            # ask for less. The 20-chapter render hit CUDA OOM partway through 641
+            # panels and silently produced a RESOLUTION-MIXED video: some panels
+            # upscaled, some at source size, on the same timeline. Nothing reported it
+            # beyond a scrolling warning per panel.
+            #
+            # There is no empty_cache() anywhere in this project, so allocator
+            # fragmentation accumulates across a long run and later panels fail for
+            # memory earlier ones did not need. Free it and retry with narrower bands
+            # before accepting the original.
+            if _is_oom(exc):
+                _free_gpu()
+                try:
+                    arr = np.asarray(Image.open(p).convert("RGB"))
+                    up = _upscale_array(arr, band_px=_RETRY_BAND_PX)
+                    up_img = Image.fromarray(up)
+                    if scale != 4:
+                        up_img = up_img.resize(
+                            (arr.shape[1] * scale, arr.shape[0] * scale),
+                            Image.Resampling.LANCZOS,
+                        )
+                    out = out_dir / p.name
+                    up_img.save(out)
+                    mapping[p.name] = out
+                    oom_recovered += 1
+                    continue
+                except Exception:  # noqa: BLE001
+                    _free_gpu()
             console.print(f"[yellow]Upscale failed for {p.name} ({exc}) — using original[/]")
+            failed += 1
+    if failed:
+        # One line at the end, not one per panel: a per-panel warning scrolls past and
+        # the render ships mixed-resolution without anyone noticing.
+        console.print(
+            f"[yellow]Upscale[/] — {failed} panel(s) kept at source resolution"
+            + (f", {oom_recovered} recovered after freeing GPU memory" if oom_recovered else "")
+            + "; the video mixes resolutions"
+        )
+    elif oom_recovered:
+        console.print(
+            f"[dim]Upscale — {oom_recovered} panel(s) recovered on a narrower band[/]"
+        )
     return mapping

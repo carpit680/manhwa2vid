@@ -1204,3 +1204,63 @@ def test_reports_from_retired_stages_do_not_block_the_render(tmp_path):
 
     write("qa.timeline.json", "fail")       # a stage that still runs
     assert upstream_failures(tmp_path) == ["timeline:g"]
+
+
+class TestRevisionPageScoping:
+    """revise_once sent EVERY page in one vision request. That worked at 233 pages and
+    would not at 600: describe_labeled_panels_text has no shrink-and-retry, so 'request
+    too large' propagates out uncaught, and audit_and_revise has no idempotency marker,
+    so each retry re-pays ~50 pro-tier calls before failing in the same place."""
+
+    def test_only_the_cited_pages_are_sent(self, tmp_path, monkeypatch):
+        from manhwa2vid.script import audit as A
+
+        pages_dir = tmp_path / "pages"
+        pages_dir.mkdir()
+        for i in range(1, 61):
+            (pages_dir / f"{i:04d}.png").write_bytes(b"")
+
+        sent = {}
+
+        class Stub:
+            vision_model = None
+            temperature = 0.0
+
+            def describe_labeled_panels_text(self, images, system, user, **kw):
+                sent["n"] = len(images)
+                return ""      # empty revision: the original stands, which is fine here
+
+        monkeypatch.setattr(A, "get_llm_provider", lambda *a, **k: Stub(), raising=False)
+        monkeypatch.setattr("manhwa2vid.llm.provider.get_llm_provider",
+                            lambda *a, **k: Stub())
+
+        audit = {"majors": [{"page": "0030", "issue": "wrong"}], "missing": []}
+        A.revise_once("Some narration.", audit,
+                      {"pages": pages_dir, "root": tmp_path}, {})
+        assert sent["n"] <= 5, f"{sent['n']} pages sent for one finding citing page 30"
+        assert sent["n"] >= 1
+
+    def test_no_usable_citation_falls_back_to_the_whole_chapter(self, tmp_path, monkeypatch):
+        """Old behaviour, still correct at short length — never revise against nothing."""
+        from manhwa2vid.script import audit as A
+
+        pages_dir = tmp_path / "pages"
+        pages_dir.mkdir()
+        for i in range(1, 9):
+            (pages_dir / f"{i:04d}.png").write_bytes(b"")
+        sent = {}
+
+        class Stub:
+            vision_model = None
+            temperature = 0.0
+
+            def describe_labeled_panels_text(self, images, system, user, **kw):
+                sent["n"] = len(images)
+                return ""
+
+        monkeypatch.setattr("manhwa2vid.llm.provider.get_llm_provider",
+                            lambda *a, **k: Stub())
+        A.revise_once("Some narration.",
+                      {"majors": [{"issue": "no page cited"}], "missing": []},
+                      {"pages": pages_dir, "root": tmp_path}, {})
+        assert sent["n"] == 8
