@@ -522,3 +522,54 @@ class TestAnnouncerRadius:
         ann = [False, False, True, False, False]   # page-4 paragraph announces
         block_of = self._run(5, starts, ann, cut_pages=[5])
         assert block_of == [0, 0, 1, 1, 1], block_of
+
+
+class TestClusteredCuts:
+    """Several printed time markers on consecutive pages must not eat consecutive
+    paragraphs.
+
+    Frozen Player prints six dated headers inside pages 84-94 ("APRIL 7TH, 2044",
+    "APRIL 23RD…"), splitting the range into blocks of 45, 5, 15, 20 and 3 panels.
+    With one distinct paragraph forced per cut, six clustered cuts consumed six
+    consecutive paragraphs regardless of subject: the paragraph describing pages
+    136-166 was assigned a 20-panel block on page 91, the clamp handed it arbitrary
+    panels from there, pages 134-161 were never shown, and the narration in that
+    stretch played over a different scene. Measured 6 of 6 paragraphs outside their
+    own art; 0 of 6 after.
+    """
+
+    def _blocks(self, starts_pages, cut_pages, per_page=10):
+        from manhwa2vid.script.align import clamp_to_time_blocks
+
+        ordered = [f"p{pg:04d}_{k:02d}" for pg in range(1, 40)
+                   for k in range(1, per_page + 1)]
+        panel_lists = [[f"p{pg:04d}_01"] for pg in starts_pages]
+        texts = ["He walks in."] * len(starts_pages)
+        boundaries = [f"p{pg:04d}_01" for pg in cut_pages]
+        lists, tb = clamp_to_time_blocks(panel_lists, texts, ordered, boundaries)
+        return ordered, lists, tb
+
+    def test_clustered_cuts_do_not_drag_paragraphs_off_their_art(self):
+        # Four cuts on pages 10-13; the paragraphs are about pages 20, 25, 30, 35.
+        starts = [2, 5, 20, 25, 30, 35]
+        ordered, lists, tb = self._blocks(starts, cut_pages=[10, 11, 12, 13])
+        index = {pid: i for i, pid in enumerate(ordered)}
+        for para, want_page in enumerate(starts):
+            block = tb.block_of[para]
+            lo, hi = tb.blocks[block]
+            own = index[f"p{want_page:04d}_01"]
+            assert lo <= own < hi, (
+                f"paragraph {para + 1} (art on page {want_page}) was clamped into "
+                f"block {block} = panels {lo}-{hi}"
+            )
+
+    def test_one_paragraph_may_cross_several_cuts(self):
+        starts = [2, 20]
+        _, _, tb = self._blocks(starts, cut_pages=[10, 11, 12])
+        # The second paragraph is the crossing for all three, so it lands past them.
+        assert tb.block_of == [0, 3], tb.block_of
+
+    def test_a_single_cut_still_behaves_exactly_as_before(self):
+        starts = [2, 3, 6, 7]
+        _, _, tb = self._blocks(starts, cut_pages=[5])
+        assert tb.block_of == [0, 0, 1, 1], tb.block_of

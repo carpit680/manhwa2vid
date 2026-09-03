@@ -367,7 +367,21 @@ def clamp_to_time_blocks(
             later = [i for i in range(after, len(para_texts)) if starts[i] >= cut]
             crossing = later[0] if later else len(para_texts)
         crossings.append(crossing)
-        after = crossing + 1
+        # A paragraph may cross SEVERAL cuts. `after = crossing + 1` forced one distinct
+        # paragraph per cut, which is invisible at one or two printed markers and wrong
+        # the moment they cluster: Frozen Player prints six dated headers inside pages
+        # 84-94 ("APRIL 7TH, 2044", "APRIL 23RD…"), splitting the range into blocks of
+        # 45, 5, 15, 20 and 3 panels. Six clustered cuts then consumed six CONSECUTIVE
+        # paragraphs regardless of what they were about, so the paragraph describing
+        # pages 136-166 was assigned a 20-panel block on page 91 and the clamp below
+        # handed it arbitrary panels from that block. Measured: 6 of 6 paragraphs ended
+        # up outside their own art, pages 134-161 were never shown at all, and the
+        # narration in that stretch played over a different scene entirely.
+        #
+        # Sharing a crossing leaves the tiny in-between blocks with no narration, which
+        # is the honest outcome — nothing was written about them — and the bounded fill
+        # walks them from the neighbouring beat.
+        after = crossing
 
     block_of: list[int] = []
     for i in range(len(para_texts)):
