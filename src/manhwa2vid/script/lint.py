@@ -3187,10 +3187,31 @@ def repair_echoed_question(text: str, names: set[str] | None = None) -> str:
         head = head.rstrip(",")
         return f'{head}, "{echoed}?"'
 
-    parts = [x for x in _SENTENCE_SPLIT_RE.split((text or "").strip()) if x.strip()]
-    if not parts:
+    # PARAGRAPH BREAKS ARE STRUCTURE. Splitting the whole text into sentences and
+    # rejoining with spaces collapsed every paragraph into one, so the script became a
+    # single beat — caught by test_freeform_pipeline_mock, and precisely the "a later
+    # pass undoes an earlier pass's work" failure this codebase warns about. Repair
+    # within each paragraph and leave the text alone when nothing matched.
+    if not text:
         return text
-    return " ".join(fix(p) for p in parts)
+    changed = False
+    out_paras: list[str] = []
+    for para in re.split(r"(\n\s*\n)", text):
+        if not para.strip() or para.startswith("\n"):
+            out_paras.append(para)
+            continue
+        parts = [x for x in _SENTENCE_SPLIT_RE.split(para.strip()) if x.strip()]
+        if not parts:
+            out_paras.append(para)
+            continue
+        fixed = [fix(x) for x in parts]
+        if fixed != parts:
+            changed = True
+        out_paras.append(" ".join(fixed))
+    # Return the ORIGINAL when nothing matched. Re-joining sentences normalises
+    # whitespace, and a pass that rewrites text it had no reason to touch is how this
+    # codebase's most repeated defect starts.
+    return "".join(out_paras) if changed else text
 
 
 def repair_truncated_sentences(beats: list[ScriptBeat]) -> list[ScriptBeat]:

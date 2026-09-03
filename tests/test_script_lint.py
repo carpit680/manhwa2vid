@@ -2663,3 +2663,25 @@ class TestEchoedQuestionRepair:
         assert out.startswith("The large scout looks disappointed.")
         assert out.endswith("Then he explains why.")
         assert '"D-rank?"' in out
+
+
+def test_the_echoed_question_repair_never_flattens_paragraphs():
+    """Paragraph breaks are structure — one per beat. The first version of this repair
+    split the whole script into sentences and rejoined with spaces, collapsing it to a
+    single beat. test_freeform_pipeline_mock caught it, and it is exactly the 'a later
+    pass undoes an earlier pass's work' failure this codebase warns about."""
+    from manhwa2vid.script.lint import repair_echoed_question
+
+    text = "One.\n\nTwo. He asks D-rank?\n\nThree."
+    out = repair_echoed_question(text, set())
+    assert out.count("\n\n") == 2, out
+    assert '"D-rank?"' in out
+
+
+def test_text_with_no_echo_is_returned_byte_identical():
+    """Re-joining sentences normalises whitespace, so a pass must not rewrite text it
+    had no reason to touch."""
+    from manhwa2vid.script.lint import repair_echoed_question
+
+    text = "No echo here.\n\nJust   prose  with  odd spacing.\n"
+    assert repair_echoed_question(text, set()) == text
