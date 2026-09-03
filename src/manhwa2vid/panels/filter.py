@@ -86,6 +86,16 @@ def exclude_by_filename(source_path: str) -> str | None:
     return None
 
 
+#: Above this height a panel is not a "transition sliver" whatever its ink. Solo
+#: Leveling's tallest real sliver measures 1,000px; Frozen Player's median is 375px.
+_SLIVER_MAX_HEIGHT = 1200
+
+#: What a TALL panel must score to count as blank. Light line art measures 0.16-0.28,
+#: so the small-panel threshold of 0.30 discards it; a genuinely empty band is far below
+#: this.
+_TALL_BLANK_MAX_INK = 0.10
+
+
 def is_blank_panel(panel: Panel, config: dict[str, Any]) -> bool:
     """Near-white page-transition sliver, by pixel stats stamped at split time.
 
@@ -98,7 +108,23 @@ def is_blank_panel(panel: Panel, config: dict[str, Any]) -> bool:
         return False
     max_ink = float(get_nested(config, "panels", "blank_max_ink_ratio", default=0.30))
     max_dark = float(get_nested(config, "panels", "blank_max_dark_ratio", default=0.10))
-    if panel.ink_ratio < max_ink and panel.dark_ratio < max_dark:
+    # A TRANSITION SLIVER IS SMALL. The rule had no size term, so a tall panel of light
+    # line art scored the same as an empty gutter band and was thrown away.
+    #
+    # Measured on Frozen Player ch1-20: p0021_02 is 4,032px tall with ink 0.248, and it
+    # holds the ENTIRE hospital conversation the recap narrates — "IT'S ALREADY THIS
+    # LATE", "ARE YOU HUNGRY?", "I'M GOOD ON GRUB", the museum flyer. It was excluded,
+    # so beats 32 and 33 (16 sentences) had one surviving panel between them and the
+    # video froze on it for 40.5 seconds. Twelve panels over 1,200px were excluded this
+    # way, one of them 7,921px; six whole pages ended with no story art at all.
+    #
+    # Real slivers are small: Solo Leveling's tallest measures 1,000px and Frozen
+    # Player's median is 375px. Above the sliver scale, blankness has to be proven
+    # rather than assumed — a genuinely empty band scores far below the tuned-for-small
+    # threshold, while light line art sits at 0.16-0.28.
+    tall = panel.bbox.height > _SLIVER_MAX_HEIGHT
+    ink_limit = _TALL_BLANK_MAX_INK if tall else max_ink
+    if panel.ink_ratio < ink_limit and panel.dark_ratio < max_dark:
         return True
     # The symmetric case: a solid BLACK transition sliver. Dark-page titles separate
     # panels with black bands, and by the ink definition (gray < 245) solid black scores

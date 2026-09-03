@@ -493,3 +493,62 @@ class TestTextCardsWithNoContainer:
         assert is_text_dominant_panel(cv2.imread(str(P / "p0024_01.png")))
         assert not is_text_dominant_panel(cv2.imread(str(P / "p0014_04.png")))
         assert not is_text_dominant_panel(cv2.imread(str(P / "p0015_01.png")))
+
+
+class TestTallPanelsAreNotSlivers:
+    """A transition sliver is SMALL. The blank rule had no size term, so a tall panel of
+    light line art scored the same as an empty gutter band and was discarded.
+
+    Measured on Frozen Player ch1-20: p0021_02 is 4,032px tall with ink 0.248 and holds
+    the entire hospital conversation the recap narrates. Excluding it left beats 32 and
+    33 — sixteen sentences — with one surviving panel between them, and the video froze
+    on it for 40.5 seconds. Twelve panels over 1,200px were excluded this way, one of
+    them 7,921px, and six whole pages ended with no story art at all."""
+
+    def _panel(self, height, ink, dark=0.06):
+        from manhwa2vid.models import Panel, PanelBBox
+
+        return Panel(
+            id="p0021_02", page_num=21,
+            bbox=PanelBBox(x=0, y=0, width=800, height=height),
+            image_path="panels/p0021_02.png",
+            ink_ratio=ink, dark_ratio=dark,
+        )
+
+    def test_a_tall_panel_of_line_art_is_kept(self):
+        from manhwa2vid.panels.filter import is_blank_panel
+
+        assert not is_blank_panel(self._panel(4032, 0.248), {}), "the conversation page"
+        assert not is_blank_panel(self._panel(7921, 0.282), {})
+        assert not is_blank_panel(self._panel(5826, 0.160), {})
+
+    def test_a_small_light_sliver_is_still_blank(self):
+        """The rule's real job — an empty band between panels — must be untouched."""
+        from manhwa2vid.panels.filter import is_blank_panel
+
+        assert is_blank_panel(self._panel(375, 0.05), {})
+        assert is_blank_panel(self._panel(1000, 0.20), {})
+
+    def test_a_genuinely_empty_tall_band_is_still_blank(self):
+        """Blankness has to be PROVEN above the sliver scale, not assumed — but a truly
+        empty tall band still scores far below the small-panel threshold."""
+        from manhwa2vid.panels.filter import is_blank_panel
+
+        assert is_blank_panel(self._panel(3000, 0.02), {})
+
+    def test_the_shipped_short_projects_are_unaffected(self):
+        """Solo Leveling and FP ch3-4 have no tall 'blank' panels, so their approved
+        videos must not change."""
+        import json
+        from pathlib import Path
+
+        from manhwa2vid.models import Panel
+        from manhwa2vid.panels.filter import is_blank_panel
+
+        for name, expected in (("solo-leveling-ch1-5", 11),
+                               ("return-of-the-frozen-player-ch3-4", 2)):
+            f = Path("projects") / name / "panels.json"
+            if not f.exists():
+                continue
+            panels = [Panel(**p) for p in json.loads(f.read_text())]
+            assert sum(1 for p in panels if is_blank_panel(p, {})) == expected, name
