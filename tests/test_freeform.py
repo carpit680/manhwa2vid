@@ -32,7 +32,7 @@ def test_the_word_budget_matches_the_density_that_ships():
     from manhwa2vid.models import ProjectMeta
     from manhwa2vid.script.freeform import _budget_words
 
-    meta = ProjectMeta(title="T", slug="t", chapters="1-20", language="en")
+    meta = ProjectMeta(title="T", slug="t", chapters="1-20", source_lang="ko")
     lo, hi = _budget_words(meta, {}, 20)
     mid = (lo + hi) / 2
     panels = 82 * 20                       # measured panels-per-chapter, x 20
