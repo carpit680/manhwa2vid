@@ -89,6 +89,27 @@ def _long_hold_segments(
     return pieces
 
 
+def _render_workers(config: dict[str, Any], n_jobs: int) -> int:
+    """How many clips to render at once.
+
+    ffmpeg is a subprocess, so the GIL is released while it runs and threads are enough.
+    Each worker holds one clip's frames in memory — a 7.5s segment at 30fps is 225 PIL
+    images, ~280 MB at preview scale and ~1.1 GB at 1080p — so this is bounded by RAM,
+    not cores. Conservative by default and overridable.
+    """
+    import os as _os
+
+    configured = get_nested(config, "video", "render_workers", default=0)
+    try:
+        configured = int(configured or 0)
+    except (TypeError, ValueError):
+        configured = 0
+    if configured > 0:
+        return max(1, min(configured, n_jobs or 1))
+    cpus = _os.cpu_count() or 4
+    return max(1, min(6, cpus // 2, n_jobs or 1))
+
+
 def _render_panel_clip(
     entry: TimelineEntry,
     panel: Panel,
@@ -384,8 +405,19 @@ def render_video(
         seg_len = max(3.0, 0.75 * max_shot_s)
         run_panel: str | None = None
         run_clock = 0.0
+        # Two passes. The first walks the timeline and decides WHAT each clip is; the
+        # second renders them. Every accumulator here (acc_time, acc_frames, run_clock)
+        # is pure arithmetic over the timeline, so the decisions are identical either
+        # way — but the rendering is ~2,400 independent ffmpeg invocations for a
+        # 38-minute video, and roughly double that for the 75-minute one this pipeline
+        # now targets. Sequentially that is hours on a 24-core box that is idle.
+        #
+        # Clip CONTENT is unchanged by this: each call already writes its own frames
+        # under a unique tag and returns its own file. Only the order of execution
+        # changes, and results are reassembled by index so the concat list is identical.
+        jobs: list[dict[str, Any]] = []
         with Progress() as progress:
-            task = progress.add_task("Rendering panels", total=len(timeline.entries))
+            task = progress.add_task("Planning shots", total=len(timeline.entries))
             for i, entry in enumerate(timeline.entries):
                 panel = panels.get(entry.panel_id)
                 if panel is None:
@@ -415,25 +447,59 @@ def render_video(
                     # Segment 0 keeps the router's own choice; later segments alternate
                     # close/wide so each cut lands on a genuinely different framing.
                     style = None if seg_idx == 0 else ("fill" if seg_idx % 2 else "letterbox")
-                    clip = _render_panel_clip(
-                        entry,
-                        panel,
-                        paths["root"],
-                        frames_dir,
-                        i,
-                        width,
-                        height,
-                        fps,
-                        config,
-                        upscale_map,
-                        prefer_art=prefer_art,
-                        num_frames=num_frames,
-                        style=style,
-                        clip_tag=f"s{seg_idx}" if seg_idx else "",
-                    )
-                    clips.append(clip)
+                    jobs.append({
+                        "entry": entry,
+                        "panel": panel,
+                        "index": i,
+                        "prefer_art": prefer_art,
+                        "num_frames": num_frames,
+                        "style": style,
+                        "clip_tag": f"s{seg_idx}" if seg_idx else "",
+                    })
                 run_clock += entry.duration
                 progress.advance(task)
+
+        def _run(job: dict[str, Any]) -> Path:
+            return _render_panel_clip(
+                job["entry"],
+                job["panel"],
+                paths["root"],
+                frames_dir,
+                job["index"],
+                width,
+                height,
+                fps,
+                config,
+                upscale_map,
+                prefer_art=job["prefer_art"],
+                num_frames=job["num_frames"],
+                style=job["style"],
+                clip_tag=job["clip_tag"],
+            )
+
+        workers = _render_workers(config, len(jobs))
+        clips = [None] * len(jobs)                       # type: ignore[assignment]
+        with Progress() as progress:
+            task = progress.add_task(
+                f"Rendering panels ({workers} worker(s))", total=len(jobs)
+            )
+            if workers <= 1:
+                for n, job in enumerate(jobs):
+                    clips[n] = _run(job)
+                    progress.advance(task)
+            else:
+                from concurrent.futures import ThreadPoolExecutor
+
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    futures = {pool.submit(_run, job): n for n, job in enumerate(jobs)}
+                    for fut in futures:
+                        pass
+                    from concurrent.futures import as_completed
+
+                    for fut in as_completed(futures):
+                        clips[futures[fut]] = fut.result()
+                        progress.advance(task)
+        clips = [c for c in clips if c is not None]
 
 
         silent = Path(tmp) / "silent.mp4"

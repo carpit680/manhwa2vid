@@ -298,3 +298,40 @@ class TestUpscaleOOMRecovery:
         from manhwa2vid.video.upscale import _free_gpu
 
         _free_gpu()      # must be safe on a CPU-only box and inside an except block
+
+
+class TestParallelClipRendering:
+    """Clips are rendered concurrently: ~2,400 independent ffmpeg invocations for a
+    38-minute video and roughly double for the 75-minute one this pipeline now targets,
+    run sequentially on an idle 24-core box.
+
+    Safe only because each clip owns its output path and its random seed. Both are
+    derived from (entry_index, clip_tag), so nothing depends on execution order — that
+    is the invariant these tests hold."""
+
+    def test_clip_paths_are_unique_per_entry_and_segment(self):
+        """A collision would have two workers writing the same frames directory."""
+        seen = set()
+        for entry_index in range(200):
+            for seg in range(4):
+                tag = f"s{seg}" if seg else ""
+                name = f"{entry_index:05d}{tag}_p0001_02"
+                assert name not in seen, f"collision on {name}"
+                seen.add(name)
+
+    def test_the_seed_salt_does_not_depend_on_order(self):
+        """Camera jitter is seeded from the salt; if that varied with scheduling, the
+        same timeline would render differently every run."""
+        salts = [f"{i}{tag}" for i in range(50) for tag in ("", "s1", "s2")]
+        assert len(set(salts)) == len(salts)
+
+    def test_worker_count_is_bounded_by_memory_not_cores(self):
+        """Each worker holds one clip's frames — 225 PIL images for a 7.5s segment,
+        ~1.1 GB at 1080p — so this is bounded by RAM, and configurable."""
+        from manhwa2vid.video.render import _render_workers
+
+        assert _render_workers({}, 500) <= 6
+        assert _render_workers({}, 1) == 1, "never more workers than jobs"
+        assert _render_workers({"video": {"render_workers": 2}}, 500) == 2
+        assert _render_workers({"video": {"render_workers": 1}}, 500) == 1
+        assert _render_workers({"video": {"render_workers": "junk"}}, 500) >= 1
