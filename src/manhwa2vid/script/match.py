@@ -334,7 +334,11 @@ def enforce_claim_order(
     pos = {pid: i for i, pid in enumerate(panel_order)}
     out: list[tuple[int, str]] = []
     prev = -1
-    for number, pid in claims:
+    # By SENTENCE, then position. filter_monotonic returns its chain in panel order, so
+    # comparing rows as they arrive never puts a later sentence next to an earlier one
+    # and the rewind is invisible — which is why the first version of this guard passed
+    # its own check while the timeline still failed.
+    for number, pid in sorted(claims, key=lambda c: (c[0], pos.get(c[1], 0))):
         if pid not in pos:
             continue
         p = pos[pid]
@@ -873,8 +877,31 @@ def build_shotlist(
         json.dumps({"blocks": claims_debug, "returns": moves}, indent=1), encoding="utf-8"
     )
 
-    claims_by_number: dict[int, list[str]] = {}
+    # Order sweep on the ASSEMBLED claims, per block. Doing it per block inside the
+    # match loop was not enough: rows are added afterwards (returns, callbacks, the
+    # coda) and blocks are re-numbered when a return is adopted, so a rewind survived
+    # every earlier check and reached the timeline — p0190_04 then p0189_02, ten panels
+    # back, past the eight-panel tolerance and a blocking failure. This is the last
+    # place the full set exists before it becomes the shot list.
+    # Positions come from the GLOBAL story order, not each block's slice. Measuring
+    # inside a block counts only the panels that block kept, so a ten-panel rewind can
+    # measure as three and slip through — while the reading-order gate, which walks the
+    # whole video, still fails it. The module docstring warns that align's ordered_ids,
+    # the engine's fill_order and the gate's list mean three different things; this is
+    # that trap.
+    global_order = [pid for panels_here in blocks_panels for pid in
+                    [p.id for p in panels_here]]
+    ordered_claims: list[tuple[int, str]] = []
+    by_block: dict[int, list[tuple[int, str]]] = {}
     for number, pid in all_claims:
+        blk = block_of_sentence[number - 1] if number - 1 < len(block_of_sentence) else 0
+        by_block.setdefault(blk, []).append((number, pid))
+    for blk in sorted(by_block):
+        # Per block still, because a printed time skip legitimately resets the walk.
+        ordered_claims.extend(enforce_claim_order(by_block[blk], global_order))
+
+    claims_by_number: dict[int, list[str]] = {}
+    for number, pid in ordered_claims:
         claims_by_number.setdefault(number, []).append(pid)
 
     # The outro is the narrator talking to the VIEWER — deliberately not panel-grounded
