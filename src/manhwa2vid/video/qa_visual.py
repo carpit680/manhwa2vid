@@ -147,7 +147,10 @@ _CADENCE_MIN, _CADENCE_MAX = 12.0, 22.0     # brief said 12-20; reference W1 is 
 # phenomenon with no forward panel to cut to), while mid-video holds top out at 16.2s
 # and there is one of those across 488 runs. So 12 warns on something worth looking at
 # and 18 fails on something the reference never does.
-_SHOT_MAX_WARN_S, _SHOT_MAX_FAIL_S = 12.0, 18.0   # brief said fail at 12; reference is 16.37
+_SHOT_MAX_WARN_S, _SHOT_MAX_FAIL_S = 12.0, 18.0
+
+#: Width for QA decodes. Scene cuts and bubble statistics are scale-invariant.
+_QA_SCALE_WIDTH = 480
 _LONGTAIL_WARN_PCT, _LONGTAIL_FAIL_PCT = 18.0, 25.0  # brief said 15; reference reaches 22.2
 
 # Opening. A viewer decides in ten seconds, so the window is 15, not 4 — Solo Leveling's
@@ -226,7 +229,12 @@ def measure_video(video: Path) -> dict[str, Any]:
     metrics.update(measure_audio(video))
 
     # Shot lengths via scene detection — same detector the reference was profiled with.
-    cuts = detect_cuts(video)
+    # Scene detection at 480px, not the full 1920. Render QA decodes the finished file
+    # three times end to end and this was the only pass doing it at full resolution --
+    # 20-45 minutes of pure QA on a 95-minute 1080p file. Cut TIMESTAMPS do not move
+    # with resolution: the detector compares successive frames, and a downscale changes
+    # both sides of that comparison equally. The other decodes already use 480x270.
+    cuts = detect_cuts(video, scale_width=_QA_SCALE_WIDTH)
     duration = n / _FPS
     shots = shot_lengths(cuts, duration)
     if shots:
