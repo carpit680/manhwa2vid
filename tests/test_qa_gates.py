@@ -1264,3 +1264,41 @@ class TestRevisionPageScoping:
                       {"majors": [{"issue": "no page cited"}], "missing": []},
                       {"pages": pages_dir, "root": tmp_path}, {})
         assert sent["n"] == 8
+
+
+class TestAuditIdempotency:
+    """Without a marker, audit_and_revise re-audits on every re-entry: ~10 windowed
+    pro-tier calls plus one verification call per major finding, the most expensive
+    stage after the matcher, re-paid in full whenever anything downstream needs another
+    go. It is also what made revise_once dangerous at length -- a request-too-large
+    there propagates uncaught, and each retry re-bought the whole audit before failing
+    in the same place. Density, trim and rhythm have had this guard; the audit did not."""
+
+    def test_a_second_call_does_not_re_audit(self, tmp_path, monkeypatch):
+        from manhwa2vid.script import audit as A
+
+        calls = []
+        monkeypatch.setattr(A, "audit_script",
+                            lambda *a, **k: calls.append(1) or
+                            {"majors": [], "undelivered_system_messages": []})
+        monkeypatch.setattr(A, "revise_once",
+                            lambda text, *a, **k: (text, {"revised": False}))
+        paths = {"debug": tmp_path / "debug",
+                 "script_audit_json": tmp_path / "script.audit.json"}
+
+        A.audit_and_revise("Narration.", paths, {})
+        assert len(calls) == 1
+        A.audit_and_revise("Narration.", paths, {})
+        assert len(calls) == 1, "the audit was re-paid on re-entry"
+        assert (tmp_path / "debug" / "audit_pass.json").exists()
+
+    def test_force_clears_the_marker(self):
+        """Otherwise --force silently keeps the cached audit it was meant to redo."""
+        import inspect
+
+        from manhwa2vid.script import story_first
+
+        src = inspect.getsource(story_first.generate_story_first_script)
+        assert "audit_pass.json" in src
+        for name in ("density_pass.json", "trim_pass.json", "rhythm_pass.json"):
+            assert name in src, name

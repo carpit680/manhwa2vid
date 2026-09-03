@@ -206,6 +206,13 @@ def generate_story_first_script(
         for key in ("chapter_facts_json", "script_freeform", "script_audit_json",
                     "script_alignment_json"):
             paths[key].unlink(missing_ok=True)
+        # The pass markers too, or --force silently keeps the cached audit and the
+        # cached density/trim/rhythm edits it was supposed to redo.
+        debug = paths.get("debug")
+        if debug:
+            for name in ("audit_pass.json", "density_pass.json",
+                         "trim_pass.json", "rhythm_pass.json"):
+                (debug / name).unlink(missing_ok=True)
 
     facts = read_chapter_facts(meta, paths, config, force=force)
     text = write_freeform_script(meta, paths, config, force=force)

@@ -591,7 +591,26 @@ def audit_and_revise(
     config: dict[str, Any],
     facts: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """The whole accountability step: audit, at most one revision, persist the record."""
+    """The whole accountability step: audit, at most one revision, persist the record.
+
+    Guarded like the density, trim and rhythm passes. Without a marker this stage
+    re-audits on every re-entry: ~10 windowed pro-tier calls plus one verification call
+    per major finding, the most expensive stage after the matcher, re-paid in full
+    whenever anything downstream needs another go. That is also what made `revise_once`
+    dangerous at length — a request-too-large there propagates uncaught, and each retry
+    re-bought the whole audit before failing in the same place.
+    """
+    marker = paths.get("debug")
+    marker = (marker / "audit_pass.json") if marker else None
+    if marker is not None and marker.exists():
+        console.print("[dim]Audit already applied — skipping[/]")
+        try:
+            record = json.loads(paths["script_audit_json"].read_text(encoding="utf-8"))
+        except (OSError, ValueError, KeyError):
+            record = {"audit": {"majors": [], "undelivered_system_messages": []},
+                      "revision": {"revised": False, "reason": "cached"}}
+        return text, record
+
     audit = audit_script(text, paths, config, facts)
     console.print(
         f"[cyan]Audit[/] — {len(audit['majors'])} major finding(s), "
@@ -600,4 +619,11 @@ def audit_and_revise(
     final, revision = revise_once(text, audit, paths, config, facts)
     record = {"audit": audit, "revision": revision}
     save_json(paths["script_audit_json"], record)
+    if marker is not None:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        save_json(marker, {
+            "applied": True,
+            "majors": len(audit.get("majors") or []),
+            "revised": bool(revision.get("revised")),
+        })
     return final, record
