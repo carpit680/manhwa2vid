@@ -16,7 +16,9 @@ said.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -680,6 +682,37 @@ def _build_shotlist_for(
     )
 
 
+#: Shared with the matcher: one switch turns off every paid call in a replay.
+_OFFLINE_ENV = "MANHWA2VID_MATCH_OFFLINE"
+
+
+def _para_digest(para_texts: list[str]) -> str:
+    """Identity of the prose an alignment map describes."""
+    return hashlib.sha256("\n\n".join(para_texts).encode("utf-8")).hexdigest()
+
+
+def _cached_alignment(
+    paths: dict[str, Path], para_texts: list[str]
+) -> tuple[list[dict[str, Any]], list[str]] | None:
+    """The saved map, but only if it describes THIS prose.
+
+    A stale map is worse than no map: paragraph N's page range would be applied to a
+    different paragraph N, binding narration to art it never described. The digest makes
+    that impossible, and its absence (maps written before this existed) means a miss.
+    """
+    path = paths["script_alignment_json"]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if data.get("para_digest") != _para_digest(para_texts):
+        return None
+    entries = data.get("map")
+    if not isinstance(entries, list) or not entries:
+        return None
+    return entries, list(data.get("time_boundaries") or [])
+
+
 def align_script(
     text: str,
     paths: dict[str, Path],
@@ -691,10 +724,33 @@ def align_script(
     pages = sorted(paths["pages"].glob("*.png"))
     panels = load_story_panels(paths)
 
-    entries = request_alignment(para_texts, pages, config)
-    boundary_ids = locate_boundary_panels(paths, panels, config)
+    # Reuse a cached alignment map when the prose it describes has not changed. Both
+    # calls below are vision passes over EVERY page — `request_alignment` is the single
+    # largest request the pipeline makes — and re-paying for them to re-test a
+    # deterministic downstream change is exactly the loop this project needed to stop.
+    # Keyed on the paragraph texts, so an edited script correctly misses.
+    cached = _cached_alignment(paths, para_texts)
+    if cached is not None:
+        entries, boundary_ids = cached
+        console.print("[dim]Align: reusing cached alignment map and boundaries[/]")
+    elif os.environ.get(_OFFLINE_ENV):
+        # A replay must never spend. Without this the alignment map — the single largest
+        # request the pipeline makes, every page in one call — is silently re-paid for
+        # the moment the prose digest misses.
+        raise RuntimeError(
+            "offline replay: no cached alignment map for this prose. Run the align "
+            "stage once online, or replay a project whose script has not changed."
+        )
+    else:
+        entries = request_alignment(para_texts, pages, config)
+        boundary_ids = locate_boundary_panels(paths, panels, config)
     save_json(
-        paths["script_alignment_json"], {"map": entries, "time_boundaries": boundary_ids}
+        paths["script_alignment_json"],
+        {
+            "map": entries,
+            "time_boundaries": boundary_ids,
+            "para_digest": _para_digest(para_texts),
+        },
     )
 
     from manhwa2vid.panels.split import panel_visual_stats_file
@@ -747,6 +803,22 @@ def align_script(
     if boundary_ids:
         panel_lists, time_blocks = clamp_to_time_blocks(
             panel_lists, para_texts, ordered_ids, boundary_ids
+        )
+        # The clamp DROPS cuts no paragraph crosses (clustered printed markers), so the
+        # surviving list is the one every downstream consumer must see. Persisting the
+        # pre-merge list here left the shotlist carrying 13 boundaries while its
+        # sentences' `block` values referred to the merged 7 — and the planner rebuilds
+        # its block bounds from that list, so block 5 in a sentence and block 5 in the
+        # planner meant different panel ranges.
+        if time_blocks.boundary_ids != boundary_ids:
+            console.print(
+                f"[dim]Align: {len(boundary_ids)} printed cut(s) -> "
+                f"{len(time_blocks.boundary_ids)} after merging blocks nobody narrates[/]"
+            )
+        boundary_ids = list(time_blocks.boundary_ids)
+        save_json(
+            paths["script_alignment_json"],
+            {"map": entries, "time_boundaries": boundary_ids},
         )
         console.print(f"[dim]Align: time blocks cut at {boundary_ids}[/]")
     else:

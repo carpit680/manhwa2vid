@@ -587,3 +587,23 @@ class TestClusteredCuts:
         starts = [2, 3, 6, 7]
         _, _, tb = self._blocks(starts, cut_pages=[5])
         assert tb.block_of == [0, 0, 1, 1], tb.block_of
+
+
+def test_the_merged_boundary_list_is_what_downstream_sees():
+    """The clamp drops cuts nobody crosses, so the surviving list is the one the
+    shotlist must carry. Persisting the pre-merge list left sentences whose `block`
+    referred to the merged numbering while the planner rebuilt its bounds from the
+    unmerged one — block 5 meant two different panel ranges. Measured on the
+    20-chapter probe: shotlist said 13 boundaries, its sentences used 7 blocks."""
+    from manhwa2vid.script.align import clamp_to_time_blocks
+
+    ordered = [f"p{pg:04d}_{k:02d}" for pg in range(1, 40) for k in range(1, 11)]
+    panel_lists = [[f"p{pg:04d}_01"] for pg in (2, 20)]
+    boundaries = [f"p{pg:04d}_01" for pg in (10, 11, 12)]
+    _, tb = clamp_to_time_blocks(panel_lists, ["He walks in."] * 2, ordered, boundaries)
+
+    assert len(tb.boundary_ids) < len(boundaries), "no cut was merged away"
+    # The invariant that broke: blocks and boundaries must agree, and every block index
+    # a paragraph carries must be addressable in that block list.
+    assert len(tb.blocks) == len(tb.boundary_ids) + 1
+    assert max(tb.block_of) < len(tb.blocks)

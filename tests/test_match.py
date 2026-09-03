@@ -8,6 +8,8 @@ panel that does not depict them.
 
 from __future__ import annotations
 
+import json
+
 from manhwa2vid.script.match import filter_monotonic, plan_shots
 
 
@@ -1048,3 +1050,114 @@ def test_a_run_bracketed_by_one_panel_holds_instead_of_filling():
     shown = [pid for pid, _sec in plan[1]]
     assert shown.count("p5") == 1, f"the co-claim pair was split: {shown}"
     assert shown == ["p5", "p9"], shown
+
+
+class TestClaimCache:
+    """The matcher is ~85% of a run's spend, and every deterministic fix downstream of it
+    was being validated by paying for it again. Four consecutive block fixes were
+    'verified' that way and three were wrong — the cost of the loop was the reason it was
+    slow enough to hide that."""
+
+    def _panels(self, n):
+        from manhwa2vid.models import Panel, PanelBBox
+        return [
+            Panel(id=f"p{i:04d}", page_num=1,
+                  bbox=PanelBBox(x=0, y=0, width=100, height=100),
+                  image_path=f"panels/p{i:04d}.png")
+            for i in range(1, n + 1)
+        ]
+
+    def test_a_second_identical_call_costs_nothing(self, tmp_path, monkeypatch):
+        from manhwa2vid.script import match as M
+        M.reset_claim_cache()
+        calls = []
+
+        class Stub:
+            vision_model = None
+            temperature = 0.0
+            last_finish_reason = "stop"
+
+            def describe_labeled_panels(self, images, prompt):
+                calls.append(len(images))
+                return json.dumps({"claims": [{"sentence": 1, "panels": ["p0001"]}]})
+
+        monkeypatch.setattr(M, "_matcher_provider", lambda cfg: Stub())
+        paths = {"root": tmp_path, "debug": tmp_path / "debug"}
+        sents = [(1, "He walks in.")]
+        panels = self._panels(3)
+
+        first = M.collect_claims(sents, panels, paths, {})
+        M.save_claim_cache()
+        assert first == [(1, "p0001")] and len(calls) == 1
+
+        M.reset_claim_cache()                      # a fresh process
+        second = M.collect_claims(sents, panels, paths, {})
+        assert second == first, "cached claims differ from what was paid for"
+        assert len(calls) == 1, "the cache was not consulted"
+        assert M.cache_stats() == (1, 0)
+
+    def test_changed_sentence_text_misses(self, tmp_path, monkeypatch):
+        """Keyed on TEXT, not just number — a rewritten sentence keeping its number must
+        not silently reuse the old panel."""
+        from manhwa2vid.script import match as M
+        M.reset_claim_cache()
+        calls = []
+
+        class Stub:
+            vision_model = None
+            temperature = 0.0
+            last_finish_reason = "stop"
+
+            def describe_labeled_panels(self, images, prompt):
+                calls.append(prompt)
+                return json.dumps({"claims": [{"sentence": 1, "panels": ["p0001"]}]})
+
+        monkeypatch.setattr(M, "_matcher_provider", lambda cfg: Stub())
+        paths = {"root": tmp_path, "debug": tmp_path / "debug"}
+        panels = self._panels(3)
+        M.collect_claims([(1, "He walks in.")], panels, paths, {})
+        M.collect_claims([(1, "She walks in.")], panels, paths, {})
+        assert len(calls) == 2
+
+    def test_offline_refuses_to_spend(self, tmp_path, monkeypatch):
+        """What tools/replay.py relies on: a miss returns nothing rather than paying."""
+        from manhwa2vid.script import match as M
+        M.reset_claim_cache()
+
+        class Boom:
+            vision_model = None
+            temperature = 0.0
+            last_finish_reason = "stop"
+
+            def describe_labeled_panels(self, images, prompt):
+                raise AssertionError("offline replay made a live call")
+
+        monkeypatch.setattr(M, "_matcher_provider", lambda cfg: Boom())
+        monkeypatch.setenv(M.OFFLINE_ENV, "1")
+        out = M.collect_claims([(1, "He walks in.")], self._panels(3),
+                               {"root": tmp_path, "debug": tmp_path / "debug"}, {})
+        assert out == []
+        assert M.cache_stats() == (0, 1)
+
+    def test_a_truncated_window_is_never_cached(self, tmp_path, monkeypatch):
+        """Storing a partial response would make the loss permanent and invisible."""
+        from manhwa2vid.script import match as M
+        M.reset_claim_cache()
+        calls = []
+
+        class Cut:
+            vision_model = None
+            temperature = 0.0
+            last_finish_reason = "length"
+
+            def describe_labeled_panels(self, images, prompt):
+                calls.append(1)
+                return json.dumps({"claims": [{"sentence": 1, "panels": ["p0001"]}]})
+
+        monkeypatch.setattr(M, "_matcher_provider", lambda cfg: Cut())
+        paths = {"root": tmp_path, "debug": tmp_path / "debug"}
+        M.collect_claims([(1, "He walks in.")], self._panels(3), paths, {})
+        M.save_claim_cache()
+        M.reset_claim_cache()
+        M.collect_claims([(1, "He walks in.")], self._panels(3), paths, {})
+        assert len(calls) == 2, "a truncated window was cached"

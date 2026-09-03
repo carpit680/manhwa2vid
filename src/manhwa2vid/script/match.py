@@ -24,7 +24,9 @@ longer hold, never to an unrelated image.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -114,6 +116,94 @@ def _matcher_provider(config: dict[str, Any]) -> Any:
     return _MATCHER_PROVIDER
 
 
+#: Content-addressed cache of matcher responses, keyed by everything that determines
+#: one call: the prompt, the panels shown, and the sentences offered. Two things depend
+#: on it.
+#:
+#: COST. The matcher is ~85% of a run's spend (203 calls / 3.3M prompt tokens measured on
+#: a 20-chapter project), and half of that is the second pass re-sending images pass 1
+#: already sent. A block-structure change re-runs every window even though almost all of
+#: them are identical.
+#:
+#: ITERATION. Everything after claim collection — filter_monotonic, callbacks, the coda,
+#: the planner, the timeline, every gate — is deterministic. With a warm cache a full
+#: re-run costs nothing, so a deterministic change can be validated for free. Four
+#: consecutive fixes to the block machinery were each "validated" by a paid re-run, and
+#: three of them were wrong; the runs were the reason the loop was slow enough to hide
+#: that.
+_CLAIM_CACHE: dict[str, list[list[Any]]] | None = None
+_CLAIM_CACHE_PATH: Path | None = None
+_CLAIM_CACHE_DIRTY = False
+_CACHE_HITS = 0
+_CACHE_MISSES = 0
+
+#: Set to refuse live calls: a cache miss returns no claims instead of spending money.
+#: This is what `tools/replay.py` uses to rebuild a shotlist offline.
+OFFLINE_ENV = "MANHWA2VID_MATCH_OFFLINE"
+
+
+def _cache_key(system: str, panel_ids: list[str], sentences: list[tuple[int, str]]) -> str:
+    """Everything that determines the response, and nothing that does not.
+
+    Sentence TEXT, not just number: a rewritten sentence keeping its number must miss.
+    Panel ids in given order, since the window's order is what the model sees.
+    """
+    payload = json.dumps(
+        {"system": system, "panels": panel_ids, "sentences": [[n, t] for n, t in sentences]},
+        ensure_ascii=False, sort_keys=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _load_claim_cache(paths: dict[str, Path]) -> dict[str, list[list[Any]]]:
+    global _CLAIM_CACHE, _CLAIM_CACHE_PATH
+    debug_dir = paths.get("debug")
+    if debug_dir is None:
+        # A caller with a partial paths dict (tests, one-off tools) still matches; it
+        # just gets no persistence. Never make caching a precondition for matching.
+        _CLAIM_CACHE_PATH = None
+        if _CLAIM_CACHE is None:
+            _CLAIM_CACHE = {}
+        return _CLAIM_CACHE
+    path = debug_dir / "matcher_cache.json"
+    if _CLAIM_CACHE is not None and _CLAIM_CACHE_PATH == path:
+        return _CLAIM_CACHE
+    _CLAIM_CACHE_PATH = path
+    try:
+        _CLAIM_CACHE = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        _CLAIM_CACHE = {}
+    return _CLAIM_CACHE
+
+
+def save_claim_cache() -> None:
+    """Persist the cache. Called after each block so a crashed or rate-limited run keeps
+    what it already paid for — the matcher had NO checkpoint, and an exhausted key after
+    600 calls lost all 600."""
+    global _CLAIM_CACHE_DIRTY
+    if not _CLAIM_CACHE_DIRTY or _CLAIM_CACHE_PATH is None or _CLAIM_CACHE is None:
+        return
+    _CLAIM_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _CLAIM_CACHE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(_CLAIM_CACHE, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(_CLAIM_CACHE_PATH)
+    _CLAIM_CACHE_DIRTY = False
+
+
+def cache_stats() -> tuple[int, int]:
+    """(hits, misses) since process start — what a replay run reports."""
+    return _CACHE_HITS, _CACHE_MISSES
+
+
+def reset_claim_cache() -> None:
+    """Tests and tools: forget the loaded cache so a different project can load its own."""
+    global _CLAIM_CACHE, _CLAIM_CACHE_PATH, _CLAIM_CACHE_DIRTY, _CACHE_HITS, _CACHE_MISSES
+    _CLAIM_CACHE = None
+    _CLAIM_CACHE_PATH = None
+    _CLAIM_CACHE_DIRTY = False
+    _CACHE_HITS = _CACHE_MISSES = 0
+
+
 def collect_claims(
     sentences: list[tuple[int, str]],
     panels: list[Panel],
@@ -138,9 +228,24 @@ def collect_claims(
 
     claims: list[tuple[int, str]] = []
     truncated_windows = 0
+    global _CLAIM_CACHE_DIRTY, _CACHE_HITS, _CACHE_MISSES
+    cache = _load_claim_cache(paths)
+    offline = bool(os.environ.get(OFFLINE_ENV))
     for batch in _window(panels, window_size):
         scoped = _window_sentences(sentences, batch, sentence_pages)
         numbered = "\n".join(f"[{n}] {t}" for n, t in scoped)
+        key = _cache_key(system or _SYSTEM, [p.id for p in batch], scoped)
+        if key in cache:
+            _CACHE_HITS += 1
+            for number, pid in cache[key]:
+                if number in valid_numbers and pid in valid_ids:
+                    claims.append((int(number), str(pid)))
+            continue
+        _CACHE_MISSES += 1
+        if offline:
+            # Refuse to spend. The caller reports the miss count; a replay that misses
+            # is a replay whose inputs changed, and saying so is the point.
+            continue
         raw = provider.describe_labeled_panels(
             [(f"[{p.id}]", paths["root"] / p.image_path) for p in batch],
             f"{system or _SYSTEM}\n\nSENTENCES:\n{numbered}",
@@ -167,6 +272,7 @@ def collect_claims(
         if not isinstance(data, dict):
             continue
         batch_ids = {p.id for p in batch}
+        window_claims: list[list[Any]] = []
         for claim in data.get("claims") or []:
             if not isinstance(claim, dict):
                 continue
@@ -177,6 +283,12 @@ def collect_claims(
             for pid in (claim.get("panels") or [])[:3]:
                 if number in valid_numbers and pid in batch_ids and pid in valid_ids:
                     claims.append((number, str(pid)))
+                    window_claims.append([number, str(pid)])
+        # Cache only a COMPLETE response. A window that hit the output cap returned
+        # partial claims; storing them would make the loss permanent and invisible.
+        if getattr(provider, "last_finish_reason", "") != "length":
+            cache[key] = window_claims
+            _CLAIM_CACHE_DIRTY = True
     if truncated_windows:
         console.print(
             f"[yellow]Matcher[/] — {truncated_windows} of "
@@ -603,7 +715,11 @@ def build_shotlist(
                 f"[dim]Match: block {block_idx} — second pass added "
                 f"{len(second)} claim(s), {len(kept)} kept[/]"
             )
+        # Checkpoint what this block paid for. The matcher had no resume at all: an
+        # exhausted key or a crash after 600 calls lost all 600.
+        save_claim_cache()
         claims_debug.append({
+            "sentence_texts": {str(n): t for n, t in block_sents},
             "block": block_idx,
             "sentences": [no for no, _ in block_sents],
             "panels": [p.id for p in panels],
@@ -705,6 +821,13 @@ def build_shotlist(
     save_json(paths["script_shotlist_json"], shotlist)
     if _MATCHER_PROVIDER is not None:
         console.print(f"[dim]{_MATCHER_PROVIDER.usage_line('Matcher')}[/]")
+    save_claim_cache()
+    hits, misses = cache_stats()
+    if hits or misses:
+        console.print(
+            f"[dim]Matcher cache: {hits} hit(s), {misses} miss(es) — "
+            f"{100 * hits / max(1, hits + misses):.0f}% reused[/]"
+        )
     matched = sum(1 for s in shotlist["sentences"] if s["panels"])
     console.print(
         f"[green]Shot list[/] — {matched}/{len(numbered)} sentence(s) matched, "
