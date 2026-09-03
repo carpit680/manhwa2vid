@@ -384,7 +384,20 @@ def clamp_to_time_blocks(
             if announces[i] and abs(starts[i] - cut) <= _ANNOUNCE_RADIUS
         ]
         if candidates:
-            crossing = min(candidates, key=lambda i: abs(starts[i] - cut))
+            # An announcing paragraph may only take a cut it does not sit BEHIND.
+            # _ANNOUNCE_RADIUS bounded how far an announcer could reach but not which
+            # DIRECTION, so a paragraph whose art is 40 panels before the cut could
+            # still claim it — and then the matcher offers it only panels from after the
+            # cut, none of which depict it. Measured on the first full-density
+            # 20-chapter run: beats 155 and 156 cover pages 124-131, were pulled into
+            # the block starting at page 132, took zero claims across 11 sentences, and
+            # 44 seconds of narration held on one image.
+            #
+            # The flashback case this rule exists for is unaffected: there the
+            # announcing paragraph opens ON the caption panel, so its start IS the cut.
+            ahead = [i for i in candidates if starts[i] >= cut]
+            pool = ahead or candidates
+            crossing = min(pool, key=lambda i: abs(starts[i] - cut))
         else:
             later = [i for i in range(after, len(para_texts)) if starts[i] >= cut]
             crossing = later[0] if later else len(para_texts)

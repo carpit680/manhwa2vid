@@ -638,3 +638,36 @@ def test_the_alignment_digest_survives_the_boundary_rewrite(tmp_path):
     del d["para_digest"]
     path.write_text(_json.dumps(d))
     assert _cached_alignment({"script_alignment_json": path}, paras) is None
+
+
+def test_an_announcer_cannot_claim_a_cut_it_sits_behind():
+    """_ANNOUNCE_RADIUS bounded how FAR an announcing paragraph could reach for a cut
+    but not in which DIRECTION, so a paragraph whose art is well before the cut could
+    still take it — and the matcher then offers that paragraph only panels from AFTER
+    the cut, none of which depict it.
+
+    Measured on the first full-density 20-chapter run: beats 155 and 156 cover pages
+    124-131, were pulled into the block starting at page 132, took zero claims across
+    11 sentences, and 44 seconds of narration held on a single image."""
+    from manhwa2vid.script.align import clamp_to_time_blocks
+
+    ordered = [f"p{pg:04d}_{k:02d}" for pg in range(1, 40) for k in range(1, 11)]
+    # Paragraph 2 announces a jump but its art is on page 12; paragraph 3's art is at
+    # the cut on page 20. The cut must go to paragraph 3.
+    panel_lists = [["p0002_01"], ["p0012_01"], ["p0020_01"], ["p0025_01"]]
+    texts = [
+        "He walks in.",
+        "Later, she drives him across the city.",
+        "Later, he steps into the armory.",
+        "He lifts the sword.",
+    ]
+    _, tb = clamp_to_time_blocks(panel_lists, texts, ordered, ["p0020_01"])
+
+    index = {pid: i for i, pid in enumerate(ordered)}
+    for para, want in enumerate(["p0002_01", "p0012_01", "p0020_01", "p0025_01"]):
+        lo, hi = tb.blocks[tb.block_of[para]]
+        assert lo <= index[want] < hi, (
+            f"paragraph {para + 1} (art at {want}) landed in block "
+            f"{tb.block_of[para]} = panels {lo}-{hi}"
+        )
+    assert tb.block_of == [0, 0, 1, 1], tb.block_of
