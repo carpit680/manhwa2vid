@@ -563,11 +563,25 @@ class TestClusteredCuts:
                 f"block {block} = panels {lo}-{hi}"
             )
 
-    def test_one_paragraph_may_cross_several_cuts(self):
+    def test_cuts_nobody_crosses_are_merged_away(self):
+        """Three markers on consecutive pages, one paragraph crossing all of them: the
+        blocks between them hold no narration, so their art could never reach the
+        screen — 92 contiguous panels (pages 84-94) on the 20-chapter probe, inside a
+        stretch one paragraph explicitly narrates. Only the last cut of the run
+        survives, merging the empty blocks into the preceding one."""
         starts = [2, 20]
         _, _, tb = self._blocks(starts, cut_pages=[10, 11, 12])
-        # The second paragraph is the crossing for all three, so it lands past them.
-        assert tb.block_of == [0, 3], tb.block_of
+        assert tb.block_of == [0, 1], tb.block_of
+        assert len(tb.blocks) == 2, tb.blocks
+        assert len(tb.boundary_ids) == 1, tb.boundary_ids
+
+    def test_a_boundary_survives_where_narration_changes_hands(self):
+        """The merge must only drop cuts nobody crosses. Two paragraphs either side of
+        two separated markers keep both boundaries."""
+        starts = [2, 8, 20]
+        _, _, tb = self._blocks(starts, cut_pages=[5, 15])
+        assert tb.block_of == [0, 1, 2], tb.block_of
+        assert len(tb.boundary_ids) == 2, tb.boundary_ids
 
     def test_a_single_cut_still_behaves_exactly_as_before(self):
         starts = [2, 3, 6, 7]

@@ -765,37 +765,6 @@ def plan_shots(
     return {beat: [(pid, sec) for pid, sec, _nums in shots] for beat, shots in result.items()}
 
 
-def _widen_over_empty_blocks(
-    bounds: tuple[int, int],
-    block: int,
-    block_bounds: dict[int, tuple[int, int]],
-    narrated: set[int],
-) -> tuple[int, int]:
-    """Extend a block's fill range across neighbouring blocks NOBODY NARRATES.
-
-    Block bounds exist so the fill cannot cross a printed time skip and play one era's
-    narration over the next era's art. That reasoning only holds for a block some
-    paragraph actually speaks for. When a chapter prints several dated headers on
-    consecutive pages — Frozen Player has six inside pages 84-94 — the cuts between them
-    produce blocks of 3 to 20 panels that no paragraph is about, and those panels can
-    then never reach the screen: 88 contiguous panels on the 20-chapter probe.
-
-    An empty block carries no competing narration, so walking into it cannot mismatch
-    era and words. Only EMPTY neighbours are absorbed, and the walk stops at the first
-    narrated block in each direction, so the guarantee that matters is untouched.
-    """
-    lo, hi = bounds
-    b = block - 1
-    while b in block_bounds and b not in narrated:
-        lo = min(lo, block_bounds[b][0])
-        b -= 1
-    b = block + 1
-    while b in block_bounds and b not in narrated:
-        hi = max(hi, block_bounds[b][1])
-        b += 1
-    return lo, hi
-
-
 def _bounds_for(block_bounds: dict[int, tuple[int, int]], block: int):
     """This block's panel range, or None when the shotlist carries no block metadata."""
     return block_bounds.get(block) if block_bounds else None
@@ -906,9 +875,6 @@ def plan_shots_with_sentences(
     block_of_number: dict[int, int] = {
         int(sent.get("number", 0)): int(sent.get("block", 0)) for sent in sentences
     }
-    #: Blocks some sentence actually speaks for. A block absent from this set has no
-    #: narration at all, so the fill may walk into it (see _widen_over_empty_blocks).
-    narrated: set[int] = set(block_of_number.values())
     by_beat: dict[int, list[dict[str, Any]]] = {}
     for sent in sentences:
         by_beat.setdefault(int(sent["beat_id"]), []).append(sent)
@@ -1027,7 +993,6 @@ def plan_shots_with_sentences(
                 rb = _bounds_for(block_bounds, run_block)
                 g_lo, g_hi = (lo + 1, hi)
                 if rb is not None:
-                    rb = _widen_over_empty_blocks(rb, run_block, block_bounds, narrated)
                     g_lo, g_hi = max(g_lo, rb[0]), min(g_hi, rb[1])
                 gap = [
                     pid

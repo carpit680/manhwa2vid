@@ -383,6 +383,27 @@ def clamp_to_time_blocks(
         # walks them from the neighbouring beat.
         after = crossing
 
+    # Drop a cut that no paragraph actually crosses. When several printed markers sit
+    # on consecutive pages, one paragraph is the crossing for all of them (above), and
+    # the blocks between those cuts end up with NO narration — their art can then never
+    # reach the screen. Measured: 92 contiguous panels, pages 84-94, on the 20-chapter
+    # probe, inside a stretch one paragraph explicitly narrates (the aligner gives it
+    # pages 81-105, a dated montage).
+    #
+    # Keeping only the LAST cut of each such run merges those empty blocks into the
+    # preceding one, so the paragraph that DOES narrate the montage can show it. The
+    # guarantee is intact: a boundary survives wherever narration actually changes
+    # hands, which is the only place it was ever doing work.
+    keep = [i for i in range(len(cuts)) if i == len(cuts) - 1 or crossings[i] != crossings[i + 1]]
+    cuts = [cuts[i] for i in keep]
+    crossings = [crossings[i] for i in keep]
+    boundary_ids = [
+        b for b in boundary_ids
+        if b in index_of and index_of[b] in set(cuts)
+    ]
+    edges = [0, *cuts, len(ordered_ids)]
+    blocks = [(edges[i], edges[i + 1]) for i in range(len(edges) - 1)]
+
     block_of: list[int] = []
     for i in range(len(para_texts)):
         block_of.append(sum(1 for c in crossings if c <= i))

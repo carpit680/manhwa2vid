@@ -1048,31 +1048,3 @@ def test_a_run_bracketed_by_one_panel_holds_instead_of_filling():
     shown = [pid for pid, _sec in plan[1]]
     assert shown.count("p5") == 1, f"the co-claim pair was split: {shown}"
     assert shown == ["p5", "p9"], shown
-
-
-def test_the_fill_walks_a_block_nobody_narrates():
-    """Block bounds stop the fill crossing a printed time skip, so one era's narration
-    never plays over the next era's art. That reasoning only holds for a block some
-    paragraph speaks for. Six dated headers on consecutive pages produce blocks of 3-20
-    panels that no paragraph is about, and their art could then never reach the screen —
-    88 contiguous panels on the 20-chapter probe. An empty block carries no competing
-    narration, so walking it cannot mismatch era and words."""
-    order = [f"p{i:02d}" for i in range(1, 13)]
-    shotlist = {
-        "sentences": [
-            {"number": 1, "beat_id": 1, "block": 0, "text": "a", "panels": ["p02"]},
-            {"number": 2, "beat_id": 1, "block": 0, "text": "b", "panels": []},
-            {"number": 3, "beat_id": 1, "block": 2, "text": "c", "panels": ["p11"]},
-        ],
-        # p05 and p09 cut the range into blocks 0 (p01-04), 1 (p05-08), 2 (p09-12).
-        # Block 1 is narrated by nobody.
-        "time_blocks": {"boundaries": ["p05", "p09"], "visits": [0, 2], "returns": []},
-    }
-    plan = plan_shots(
-        shotlist, {1: [{"seconds": 3.0}] * 3}, floor=1.0, panel_order=order, max_shot=0.0
-    )
-    assert plan is not None
-    shown = [pid for pid, _sec in plan[1]]
-    assert any(p in ("p05", "p06", "p07", "p08") for p in shown), (
-        f"the unnarrated block was never walked: {shown}"
-    )
