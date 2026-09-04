@@ -107,6 +107,13 @@ def _glossary_block(paths: dict[str, Path]) -> str:
     )
 
 
+#: A window returning less than this share of its asked-for length is retried once.
+#: 0.6, not 0.9: prose length varies honestly with how much a stretch of pages holds,
+#: and a window that comes back at 70% is doing its job. Below 60% it has skipped
+#: events — measured at ~30% on a 20-chapter run whose previous attempt, same prompt and
+#: same arithmetic, hit its budget.
+_WINDOW_SHORTFALL = 0.6
+
 #: How many printed lines to offer the writer per call. Enough to choose from, few
 #: enough that the list cannot become a script to read aloud.
 _QUOTABLE_LINES = 30
@@ -300,13 +307,43 @@ def write_freeform_script(
             parts.append(f"TARGET LENGTH: {per_window_lo}-{per_window_hi} words.")
         parts.append("The chapter pages follow in reading order. Read them all, then write.")
 
-        raw = provider.describe_labeled_panels_text(
-            [(f"[page {p.stem}]", p) for p in window],
-            system,
-            "\n\n".join(parts),
-            max_width=page_max_width(config),
-        )
-        written.append(strip_assistant_chatter(raw.strip()))
+        def _ask(extra: str = "") -> str:
+            body = "\n\n".join(parts + ([extra] if extra else []))
+            return strip_assistant_chatter(
+                provider.describe_labeled_panels_text(
+                    [(f"[page {p.stem}]", p) for p in window],
+                    system,
+                    body,
+                    max_width=page_max_width(config),
+                ).strip()
+            )
+
+        got = _ask()
+        # ENFORCE THE BUDGET. The same prompt and arithmetic produced 14,880 words on
+        # one 20-chapter run and 4,355 on the next — every window asked for 3,577+ and
+        # came back with about 1,100. Audio-locked narration means word count IS
+        # runtime, so a window that quietly under-delivers costs a third of the video
+        # and nothing downstream notices: the gates measure rates, which a short script
+        # satisfies perfectly.
+        #
+        # One retry, naming the shortfall. If it still falls short the run continues —
+        # the remainder split hands the deficit to later windows, and a hard failure
+        # here would throw away three good windows over one weak one.
+        wrote = len(got.split())
+        if wrote < per_window_lo * _WINDOW_SHORTFALL:
+            console.print(
+                f"[yellow]Writer[/] — window {i} returned {wrote} words of "
+                f"{per_window_lo} asked; retrying once"
+            )
+            retry = _ask(
+                f"That draft was far too short: {wrote} words where "
+                f"{per_window_lo}-{per_window_hi} were asked for. These pages hold more "
+                "than that. Cover the events you skipped, in the same voice, at the "
+                "asked-for length. Do not pad — narrate what is actually on the pages."
+            )
+            if len(retry.split()) > wrote:
+                got = retry
+        written.append(got)
 
     text = "\n\n".join(written).strip()
     console.print(f"[dim]{provider.usage_line('Writer')}[/]")

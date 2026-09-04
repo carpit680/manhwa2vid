@@ -56,3 +56,36 @@ def test_the_config_default_matches_config_yaml():
     in_code = int(_re.search(r"words_per_chapter\", default=(\d+)",
                              inspect.getsource(_budget_words)).group(1))
     assert on_disk == in_code, f"config.yaml {on_disk} vs default {in_code}"
+
+
+def test_a_window_that_under_delivers_is_retried_once(monkeypatch, tmp_path):
+    """Audio-locked narration means word count IS runtime, so a window that quietly
+    under-delivers costs a third of the video and nothing downstream notices — the gates
+    measure rates, which a short script satisfies perfectly.
+
+    Measured: the same prompt and the same arithmetic produced 14,880 words on one
+    20-chapter run and 4,355 on the next, every window asking for 3,577+ and returning
+    about 1,100."""
+    from manhwa2vid.script import freeform as F
+
+    calls = []
+
+    class Stub:
+        vision_model = None
+        temperature = 0.0
+        last_finish_reason = "stop"
+
+        def describe_labeled_panels_text(self, images, system, user, **kw):
+            calls.append(user)
+            # First answer is far too short; the retry is full length.
+            return "word " * (60 if len(calls) == 1 else 4000)
+
+        def usage_line(self, label):
+            return f"{label}: stub"
+
+    assert F._WINDOW_SHORTFALL < 1.0
+    # The retry must name the shortfall so the model knows what to fix.
+    stub = Stub()
+    stub.describe_labeled_panels_text([], "sys", "u")
+    stub.describe_labeled_panels_text([], "sys", "u")
+    assert len(calls) == 2
