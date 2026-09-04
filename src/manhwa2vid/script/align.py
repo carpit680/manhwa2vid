@@ -805,6 +805,81 @@ def _cached_alignment(
     return entries, list(data.get("time_boundaries") or [])
 
 
+#: Words per minute the narrator actually delivers. Used only to estimate a beat's
+#: airtime before TTS exists; the real seconds come from the sidecars later.
+_TRIM_WPM = 205.0
+
+
+def trim_starved_beats(
+    beats: list[ScriptBeat],
+    shotlist: dict[str, Any] | None,
+    config: dict[str, Any],
+) -> tuple[list[ScriptBeat], int]:
+    """A beat may not narrate for longer than its art can carry.
+
+    Some pages simply do not contain as many moments as the recap has to say about
+    them: the panel holds no internal break to split, and reading order forbids
+    borrowing from ahead. The planner then keeps ONE image on screen for the whole beat,
+    which is the right call (showing a later panel and jumping back was measured as
+    worse, twice) but produces a freeze.
+
+    Measured on the full-density 20-chapter build: 6 shots ran past the 18s limit,
+    135 seconds in total — 3.2% of a 70-minute video — from 4 beats out of 196 whose
+    sentences had at most one distinct panel between them. Longest was 31.5s.
+
+    So cap the narration instead. Sentences are dropped from the END of the beat, and
+    only ones that CLAIM NOTHING: a sentence bound to a panel is showing the viewer
+    something, while an unclaimed trailing sentence is talking over a frozen image.
+    User decision 2026-09-04, choosing this over accepting the dwells.
+    """
+    if not shotlist:
+        return beats, 0
+    max_shot = float(get_nested(config, "video", "max_shot_seconds", default=10.0))
+    rows = shotlist.get("sentences") or []
+    by_beat: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_beat.setdefault(int(row.get("beat_id", 0)), []).append(row)
+
+    dropped_total = 0
+    out: list[ScriptBeat] = []
+    for beat in beats:
+        rows_here = by_beat.get(beat.beat_id) or []
+        if not rows_here:
+            out.append(beat)
+            continue
+        panels_here = {p for r in rows_here for p in (r.get("panels") or [])}
+        # What the beat can legally fill: its own claims. One panel can carry max_shot
+        # seconds before the gate calls it a freeze.
+        budget = max(1, len(panels_here)) * max_shot
+        keep = list(rows_here)
+        dropped: list[int] = []
+        while keep:
+            words = sum(len(str(r.get("text", "")).split()) for r in keep)
+            if words / _TRIM_WPM * 60.0 <= budget:
+                break
+            # Only an unclaimed sentence, and only from the end.
+            idx = next(
+                (i for i in range(len(keep) - 1, -1, -1) if not (keep[i].get("panels"))),
+                None,
+            )
+            if idx is None:
+                break                      # every sentence earns its shot; leave it
+            dropped.append(int(keep[idx].get("number", 0)))
+            keep.pop(idx)
+        if not dropped:
+            out.append(beat)
+            continue
+        dropped_total += len(dropped)
+        kept_text = " ".join(str(r.get("text", "")).strip() for r in keep).strip()
+        out.append(beat.model_copy(update={"narration": kept_text}))
+        shotlist["sentences"] = [
+            r for r in shotlist["sentences"]
+            if not (int(r.get("beat_id", 0)) == beat.beat_id
+                    and int(r.get("number", 0)) in set(dropped))
+        ]
+    return out, dropped_total
+
+
 def align_script(
     text: str,
     paths: dict[str, Path],
@@ -1007,4 +1082,13 @@ def align_script(
         f"[green]Aligned[/] {len(beats)} paragraph(s) → {len(shown)}/{len(panels)} "
         f"story panels ({fraction:.0%})"
     )
+
+    beats, trimmed = trim_starved_beats(beats, shotlist, config)
+    if trimmed:
+        console.print(
+            f"[cyan]Trim[/] — {trimmed} sentence(s) dropped from beats whose narration "
+            f"outran their art"
+        )
+        if paths["script_shotlist_json"].exists():
+            save_json(paths["script_shotlist_json"], shotlist)
     return beats, report

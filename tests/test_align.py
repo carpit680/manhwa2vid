@@ -737,3 +737,58 @@ def test_a_straddling_paragraph_goes_with_the_side_it_mostly_depicts():
         f"block {tb.block_of[1]} = {lo}-{hi}"
     )
     assert tb.block_of == [0, 1, 1], tb.block_of
+
+
+class TestStarvedBeatTrim:
+    """A beat may not narrate for longer than its art can carry.
+
+    Some pages do not contain as many moments as the recap has to say about them: the
+    panel holds no internal break to split, and reading order forbids borrowing from
+    ahead. The planner then keeps ONE image on screen for the whole beat — the right
+    call, since showing a later panel and jumping back measured worse twice — but the
+    result is a freeze. Measured on the full-density 20-chapter build: 6 shots past the
+    18s limit, 135 seconds in all, from 4 beats of 196. Longest 31.5s."""
+
+    def _beat(self, beat_id, text):
+        from manhwa2vid.models import ScriptBeat
+
+        return ScriptBeat(beat_id=beat_id, panel_ids=[], narration=text)
+
+    def test_an_unclaimed_tail_is_dropped_to_fit_one_panel(self):
+        from manhwa2vid.script.align import trim_starved_beats
+
+        long_tail = " ".join(f"Filler sentence number {i}." for i in range(1, 20))
+        beats = [self._beat(1, "He steps inside. " + long_tail)]
+        rows = [{"number": 1, "beat_id": 1, "text": "He steps inside.",
+                 "panels": ["p01"]}]
+        rows += [{"number": i, "beat_id": 1, "text": f"Filler sentence number {i}.",
+                  "panels": []} for i in range(2, 21)]
+        shotlist = {"sentences": rows}
+        out, dropped = trim_starved_beats(beats, shotlist, {"video": {"max_shot_seconds": 10.0}})
+        assert dropped > 0, "a beat far past its budget was not trimmed"
+        assert "He steps inside." in out[0].narration, "the CLAIMED sentence was dropped"
+        assert len(shotlist["sentences"]) == len(rows) - dropped
+
+    def test_a_sentence_that_claims_a_panel_is_never_dropped(self):
+        """A bound sentence is showing the viewer something; an unclaimed trailing one
+        is talking over a frozen image."""
+        from manhwa2vid.script.align import trim_starved_beats
+
+        rows = [{"number": i, "beat_id": 1, "text": f"Sentence {i} here now.",
+                 "panels": [f"p{i:02d}"]} for i in range(1, 12)]
+        beats = [self._beat(1, " ".join(r["text"] for r in rows))]
+        shotlist = {"sentences": list(rows)}
+        out, dropped = trim_starved_beats(beats, shotlist, {"video": {"max_shot_seconds": 10.0}})
+        assert dropped == 0, "claimed sentences were dropped"
+        assert len(shotlist["sentences"]) == len(rows)
+
+    def test_a_beat_within_its_budget_is_untouched(self):
+        from manhwa2vid.script.align import trim_starved_beats
+
+        rows = [{"number": 1, "beat_id": 1, "text": "He steps inside.", "panels": ["p01"]},
+                {"number": 2, "beat_id": 1, "text": "He looks around.", "panels": []}]
+        beats = [self._beat(1, "He steps inside. He looks around.")]
+        out, dropped = trim_starved_beats(beats, {"sentences": rows},
+                                          {"video": {"max_shot_seconds": 10.0}})
+        assert dropped == 0
+        assert out[0].narration == beats[0].narration
