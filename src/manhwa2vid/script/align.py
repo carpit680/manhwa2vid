@@ -365,10 +365,12 @@ def clamp_to_time_blocks(
     index_of = {pid: i for i, pid in enumerate(ordered_ids)}
     starts = []
     ends = []
+    positions: list[list[int]] = []
     for pids in panel_lists:
-        positions = [index_of[q] for q in pids if q in index_of]
-        starts.append(min(positions) if positions else 0)
-        ends.append(max(positions) if positions else 0)
+        here = [index_of[q] for q in pids if q in index_of]
+        positions.append(here)
+        starts.append(min(here) if here else 0)
+        ends.append(max(here) if here else 0)
     announces = [bool(_TIME_JUMP_RE.search(t)) for t in para_texts]
 
     # An announcing paragraph may claim a cut only if it is actually NEAR it. The rule
@@ -430,13 +432,10 @@ def clamp_to_time_blocks(
             if qualified:
                 crossing = min(qualified, key=lambda i: abs(starts[i] - cut))
             else:
-                # No announcer has a real claim — position decides, as when nothing
-                # announces at all.
-                later = [i for i in range(after, len(para_texts)) if starts[i] >= cut]
-                crossing = later[0] if later else len(para_texts)
+                # No announcer has a real claim — position decides.
+                crossing = _first_mostly_after(after, cut, positions, len(para_texts))
         else:
-            later = [i for i in range(after, len(para_texts)) if starts[i] >= cut]
-            crossing = later[0] if later else len(para_texts)
+            crossing = _first_mostly_after(after, cut, positions, len(para_texts))
         crossings.append(crossing)
         # A paragraph may cross SEVERAL cuts. `after = crossing + 1` forced one distinct
         # paragraph per cut, which is invisible at one or two printed markers and wrong
@@ -753,6 +752,30 @@ def _build_shotlist_for(
 
 #: Shared with the matcher: one switch turns off every paid call in a replay.
 _OFFLINE_ENV = "MANHWA2VID_MATCH_OFFLINE"
+
+
+def _first_mostly_after(
+    after: int, cut: int, positions: list[list[int]], n: int
+) -> int:
+    """The first paragraph from `after` whose art lies MOSTLY at or beyond the cut.
+
+    Starting position alone put a paragraph in the block before most of its own panels.
+    Measured on the full-density 20-chapter build: beat 117 covers pages 84-85 with 5
+    panels before the cut at p0084_07 and 12 after, but it began 2 panels early, so it
+    stayed in the earlier block — where its only reachable art was one panel. Its seven
+    sentences then held that image for 28.3 seconds, failing shot-max-duration, while
+    six free panels sat just past the boundary in the next block.
+
+    Majority, not first-touch: a paragraph genuinely straddling a printed skip belongs
+    with the side it mostly depicts.
+    """
+    for i in range(after, n):
+        here = positions[i] if i < len(positions) else []
+        if not here:
+            continue
+        if sum(1 for q in here if q >= cut) * 2 > len(here):
+            return i
+    return n
 
 
 def _para_digest(para_texts: list[str]) -> str:

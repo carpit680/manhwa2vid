@@ -707,3 +707,33 @@ def test_an_announcer_two_paragraphs_back_does_not_take_the_cut():
             f"{tb.block_of[para]} = panels {lo}-{hi}"
         )
     assert tb.block_of == [0, 0, 0, 1], tb.block_of
+
+
+def test_a_straddling_paragraph_goes_with_the_side_it_mostly_depicts():
+    """Starting position alone put a paragraph in the block before most of its own art.
+
+    Measured on the full-density 20-chapter build: beat 117 covers pages 84-85 with 5
+    panels before the cut at p0084_07 and 12 after, but because it BEGAN two panels
+    early it stayed in the earlier block, where its only reachable art was one panel.
+    Its seven sentences held that image for 28.3 seconds — a blocking
+    shot-max-duration failure — while six free panels sat just past the boundary."""
+    from manhwa2vid.script.align import clamp_to_time_blocks
+
+    ordered = [f"p{pg:04d}_{k:02d}" for pg in range(1, 20) for k in range(1, 11)]
+    # Paragraph 2 spans the cut: 2 panels before, 6 after. It belongs after.
+    panel_lists = [
+        ["p0002_01"],
+        [f"p0005_{k:02d}" for k in (7, 8)] + [f"p0006_{k:02d}" for k in range(1, 7)],
+        ["p0009_01"],
+    ]
+    texts = ["He walks in.", "She crosses the hall.", "He waits outside."]
+    _, tb = clamp_to_time_blocks(panel_lists, texts, ordered, ["p0005_09"])
+
+    index = {pid: i for i, pid in enumerate(ordered)}
+    lo, hi = tb.blocks[tb.block_of[1]]
+    kept = [q for q in (index[p] for p in panel_lists[1]) if lo <= q < hi]
+    assert len(kept) >= 6, (
+        f"the straddling paragraph kept only {len(kept)} of its 8 panels; "
+        f"block {tb.block_of[1]} = {lo}-{hi}"
+    )
+    assert tb.block_of == [0, 1, 1], tb.block_of
