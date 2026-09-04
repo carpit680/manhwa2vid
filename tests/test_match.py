@@ -1311,3 +1311,27 @@ class TestClaimOrderInvariant:
         order = [f"p{i:04d}" for i in range(1, 40)]
         claims = [(1, "p0010"), (2, "p0008"), (3, "p0012")]
         assert len(enforce_claim_order(claims, order)) == 3
+
+
+def test_an_unclaimed_panel_between_two_showings_is_folded_away():
+    """A,B,A: each step is individually legal — the backward hop is inside SCENE_RADIUS,
+    so the rewind sweep leaves it alone — but together they show one image, cut away,
+    and cut straight back, which no-repeated-panels FAILS.
+
+    Measured: sentences 230, 231 and 232 legitimately co-claim p0025_02 (a 3,160px
+    panel) across a beat boundary, and a 115x284 fill fragment landed between them, so
+    it played at 802.1s and again at 808.3s. Re-pointing the filler is lossless — it is
+    unclaimed, so no sentence loses art it earned."""
+    order = [f"p{i:02d}" for i in range(1, 13)]
+    sl = {"sentences": [
+        {"number": 1, "beat_id": 1, "block": 0, "text": "a", "panels": ["p05"]},
+        {"number": 2, "beat_id": 2, "block": 0, "text": "b", "panels": ["p05"]},
+        {"number": 3, "beat_id": 2, "block": 0, "text": "c", "panels": ["p09"]},
+    ]}
+    segs = {1: [{"seconds": 3.0}], 2: [{"seconds": 3.0}, {"seconds": 3.0}]}
+    plan = plan_shots(sl, segs, floor=1.0, panel_order=order, max_shot=0.0)
+    assert plan is not None
+    shown = [pid for b in sorted(plan) for pid, _s in plan[b]]
+    # No panel may appear, disappear and immediately reappear.
+    for i in range(1, len(shown) - 1):
+        assert not (shown[i - 1] == shown[i + 1] != shown[i]), shown

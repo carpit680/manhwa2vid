@@ -1705,4 +1705,31 @@ def plan_shots_with_sentences(
                 prev_blk, prev_p = blk, pid_
             plan[b] = out_rows
 
+        # A,B,A — an UNCLAIMED row wedged between two showings of the same panel.
+        # Each step is individually legal (the backward hop is inside SCENE_RADIUS, so
+        # the rewind sweep above leaves it alone) but together they show one image,
+        # cut away, and cut straight back, which no-repeated-panels FAILS.
+        #
+        # Measured on the full-density 20-chapter timeline: sentences 230, 231 and 232
+        # legitimately co-claim p0025_02 — a 3,160px panel — across a beat boundary,
+        # and a 115x284 fill fragment (p0024_06) landed between them, so the panel
+        # played at 802.1s and again at 808.3s.
+        #
+        # Re-pointing B onto A is safe and lossless: B is unclaimed, so no sentence
+        # loses the art it earned, and the three runs merge into the single shot the
+        # co-claim intended. Walks the whole video in one pass, because the pair
+        # straddles a beat boundary and per-beat repair cannot see it.
+        flat_rows: list[tuple[int, int, str]] = []
+        for b in sorted(plan):
+            for i, (pid_, _sec, _nums) in enumerate(plan[b]):
+                flat_rows.append((b, i, pid_))
+        for k in range(1, len(flat_rows) - 1):
+            (_pb, _pi, before), (bb, bi, mid), (_nb, _ni, after) = (
+                flat_rows[k - 1], flat_rows[k], flat_rows[k + 1]
+            )
+            if before == after and mid != before and mid not in claimed_pids:
+                pid_, sec_, nums_ = plan[bb][bi]
+                plan[bb][bi] = (before, sec_, nums_)
+                flat_rows[k] = (bb, bi, before)
+
     return plan or None
