@@ -840,6 +840,34 @@ def trim_starved_beats(
     for row in rows:
         by_beat.setdefault(int(row.get("beat_id", 0)), []).append(row)
 
+    # Beats FUSE when one ends on the panel the next begins with — to the viewer that is
+    # one shot, and the gate measures it as one. Budgeting per beat therefore passed a
+    # run of three beats sharing p0015_01a that together held 19.7s against an 18s
+    # limit, each beat individually inside its own allowance. Group them first.
+    order = [b.beat_id for b in beats]
+    first_panel: dict[int, str | None] = {}
+    last_panel: dict[int, str | None] = {}
+    for bid in order:
+        claims = [p for r in (by_beat.get(bid) or []) for p in (r.get("panels") or [])]
+        first_panel[bid] = claims[0] if claims else None
+        last_panel[bid] = claims[-1] if claims else None
+    group_of: dict[int, int] = {}
+    gid = 0
+    for i, bid in enumerate(order):
+        if i and (
+            last_panel[order[i - 1]] is not None
+            and last_panel[order[i - 1]] == first_panel[bid]
+        ):
+            pass                      # fuses with the previous beat: same group
+        elif i and not (by_beat.get(bid) or []):
+            pass                      # no claims at all: it will hold the previous shot
+        else:
+            gid += 1
+        group_of[bid] = gid
+    group_rows: dict[int, list[dict[str, Any]]] = {}
+    for bid in order:
+        group_rows.setdefault(group_of[bid], []).extend(by_beat.get(bid) or [])
+
     dropped_total = 0
     out: list[ScriptBeat] = []
     for beat in beats:
@@ -847,10 +875,15 @@ def trim_starved_beats(
         if not rows_here:
             out.append(beat)
             continue
-        panels_here = {p for r in rows_here for p in (r.get("panels") or [])}
-        # What the beat can legally fill: its own claims. One panel can carry max_shot
-        # seconds before the gate calls it a freeze.
-        budget = max(1, len(panels_here)) * max_shot
+        # Budget belongs to the fused GROUP, since that is the run the gate measures.
+        siblings = group_rows.get(group_of[beat.beat_id], rows_here)
+        panels_here = {p for r in siblings for p in (r.get("panels") or [])}
+        other_words = sum(
+            len(str(r.get("text", "")).split())
+            for r in siblings
+            if int(r.get("beat_id", 0)) != beat.beat_id
+        )
+        budget = max(1, len(panels_here)) * max_shot - other_words / _TRIM_WPM * 60.0
         keep = list(rows_here)
         dropped: list[int] = []
         while keep:

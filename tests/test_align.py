@@ -792,3 +792,33 @@ class TestStarvedBeatTrim:
                                           {"video": {"max_shot_seconds": 10.0}})
         assert dropped == 0
         assert out[0].narration == beats[0].narration
+
+
+def test_the_trim_budgets_the_fused_run_not_the_single_beat():
+    """Beats FUSE when one ends on the panel the next begins with — to the viewer that
+    is one shot, and the gate measures it as one. Budgeting per beat let three beats
+    sharing p0015_01a hold 19.7s together against an 18s limit while each sat inside its
+    own allowance."""
+    from manhwa2vid.models import ScriptBeat
+    from manhwa2vid.script.align import trim_starved_beats
+
+    def rows(beat_id, start, n_free):
+        out = [{"number": start, "beat_id": beat_id, "text": "He waits there now.",
+                "panels": ["p01"]}]
+        out += [{"number": start + i, "beat_id": beat_id,
+                 "text": f"Filler line number {i} here.", "panels": []}
+                for i in range(1, n_free + 1)]
+        return out
+
+    # Three beats, all claiming the SAME panel at their edges: one run to the viewer.
+    all_rows = rows(1, 1, 6) + rows(2, 20, 6) + rows(3, 40, 6)
+    beats = [
+        ScriptBeat(beat_id=b, panel_ids=[],
+                   narration=" ".join(r["text"] for r in all_rows if r["beat_id"] == b))
+        for b in (1, 2, 3)
+    ]
+    shotlist = {"sentences": list(all_rows)}
+    _out, dropped = trim_starved_beats(
+        beats, shotlist, {"video": {"max_shot_seconds": 10.0}}
+    )
+    assert dropped > 0, "a fused run far over budget was not trimmed"
