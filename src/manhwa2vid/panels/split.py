@@ -690,3 +690,112 @@ def split_panels(
         f"({low_count} low-confidence pages — see debug/)"
     )
     return all_panels
+
+
+#: A panel taller than this is not one moment — it is a strip the reader scrolls
+#: through, and the recap needs its parts separately. Measured on Frozen Player
+#: ch1-20: page 15 split into a 5,313px panel plus four small ones, so beats 20-22
+#: (sixteen sentences) had one usable image between two claims and the video froze on
+#: it for 28.9 seconds. 190 of 1,736 story panels exceed 2,000px.
+_TALL_PANEL_HEIGHT = 2200
+
+#: Never cut a piece smaller than this: below it the crop stops being a shot.
+_MIN_PIECE_HEIGHT = 600
+
+
+def _quiet_rows(gray: "np.ndarray", band: int = 12) -> list[int]:
+    """Rows where the art goes quiet — candidate cuts inside a tall panel.
+
+    Same signal the gutter splitter uses (near-white rows), but applied WITHIN a panel
+    the gutter pass already decided not to break, so the threshold is looser: a webtoon
+    scrolls through soft transitions that are not full gutters.
+    """
+    import numpy as np
+
+    ink = (gray < 245).mean(axis=1)
+    quiet = ink < 0.02
+    rows: list[int] = []
+    run_start = None
+    for y, is_quiet in enumerate(quiet):
+        if is_quiet and run_start is None:
+            run_start = y
+        elif not is_quiet and run_start is not None:
+            if y - run_start >= band:
+                rows.append((run_start + y) // 2)
+            run_start = None
+    if run_start is not None and len(quiet) - run_start >= band:
+        rows.append((run_start + len(quiet)) // 2)
+    return rows
+
+
+def subdivide_tall_panels(
+    panels: list[Panel], root: Path, config: dict[str, Any] | None = None
+) -> list[Panel]:
+    """Cut panels taller than `_TALL_PANEL_HEIGHT` into shot-sized pieces.
+
+    A webtoon page is one tall strip and the gutter pass sometimes finds no break for
+    thousands of pixels, so a single "panel" ends up holding a whole conversation. The
+    recap then has one image for many sentences: measured on the full-density
+    20-chapter build, eight sentences shared one panel and the video froze for 28.9s,
+    which fails shot-max-duration.
+
+    Cuts fall on quiet rows where the art already breaks, never mid-figure, and a piece
+    is never smaller than `_MIN_PIECE_HEIGHT`. A panel with no quiet row is left alone —
+    a genuinely continuous image must not be sliced arbitrarily.
+
+    Children keep the parent's id with a letter suffix, so a scene card written for the
+    parent still describes them and no new vision pass is needed.
+    """
+    import cv2
+    import numpy as np  # noqa: F401  (used by _quiet_rows)
+
+    out: list[Panel] = []
+    for panel in panels:
+        path = root / panel.image_path
+        if panel.bbox.height <= _TALL_PANEL_HEIGHT or not path.exists():
+            out.append(panel)
+            continue
+        img = cv2.imread(str(path))
+        if img is None:
+            out.append(panel)
+            continue
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        cuts = [
+            y for y in _quiet_rows(gray)
+            if _MIN_PIECE_HEIGHT <= y <= gray.shape[0] - _MIN_PIECE_HEIGHT
+        ]
+        if not cuts:
+            out.append(panel)
+            continue
+        # Thin the cuts so no piece is tiny, keeping the ones that divide most evenly.
+        kept: list[int] = []
+        last = 0
+        for y in cuts:
+            if y - last >= _MIN_PIECE_HEIGHT:
+                kept.append(y)
+                last = y
+        if not kept or gray.shape[0] - kept[-1] < _MIN_PIECE_HEIGHT:
+            kept = kept[:-1]
+        if not kept:
+            out.append(panel)
+            continue
+
+        edges = [0, *kept, gray.shape[0]]
+        for i in range(len(edges) - 1):
+            top, bot = edges[i], edges[i + 1]
+            child_id = f"{panel.id}{chr(ord('a') + i)}"
+            rel = Path(panel.image_path).with_name(f"{child_id}.png")
+            cv2.imwrite(str(root / rel), img[top:bot])
+            out.append(panel.model_copy(update={
+                "id": child_id,
+                "image_path": str(rel),
+                "bbox": PanelBBox(
+                    x=panel.bbox.x, y=panel.bbox.y + top,
+                    width=panel.bbox.width, height=bot - top,
+                ),
+                # Stats describe the CHILD now; leave them unset so the filter
+                # backfills them from the new image rather than trusting the parent's.
+                "ink_ratio": None, "dark_ratio": None, "content_area_ratio": None,
+                "split_method": "subdivided",
+            }))
+    return out

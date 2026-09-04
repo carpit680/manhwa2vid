@@ -552,3 +552,63 @@ class TestTallPanelsAreNotSlivers:
                 continue
             panels = [Panel(**p) for p in json.loads(f.read_text())]
             assert sum(1 for p in panels if is_blank_panel(p, {})) == expected, name
+
+
+class TestTallPanelSubdivision:
+    """A webtoon page is one tall strip and the gutter pass sometimes finds no break for
+    thousands of pixels, so a single 'panel' ends up holding a whole conversation.
+
+    Measured on Frozen Player ch1-20: page 15 split into a 5,313px panel plus four small
+    ones, so beats 20-22 (sixteen sentences) had one usable image between two claims and
+    the video froze on it for 28.9 seconds, failing shot-max-duration. 147 of 1,833
+    panels exceed 2,200px."""
+
+    def _panel(self, height):
+        from manhwa2vid.models import Panel, PanelBBox
+
+        return Panel(
+            id="p0015_01", page_num=15,
+            bbox=PanelBBox(x=0, y=100, width=800, height=height),
+            image_path="panels/p0015_01.png",
+        )
+
+    def test_a_short_panel_is_untouched(self, tmp_path):
+        from manhwa2vid.panels.split import subdivide_tall_panels
+
+        p = self._panel(900)
+        assert subdivide_tall_panels([p], tmp_path) == [p]
+
+    def test_a_continuous_tall_image_is_not_sliced_arbitrarily(self, tmp_path):
+        """No quiet row means no safe cut. Slicing anyway would cut through a figure."""
+        import cv2
+        import numpy as np
+
+        from manhwa2vid.panels.split import subdivide_tall_panels
+
+        (tmp_path / "panels").mkdir()
+        img = np.full((3000, 800, 3), 120, dtype=np.uint8)   # uniformly inked
+        cv2.imwrite(str(tmp_path / "panels" / "p0015_01.png"), img)
+        out = subdivide_tall_panels([self._panel(3000)], tmp_path)
+        assert len(out) == 1 and out[0].id == "p0015_01"
+
+    def test_cuts_land_on_quiet_rows_and_children_tile_the_parent(self, tmp_path):
+        import cv2
+        import numpy as np
+
+        from manhwa2vid.panels.split import subdivide_tall_panels
+
+        (tmp_path / "panels").mkdir()
+        img = np.full((3000, 800, 3), 30, dtype=np.uint8)
+        img[900:960] = 255       # a white break
+        img[1900:1960] = 255     # and another
+        cv2.imwrite(str(tmp_path / "panels" / "p0015_01.png"), img)
+        out = subdivide_tall_panels([self._panel(3000)], tmp_path)
+
+        assert len(out) == 3, [p.id for p in out]
+        assert [p.id for p in out] == ["p0015_01a", "p0015_01b", "p0015_01c"]
+        # Children tile the parent exactly: no pixel lost, none shown twice.
+        assert sum(p.bbox.height for p in out) == 3000
+        assert out[0].bbox.y == 100, "children keep page coordinates"
+        assert out[1].bbox.y == out[0].bbox.y + out[0].bbox.height
+        # Stats are cleared so the filter measures the CHILD, not the parent.
+        assert all(p.ink_ratio is None for p in out)
