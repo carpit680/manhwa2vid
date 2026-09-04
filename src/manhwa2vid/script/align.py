@@ -886,14 +886,36 @@ def trim_starved_narration(
         keep_by_beat.setdefault(int(r.get("beat_id", 0)), []).append(
             str(r.get("text", "")).strip()
         )
-    paras = paragraphs(text)
+    # The SAME paragraph list align_script beats are numbered against. Using the raw
+    # paragraphs() here mapped beat 40's sentences onto paragraph 40 of a shorter list,
+    # rejoining content into the wrong places and quietly losing 5,047 words of a
+    # 16,506-word script — more than four times what the trim actually dropped.
+    max_words = int(get_nested(config, "align", "max_beat_words", default=90))
+    paras = split_long_paragraphs(paragraphs(text), max_words)
     rebuilt: list[str] = []
     for i, para in enumerate(paras, start=1):
         kept = keep_by_beat.get(i)
         # Untouched paragraph, or one the trim would empty: keep the original. A beat
         # with no narration fails beat conservation.
         rebuilt.append(" ".join(kept) if kept else para)
-    return "\n\n".join(rebuilt), len(drop)
+    out = "\n\n".join(rebuilt)
+
+    # A trim may only remove what it says it removed. Anything else is a mapping bug,
+    # and returning the original is always safe — the run continues with a long dwell
+    # that QA reports, rather than a script silently missing a third of its narration.
+    dropped_words = sum(
+        len(str(r.get("text", "")).split())
+        for r in rows
+        if (int(r.get("beat_id", 0)), int(r.get("number", 0))) in drop
+    )
+    lost = len(text.split()) - len(out.split())
+    if lost > dropped_words * 1.2 + 20:
+        console.print(
+            f"[yellow]Trim[/] — rebuilding the script would lose {lost} words against "
+            f"{dropped_words} dropped; leaving the narration untouched"
+        )
+        return text, 0
+    return out, len(drop)
 
 
 def align_script(

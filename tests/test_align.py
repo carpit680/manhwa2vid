@@ -786,3 +786,32 @@ class TestStarvedNarrationTrim:
             text, {"sentences": rows}, {"video": {"max_shot_seconds": 10.0}}
         )
         assert out.strip(), "the paragraph was emptied"
+
+
+def test_the_trim_removes_only_what_it_reports():
+    """A trim may only remove what it says it removed.
+
+    The first version numbered paragraphs against paragraphs() while beats are numbered
+    against split_long_paragraphs(), so beat 40's sentences were rejoined into
+    paragraph 40 of a shorter list. It reported 116 sentences dropped and silently lost
+    5,047 words of a 16,506-word script — more than four times what it claimed."""
+    from manhwa2vid.script.align import trim_starved_narration
+
+    # A paragraph long enough that split_long_paragraphs breaks it, so the two
+    # paragraph lists differ in length — the exact condition that hid the bug.
+    long_para = " ".join(f"Sentence number {i} runs on here." for i in range(1, 30))
+    text = f"{long_para}\n\nA short second paragraph stands alone."
+    rows = [{"number": 1, "beat_id": 1, "text": "Sentence number 1 runs on here.",
+             "panels": ["p01"]}]
+    rows += [{"number": i, "beat_id": 1, "text": f"Sentence number {i} runs on here.",
+              "panels": []} for i in range(2, 30)]
+
+    out, dropped = trim_starved_narration(
+        text, {"sentences": rows}, {"video": {"max_shot_seconds": 10.0}}
+    )
+    dropped_words = dropped * 6           # each fixture sentence is 6 words
+    lost = len(text.split()) - len(out.split())
+    assert lost <= dropped_words * 1.2 + 20, (
+        f"lost {lost} words for {dropped} sentences dropped"
+    )
+    assert "A short second paragraph stands alone." in out, "another paragraph was eaten"
