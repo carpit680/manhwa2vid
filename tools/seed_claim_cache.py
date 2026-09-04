@@ -62,7 +62,7 @@ def main() -> int:
         for start in range(0, len(panel_ids), window):
             batch = panel_ids[start:start + window]
             scoped = M._window_sentences(sents, _fake_panels(batch), None)
-            key = M._cache_key(M._SYSTEM, batch, scoped)
+            key = M._cache_key(M._SYSTEM, batch, scoped, M._MATCH_PANEL_WIDTH)
             claims: list[list] = []
             for pid in batch:
                 claims.extend(by_panel.get(pid, []))

@@ -1350,3 +1350,19 @@ def test_the_matcher_sends_panels_by_width_not_longest_side():
     src = inspect.getsource(M.collect_claims)
     assert "max_width=_MATCH_PANEL_WIDTH" in src, "panels still sent by longest side"
     assert M._MATCH_PANEL_WIDTH >= 300, M._MATCH_PANEL_WIDTH
+
+
+def test_the_claim_cache_key_includes_image_width():
+    """The images are what the model looks at, so the encoding must be part of the key.
+
+    Leaving it out was a real failure: raising the matcher's panel width from a
+    longest-side 512 cap (which made tall panels 205-320px ribbons) to a 320px WIDTH cap
+    changed every image sent, and the cache answered 202 of 202 windows from claims made
+    on the old slivers — reporting '100% reused' for a run that should have re-asked
+    everything."""
+    from manhwa2vid.script.match import _cache_key
+
+    a = _cache_key("sys", ["p01", "p02"], [(1, "He walks in.")], 320)
+    b = _cache_key("sys", ["p01", "p02"], [(1, "He walks in.")], 512)
+    assert a != b, "a resolution change did not invalidate the cache"
+    assert a == _cache_key("sys", ["p01", "p02"], [(1, "He walks in.")], 320)

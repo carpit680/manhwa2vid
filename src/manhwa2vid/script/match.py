@@ -144,14 +144,31 @@ _CACHE_MISSES = 0
 OFFLINE_ENV = "MANHWA2VID_MATCH_OFFLINE"
 
 
-def _cache_key(system: str, panel_ids: list[str], sentences: list[tuple[int, str]]) -> str:
+def _cache_key(
+    system: str,
+    panel_ids: list[str],
+    sentences: list[tuple[int, str]],
+    width: int,
+) -> str:
     """Everything that determines the response, and nothing that does not.
 
     Sentence TEXT, not just number: a rewritten sentence keeping its number must miss.
     Panel ids in given order, since the window's order is what the model sees.
+
+    WIDTH, because the images are what the model actually looks at. Leaving it out was a
+    real failure, not a hypothetical: raising the matcher's panel width from a
+    longest-side 512 (which made tall panels 205-320px ribbons) to a 320px WIDTH cap
+    changed every image sent, and the cache answered 202 of 202 windows from claims made
+    on the old slivers — reporting "100% reused" for a run that should have re-asked
+    everything.
     """
     payload = json.dumps(
-        {"system": system, "panels": panel_ids, "sentences": [[n, t] for n, t in sentences]},
+        {
+            "system": system,
+            "panels": panel_ids,
+            "sentences": [[n, t] for n, t in sentences],
+            "width": width,
+        },
         ensure_ascii=False, sort_keys=False,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -236,7 +253,9 @@ def collect_claims(
     for batch in _window(panels, window_size):
         scoped = _window_sentences(sentences, batch, sentence_pages)
         numbered = "\n".join(f"[{n}] {t}" for n, t in scoped)
-        key = _cache_key(system or _SYSTEM, [p.id for p in batch], scoped)
+        key = _cache_key(
+            system or _SYSTEM, [p.id for p in batch], scoped, _MATCH_PANEL_WIDTH
+        )
         if key in cache:
             _CACHE_HITS += 1
             for number, pid in cache[key]:
