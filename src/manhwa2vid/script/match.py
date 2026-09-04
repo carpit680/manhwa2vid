@@ -889,8 +889,26 @@ def build_shotlist(
     # whole video, still fails it. The module docstring warns that align's ordered_ids,
     # the engine's fill_order and the gate's list mean three different things; this is
     # that trap.
-    global_order = [pid for panels_here in blocks_panels for pid in
-                    [p.id for p in panels_here]]
+    # THE ORDER THE GATE WILL USE, not the one this stage happens to hold.
+    # blocks_panels is align's ordered_ids, which drops content-free panels the gate's
+    # list keeps, so it is DENSER: measured on the 20-chapter timeline, p0190_04 sits at
+    # 1354 here and 1426 there, a 72-panel offset by that point. A ten-panel rewind
+    # therefore measured as three, passed this guard, and failed reading-order.
+    #
+    # panels.story.json is the canonical story set both sides derive from, so measure
+    # against it and fall back to the local concatenation when it is unavailable.
+    gate_order = [pid for panels_here in blocks_panels for pid in
+                  [p.id for p in panels_here]]
+    try:
+        story_ids = [
+            p["id"] for p in json.loads(
+                paths["panels_story_json"].read_text(encoding="utf-8")
+            )
+        ]
+        if story_ids:
+            gate_order = story_ids
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
     ordered_claims: list[tuple[int, str]] = []
     by_block: dict[int, list[tuple[int, str]]] = {}
     for number, pid in all_claims:
@@ -898,7 +916,7 @@ def build_shotlist(
         by_block.setdefault(blk, []).append((number, pid))
     for blk in sorted(by_block):
         # Per block still, because a printed time skip legitimately resets the walk.
-        ordered_claims.extend(enforce_claim_order(by_block[blk], global_order))
+        ordered_claims.extend(enforce_claim_order(by_block[blk], gate_order))
 
     claims_by_number: dict[int, list[str]] = {}
     for number, pid in ordered_claims:
