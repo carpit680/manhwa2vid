@@ -251,6 +251,7 @@ def collect_claims(
         raw = provider.describe_labeled_panels(
             [(f"[{p.id}]", paths["root"] / p.image_path) for p in batch],
             f"{system or _SYSTEM}\n\nSENTENCES:\n{numbered}",
+            max_width=_MATCH_PANEL_WIDTH,
         )
         # NOT raise_if_truncated: this loop makes one call per 16-panel window and a
         # truncated window is a partial loss, not a corrupt artifact — aborting would
@@ -298,6 +299,25 @@ def collect_claims(
             f"claims are incomplete and those sentences will fall back to the fill"
         )
     return claims
+
+
+#: Panel width sent to the matcher. WIDTH, not longest side.
+#:
+#: Without this the encoder falls back to scene.vision_max_side (512) capping the
+#: LONGEST side, and manhwa panels are tall: measured over 300 real panels the median
+#: arrived 432px wide, 23% under 250px, the narrowest 55px, and one 800x5654 panel
+#: became a 72px ribbon. The encoder's own docstring calls longest-side capping "correct
+#: for panel crops, which are roughly square" — true for the comics it was written for,
+#: false here, and the same bug already fixed for whole PAGES via page_max_width.
+#:
+#: The matcher was deciding sentence-to-panel binding on those slivers. Measured effect
+#: around one starved beat: eleven of twenty-five panels arrived under 320px, including
+#: three of the four the beat needed.
+#:
+#: 320 is the efficient point: illegible panels (under 250px) drop from 358 to 17 for
+#: 1.4x the image tokens, where 384 costs 1.7x and 512 costs 2.1x for no further
+#: legibility gain.
+_MATCH_PANEL_WIDTH = 320
 
 
 #: How far BACK a claim, spare, or on-screen cut may legally step, in panels.

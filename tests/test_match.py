@@ -1077,7 +1077,7 @@ class TestClaimCache:
             temperature = 0.0
             last_finish_reason = "stop"
 
-            def describe_labeled_panels(self, images, prompt):
+            def describe_labeled_panels(self, images, prompt, **kw):
                 calls.append(len(images))
                 return json.dumps({"claims": [{"sentence": 1, "panels": ["p0001"]}]})
 
@@ -1108,7 +1108,7 @@ class TestClaimCache:
             temperature = 0.0
             last_finish_reason = "stop"
 
-            def describe_labeled_panels(self, images, prompt):
+            def describe_labeled_panels(self, images, prompt, **kw):
                 calls.append(prompt)
                 return json.dumps({"claims": [{"sentence": 1, "panels": ["p0001"]}]})
 
@@ -1129,7 +1129,7 @@ class TestClaimCache:
             temperature = 0.0
             last_finish_reason = "stop"
 
-            def describe_labeled_panels(self, images, prompt):
+            def describe_labeled_panels(self, images, prompt, **kw):
                 raise AssertionError("offline replay made a live call")
 
         monkeypatch.setattr(M, "_matcher_provider", lambda cfg: Boom())
@@ -1150,7 +1150,7 @@ class TestClaimCache:
             temperature = 0.0
             last_finish_reason = "length"
 
-            def describe_labeled_panels(self, images, prompt):
+            def describe_labeled_panels(self, images, prompt, **kw):
                 calls.append(1)
                 return json.dumps({"claims": [{"sentence": 1, "panels": ["p0001"]}]})
 
@@ -1185,7 +1185,7 @@ def test_a_long_unclaimed_run_sees_a_bounded_candidate_set(tmp_path, monkeypatch
         temperature = 0.0
         last_finish_reason = "stop"
 
-        def describe_labeled_panels(self, images, prompt):
+        def describe_labeled_panels(self, images, prompt, **kw):
             seen.append(len(images))
             return json.dumps({"claims": []})
 
@@ -1335,3 +1335,18 @@ def test_an_unclaimed_panel_between_two_showings_is_folded_away():
     # No panel may appear, disappear and immediately reappear.
     for i in range(1, len(shown) - 1):
         assert not (shown[i - 1] == shown[i + 1] != shown[i]), shown
+
+
+def test_the_matcher_sends_panels_by_width_not_longest_side():
+    """Manhwa panels are tall. Capping the LONGEST side — the encoder's default, written
+    for roughly-square comic crops — turned them into ribbons: measured over 300 real
+    panels the median arrived 432px wide, 23% under 250px, the narrowest 55px, and one
+    800x5654 panel became 72px. The matcher was binding narration to art it could not
+    read. Same bug already fixed for whole pages via page_max_width."""
+    import inspect
+
+    from manhwa2vid.script import match as M
+
+    src = inspect.getsource(M.collect_claims)
+    assert "max_width=_MATCH_PANEL_WIDTH" in src, "panels still sent by longest side"
+    assert M._MATCH_PANEL_WIDTH >= 300, M._MATCH_PANEL_WIDTH
