@@ -696,11 +696,21 @@ def split_panels(
 #: through, and the recap needs its parts separately. Measured on Frozen Player
 #: ch1-20: page 15 split into a 5,313px panel plus four small ones, so beats 20-22
 #: (sixteen sentences) had one usable image between two claims and the video froze on
-#: it for 28.9 seconds. 190 of 1,736 story panels exceed 2,000px.
-_TALL_PANEL_HEIGHT = 2200
+#: it for 28.9 seconds.
+#:
+#: 1200, not 2200. At 2200 the worst dwells were fixed but the next tier surfaced —
+#: 1,301px and 1,706px panels carrying two beats each. At 1200 with a 400px minimum
+#: piece, 129 further panels split into 267, adding 138 images for the narration to
+#: bind to. A panel with no quiet row is still left whole at any threshold, so this
+#: buys granularity only where the art genuinely breaks.
+_TALL_PANEL_HEIGHT = 1200
 
-#: Never cut a piece smaller than this: below it the crop stops being a shot.
-_MIN_PIECE_HEIGHT = 600
+#: Never cut a piece smaller than this: below it the crop stops being a shot. 400, not
+#: 600 — at 600 the cuts that exist were rejected for making one side too short, and the
+#: panels holding the remaining long dwells went unsplit: p0021_03b (1,301px) has a
+#: quiet row at 470 and p0015_01f (1,706px) at 478. Solo Leveling's approved video shows
+#: panels down to 144px, so 400 is comfortably a shot.
+_MIN_PIECE_HEIGHT = 400
 
 
 def _quiet_rows(gray: "np.ndarray", band: int = 12) -> list[int]:
