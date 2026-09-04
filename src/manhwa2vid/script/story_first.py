@@ -269,6 +269,31 @@ def generate_story_first_script(
 
     beats, align_report = align_script(text, paths, config)
 
+    # A beat may not narrate for longer than one image can be held. Learning WHERE that
+    # happens needs the claims, so it runs after alignment — and then the whole
+    # alignment is redone on the trimmed prose, because the script is the source and
+    # every artifact derives from it. Patching the saved shot list instead left its
+    # numbering out of step with the narration TTS speaks, and the next build showed
+    # panels 42 positions back and repeated others three minutes apart.
+    #
+    # The second pass is nearly free: the matcher's claim cache is keyed on the
+    # sentences it is shown, and the trim only removes some.
+    from manhwa2vid.script.align import trim_starved_narration
+
+    trimmed_text, dropped = trim_starved_narration(
+        text, getattr(align_script, "last_shotlist", None), config
+    )
+    if dropped:
+        console.print(
+            f"[cyan]Trim[/] — {dropped} sentence(s) dropped where narration outran "
+            f"the art; re-aligning"
+        )
+        text = trimmed_text
+        paths["script_freeform"].write_text(
+            text if text.endswith("\n") else text + "\n", encoding="utf-8"
+        )
+        beats, align_report = align_script(text, paths, config)
+
     draft = ScriptDraft(
         title=meta.title,
         chapters=meta.chapters,

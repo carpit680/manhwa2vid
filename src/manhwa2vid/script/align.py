@@ -810,11 +810,11 @@ def _cached_alignment(
 _TRIM_WPM = 205.0
 
 
-def trim_starved_beats(
-    beats: list[ScriptBeat],
+def trim_starved_narration(
+    text: str,
     shotlist: dict[str, Any] | None,
     config: dict[str, Any],
-) -> tuple[list[ScriptBeat], int]:
+) -> tuple[str, int]:
     """No single image may carry more narration than the shot limit allows.
 
     Some pages do not hold as many moments as the recap has to say about them: the panel
@@ -837,11 +837,11 @@ def trim_starved_beats(
     User decision 2026-09-04, choosing this over accepting the dwells.
     """
     if not shotlist:
-        return beats, 0
+        return text, 0
     max_shot = float(get_nested(config, "video", "max_shot_seconds", default=10.0))
     rows: list[dict[str, Any]] = list(shotlist.get("sentences") or [])
     if not rows:
-        return beats, 0
+        return text, 0
 
     def secs(row: dict[str, Any]) -> float:
         return len(str(row.get("text", "")).split()) / _TRIM_WPM * 60.0
@@ -872,28 +872,28 @@ def trim_starved_beats(
         i = j
 
     if not drop:
-        return beats, 0
+        return text, 0
 
-    kept_rows = [
-        r for r in rows
-        if (int(r.get("beat_id", 0)), int(r.get("number", 0))) not in drop
-    ]
-    shotlist["sentences"] = kept_rows
-    by_beat: dict[int, list[dict[str, Any]]] = {}
-    for r in kept_rows:
-        by_beat.setdefault(int(r.get("beat_id", 0)), []).append(r)
-
-    out: list[ScriptBeat] = []
-    for beat in beats:
-        if not any(b == beat.beat_id for b, _n in drop):
-            out.append(beat)
+    # Rebuild the PROSE and let everything derive from it again. Editing the saved shot
+    # list in place instead left its sentence numbering out of step with the narration
+    # TTS would speak, and the next build showed panels 42 positions back and repeated
+    # others three minutes apart. The script is the source; artifacts are derived.
+    keep_by_beat: dict[int, list[str]] = {}
+    for r in rows:
+        key = (int(r.get("beat_id", 0)), int(r.get("number", 0)))
+        if key in drop:
             continue
-        text = " ".join(
-            str(r.get("text", "")).strip() for r in by_beat.get(beat.beat_id, [])
-        ).strip()
-        # Never empty a beat: a beat with no narration fails beat conservation.
-        out.append(beat.model_copy(update={"narration": text}) if text else beat)
-    return out, len(drop)
+        keep_by_beat.setdefault(int(r.get("beat_id", 0)), []).append(
+            str(r.get("text", "")).strip()
+        )
+    paras = paragraphs(text)
+    rebuilt: list[str] = []
+    for i, para in enumerate(paras, start=1):
+        kept = keep_by_beat.get(i)
+        # Untouched paragraph, or one the trim would empty: keep the original. A beat
+        # with no narration fails beat conservation.
+        rebuilt.append(" ".join(kept) if kept else para)
+    return "\n\n".join(rebuilt), len(drop)
 
 
 def align_script(
@@ -1098,13 +1098,6 @@ def align_script(
         f"[green]Aligned[/] {len(beats)} paragraph(s) → {len(shown)}/{len(panels)} "
         f"story panels ({fraction:.0%})"
     )
+    align_script.last_shotlist = shotlist
 
-    beats, trimmed = trim_starved_beats(beats, shotlist, config)
-    if trimmed:
-        console.print(
-            f"[cyan]Trim[/] — {trimmed} sentence(s) dropped from beats whose narration "
-            f"outran their art"
-        )
-        if paths["script_shotlist_json"].exists():
-            save_json(paths["script_shotlist_json"], shotlist)
     return beats, report

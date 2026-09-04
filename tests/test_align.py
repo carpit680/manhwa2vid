@@ -739,86 +739,50 @@ def test_a_straddling_paragraph_goes_with_the_side_it_mostly_depicts():
     assert tb.block_of == [0, 1, 1], tb.block_of
 
 
-class TestStarvedBeatTrim:
-    """A beat may not narrate for longer than its art can carry.
+class TestStarvedNarrationTrim:
+    """No single image may carry more narration than the shot limit allows.
 
-    Some pages do not contain as many moments as the recap has to say about them: the
-    panel holds no internal break to split, and reading order forbids borrowing from
-    ahead. The planner then keeps ONE image on screen for the whole beat — the right
-    call, since showing a later panel and jumping back measured worse twice — but the
-    result is a freeze. Measured on the full-density 20-chapter build: 6 shots past the
-    18s limit, 135 seconds in all, from 4 beats of 196. Longest 31.5s."""
+    Counted the way the GATE counts, which took three tries. Per beat was wrong: a run
+    spans beats. Per fused group of beats was also wrong — it dropped exactly the same
+    34 sentences and changed nothing, because a group can hold a dozen panels while its
+    narration piles onto one. What decides is a maximal run of consecutive sentences
+    showing the SAME image, which is what merged_runs measures."""
 
-    def _beat(self, beat_id, text):
-        from manhwa2vid.models import ScriptBeat
+    def test_an_over_long_run_loses_its_unclaimed_tail(self):
+        from manhwa2vid.script.align import trim_starved_narration
 
-        return ScriptBeat(beat_id=beat_id, panel_ids=[], narration=text)
+        rows = [{"number": 1, "beat_id": 1, "text": "He steps inside.", "panels": ["p01"]}]
+        rows += [{"number": i, "beat_id": 1, "text": f"Filler line number {i} here now.",
+                  "panels": []} for i in range(2, 16)]
+        text = " ".join(r["text"] for r in rows)
+        out, dropped = trim_starved_narration(
+            text, {"sentences": rows}, {"video": {"max_shot_seconds": 10.0}}
+        )
+        assert dropped > 0, "an over-long run was not trimmed"
+        assert "He steps inside." in out, "the CLAIMED sentence was dropped"
+        assert len(out.split()) < len(text.split())
 
-    def test_an_unclaimed_tail_is_dropped_to_fit_one_panel(self):
-        from manhwa2vid.script.align import trim_starved_beats
+    def test_a_run_of_claimed_sentences_is_left_alone(self):
+        """A bound sentence is showing the viewer something; only an unclaimed one is
+        talking over a frozen frame."""
+        from manhwa2vid.script.align import trim_starved_narration
 
-        long_tail = " ".join(f"Filler sentence number {i}." for i in range(1, 20))
-        beats = [self._beat(1, "He steps inside. " + long_tail)]
-        rows = [{"number": 1, "beat_id": 1, "text": "He steps inside.",
-                 "panels": ["p01"]}]
-        rows += [{"number": i, "beat_id": 1, "text": f"Filler sentence number {i}.",
-                  "panels": []} for i in range(2, 21)]
-        shotlist = {"sentences": rows}
-        out, dropped = trim_starved_beats(beats, shotlist, {"video": {"max_shot_seconds": 10.0}})
-        assert dropped > 0, "a beat far past its budget was not trimmed"
-        assert "He steps inside." in out[0].narration, "the CLAIMED sentence was dropped"
-        assert len(shotlist["sentences"]) == len(rows) - dropped
-
-    def test_a_sentence_that_claims_a_panel_is_never_dropped(self):
-        """A bound sentence is showing the viewer something; an unclaimed trailing one
-        is talking over a frozen image."""
-        from manhwa2vid.script.align import trim_starved_beats
-
-        rows = [{"number": i, "beat_id": 1, "text": f"Sentence {i} here now.",
+        rows = [{"number": i, "beat_id": 1, "text": f"Sentence {i} happens here.",
                  "panels": [f"p{i:02d}"]} for i in range(1, 12)]
-        beats = [self._beat(1, " ".join(r["text"] for r in rows))]
-        shotlist = {"sentences": list(rows)}
-        out, dropped = trim_starved_beats(beats, shotlist, {"video": {"max_shot_seconds": 10.0}})
-        assert dropped == 0, "claimed sentences were dropped"
-        assert len(shotlist["sentences"]) == len(rows)
+        text = " ".join(r["text"] for r in rows)
+        out, dropped = trim_starved_narration(
+            text, {"sentences": rows}, {"video": {"max_shot_seconds": 10.0}}
+        )
+        assert dropped == 0 and out == text
 
-    def test_a_beat_within_its_budget_is_untouched(self):
-        from manhwa2vid.script.align import trim_starved_beats
+    def test_a_paragraph_is_never_emptied(self):
+        from manhwa2vid.script.align import trim_starved_narration
 
-        rows = [{"number": 1, "beat_id": 1, "text": "He steps inside.", "panels": ["p01"]},
-                {"number": 2, "beat_id": 1, "text": "He looks around.", "panels": []}]
-        beats = [self._beat(1, "He steps inside. He looks around.")]
-        out, dropped = trim_starved_beats(beats, {"sentences": rows},
-                                          {"video": {"max_shot_seconds": 10.0}})
-        assert dropped == 0
-        assert out[0].narration == beats[0].narration
-
-
-def test_the_trim_budgets_the_fused_run_not_the_single_beat():
-    """Beats FUSE when one ends on the panel the next begins with — to the viewer that
-    is one shot, and the gate measures it as one. Budgeting per beat let three beats
-    sharing p0015_01a hold 19.7s together against an 18s limit while each sat inside its
-    own allowance."""
-    from manhwa2vid.models import ScriptBeat
-    from manhwa2vid.script.align import trim_starved_beats
-
-    def rows(beat_id, start, n_free):
-        out = [{"number": start, "beat_id": beat_id, "text": "He waits there now.",
-                "panels": ["p01"]}]
-        out += [{"number": start + i, "beat_id": beat_id,
-                 "text": f"Filler line number {i} here.", "panels": []}
-                for i in range(1, n_free + 1)]
-        return out
-
-    # Three beats, all claiming the SAME panel at their edges: one run to the viewer.
-    all_rows = rows(1, 1, 6) + rows(2, 20, 6) + rows(3, 40, 6)
-    beats = [
-        ScriptBeat(beat_id=b, panel_ids=[],
-                   narration=" ".join(r["text"] for r in all_rows if r["beat_id"] == b))
-        for b in (1, 2, 3)
-    ]
-    shotlist = {"sentences": list(all_rows)}
-    _out, dropped = trim_starved_beats(
-        beats, shotlist, {"video": {"max_shot_seconds": 10.0}}
-    )
-    assert dropped > 0, "a fused run far over budget was not trimmed"
+        rows = [{"number": i, "beat_id": 1, "text": f"Line {i} here now.", "panels": []}
+                for i in range(1, 12)]
+        rows[0]["panels"] = ["p01"]
+        text = " ".join(r["text"] for r in rows)
+        out, _dropped = trim_starved_narration(
+            text, {"sentences": rows}, {"video": {"max_shot_seconds": 10.0}}
+        )
+        assert out.strip(), "the paragraph was emptied"
