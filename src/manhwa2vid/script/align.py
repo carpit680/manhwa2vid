@@ -815,102 +815,85 @@ def trim_starved_beats(
     shotlist: dict[str, Any] | None,
     config: dict[str, Any],
 ) -> tuple[list[ScriptBeat], int]:
-    """A beat may not narrate for longer than its art can carry.
+    """No single image may carry more narration than the shot limit allows.
 
-    Some pages simply do not contain as many moments as the recap has to say about
-    them: the panel holds no internal break to split, and reading order forbids
-    borrowing from ahead. The planner then keeps ONE image on screen for the whole beat,
-    which is the right call (showing a later panel and jumping back was measured as
-    worse, twice) but produces a freeze.
+    Some pages do not hold as many moments as the recap has to say about them: the panel
+    has no internal break to split, and reading order forbids borrowing from ahead. The
+    planner then keeps ONE image on screen — the right call, since showing a later panel
+    and jumping back measured worse twice — but the result is a freeze.
 
-    Measured on the full-density 20-chapter build: 6 shots ran past the 18s limit,
-    135 seconds in total — 3.2% of a 70-minute video — from 4 beats out of 196 whose
-    sentences had at most one distinct panel between them. Longest was 31.5s.
+    Measured on the full-density 20-chapter build: 6 shots past the 18s limit, 135
+    seconds in all, 3.2% of a 70-minute video. Longest 31.5s.
 
-    So cap the narration instead. Sentences are dropped from the END of the beat, and
-    only ones that CLAIM NOTHING: a sentence bound to a panel is showing the viewer
-    something, while an unclaimed trailing sentence is talking over a frozen image.
+    Counted the way the GATE counts, which took three tries to get right. Per beat was
+    wrong: a run spans beats. Per fused group of beats was also wrong: a group can hold
+    a dozen panels while its narration piles onto one of them. What actually decides is
+    a maximal run of CONSECUTIVE SENTENCES that will show the same image — a sentence
+    claiming that panel, or claiming nothing and therefore holding it.
+
+    Only unclaimed sentences are dropped, and only from the end of such a run: a
+    sentence bound to a panel is showing the viewer something, while an unclaimed one is
+    talking over a frozen frame. A run of nothing but claimed sentences is left alone.
     User decision 2026-09-04, choosing this over accepting the dwells.
     """
     if not shotlist:
         return beats, 0
     max_shot = float(get_nested(config, "video", "max_shot_seconds", default=10.0))
-    rows = shotlist.get("sentences") or []
+    rows: list[dict[str, Any]] = list(shotlist.get("sentences") or [])
+    if not rows:
+        return beats, 0
+
+    def secs(row: dict[str, Any]) -> float:
+        return len(str(row.get("text", "")).split()) / _TRIM_WPM * 60.0
+
+    # Walk in order, grouping sentences that will share one image on screen.
+    drop: set[tuple[int, int]] = set()          # (beat_id, sentence number)
+    i = 0
+    while i < len(rows):
+        panels = rows[i].get("panels") or []
+        if not panels:
+            i += 1
+            continue
+        held = panels[-1]
+        j = i + 1
+        while j < len(rows):
+            nxt = rows[j].get("panels") or []
+            if nxt and nxt != [held]:
+                break                            # a new image takes over
+            j += 1
+        run = rows[i:j]
+        total = sum(secs(r) for r in run)
+        k = len(run) - 1
+        while total > max_shot and k > 0:
+            if not (run[k].get("panels") or []):
+                drop.add((int(run[k].get("beat_id", 0)), int(run[k].get("number", 0))))
+                total -= secs(run[k])
+            k -= 1
+        i = j
+
+    if not drop:
+        return beats, 0
+
+    kept_rows = [
+        r for r in rows
+        if (int(r.get("beat_id", 0)), int(r.get("number", 0))) not in drop
+    ]
+    shotlist["sentences"] = kept_rows
     by_beat: dict[int, list[dict[str, Any]]] = {}
-    for row in rows:
-        by_beat.setdefault(int(row.get("beat_id", 0)), []).append(row)
+    for r in kept_rows:
+        by_beat.setdefault(int(r.get("beat_id", 0)), []).append(r)
 
-    # Beats FUSE when one ends on the panel the next begins with — to the viewer that is
-    # one shot, and the gate measures it as one. Budgeting per beat therefore passed a
-    # run of three beats sharing p0015_01a that together held 19.7s against an 18s
-    # limit, each beat individually inside its own allowance. Group them first.
-    order = [b.beat_id for b in beats]
-    first_panel: dict[int, str | None] = {}
-    last_panel: dict[int, str | None] = {}
-    for bid in order:
-        claims = [p for r in (by_beat.get(bid) or []) for p in (r.get("panels") or [])]
-        first_panel[bid] = claims[0] if claims else None
-        last_panel[bid] = claims[-1] if claims else None
-    group_of: dict[int, int] = {}
-    gid = 0
-    for i, bid in enumerate(order):
-        if i and (
-            last_panel[order[i - 1]] is not None
-            and last_panel[order[i - 1]] == first_panel[bid]
-        ):
-            pass                      # fuses with the previous beat: same group
-        elif i and not (by_beat.get(bid) or []):
-            pass                      # no claims at all: it will hold the previous shot
-        else:
-            gid += 1
-        group_of[bid] = gid
-    group_rows: dict[int, list[dict[str, Any]]] = {}
-    for bid in order:
-        group_rows.setdefault(group_of[bid], []).extend(by_beat.get(bid) or [])
-
-    dropped_total = 0
     out: list[ScriptBeat] = []
     for beat in beats:
-        rows_here = by_beat.get(beat.beat_id) or []
-        if not rows_here:
+        if not any(b == beat.beat_id for b, _n in drop):
             out.append(beat)
             continue
-        # Budget belongs to the fused GROUP, since that is the run the gate measures.
-        siblings = group_rows.get(group_of[beat.beat_id], rows_here)
-        panels_here = {p for r in siblings for p in (r.get("panels") or [])}
-        other_words = sum(
-            len(str(r.get("text", "")).split())
-            for r in siblings
-            if int(r.get("beat_id", 0)) != beat.beat_id
-        )
-        budget = max(1, len(panels_here)) * max_shot - other_words / _TRIM_WPM * 60.0
-        keep = list(rows_here)
-        dropped: list[int] = []
-        while keep:
-            words = sum(len(str(r.get("text", "")).split()) for r in keep)
-            if words / _TRIM_WPM * 60.0 <= budget:
-                break
-            # Only an unclaimed sentence, and only from the end.
-            idx = next(
-                (i for i in range(len(keep) - 1, -1, -1) if not (keep[i].get("panels"))),
-                None,
-            )
-            if idx is None:
-                break                      # every sentence earns its shot; leave it
-            dropped.append(int(keep[idx].get("number", 0)))
-            keep.pop(idx)
-        if not dropped:
-            out.append(beat)
-            continue
-        dropped_total += len(dropped)
-        kept_text = " ".join(str(r.get("text", "")).strip() for r in keep).strip()
-        out.append(beat.model_copy(update={"narration": kept_text}))
-        shotlist["sentences"] = [
-            r for r in shotlist["sentences"]
-            if not (int(r.get("beat_id", 0)) == beat.beat_id
-                    and int(r.get("number", 0)) in set(dropped))
-        ]
-    return out, dropped_total
+        text = " ".join(
+            str(r.get("text", "")).strip() for r in by_beat.get(beat.beat_id, [])
+        ).strip()
+        # Never empty a beat: a beat with no narration fails beat conservation.
+        out.append(beat.model_copy(update={"narration": text}) if text else beat)
+    return out, len(drop)
 
 
 def align_script(
