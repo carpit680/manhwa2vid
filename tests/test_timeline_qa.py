@@ -641,3 +641,43 @@ def test_the_timeline_and_render_hold_limits_agree():
     from manhwa2vid.video.qa_visual import _SHOT_MAX_WARN_S as render_warn
 
     assert (tts_warn, tts_fail) == (render_warn, render_fail)
+
+
+def test_a_scanlation_credit_page_never_reaches_the_screen(tmp_path: Path) -> None:
+    """The scene pass marks these — "A graphic showing social media and donation links
+    for Reaper Scans", is_story False, exclude_reason "credit/ad page" — and the panel
+    filter drops them. Nothing checked the RESULT, so when panels.story.json was rebuilt
+    with the wrong card set the filter never saw those cards and a finished 52-minute
+    video ended on another group's Discord, Patreon, website and PayPal links. Fifteen
+    timeline gates and fifteen render gates passed. It was found by looking at frames.
+
+    This is the one gate here about PUBLISHING rather than craft: a recap carrying
+    someone else's donation links cannot go out, however good the rest of it is."""
+    import json
+
+    from manhwa2vid.qa import QAGateFailure
+
+    audio = tmp_path / "audio"
+    audio.mkdir(exist_ok=True)
+    _wav(audio / "beat_001.wav", 6.0)
+    ids = [f"p0233_{i:02d}" for i in range(1, 4)]
+    beats = [ScriptBeat(beat_id=1, panel_ids=ids, narration="He waits. She goes. It ends.")]
+    panels = [_panel(pid, 233) for pid in ids]
+    paths = project_paths(tmp_path)
+    paths["scene_json"].write_text(json.dumps([
+        {"panel_ids": ["p0233_01"], "action": "A man waves.", "is_story": True},
+        {"panel_ids": ["p0233_02"], "action": "Reaper Scans donation links.",
+         "is_story": False, "exclude_reason": "credit/ad page"},
+        {"panel_ids": ["p0233_03"], "action": "An anti-piracy warning.",
+         "is_story": False, "exclude_reason": "anti-piracy warning"},
+    ]))
+    config = _config()
+    timeline = build_timeline(beats, panels, audio, config)
+    try:
+        _enforce_timeline_qa(beats, panels, timeline, paths, config)
+    except QAGateFailure:
+        pass
+    report = json.loads((tmp_path / "qa.timeline.json").read_text())
+    gate = {g["name"]: g for g in report["gates"]}["no-promotional-panels"]
+    assert gate["status"] == "fail", gate
+    assert "p0233_02" in gate["data"]["panels"]

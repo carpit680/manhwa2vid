@@ -480,6 +480,44 @@ def _enforce_timeline_qa(beats, panels, timeline, paths, config) -> None:
         **util,
     )
 
+    # NOTHING FROM THE SCANLATION GROUP MAY REACH THE SCREEN. The scene pass already
+    # marks these — "A graphic showing social media and donation links for Reaper Scans",
+    # is_story False, exclude_reason "credit/ad page" — and the panel filter drops them.
+    # But nothing checked the RESULT, so when panels.story.json was rebuilt with the
+    # wrong card set the filter never saw those cards, and the finished 52-minute video
+    # ended on another group's Discord, Patreon, website and PayPal links. Every gate
+    # passed. It was found by looking at frames.
+    #
+    # A blocking gate, and the only one here that is about publishing rather than craft:
+    # a recap carrying someone else's donation links cannot go out, however good the
+    # rest of it is.
+    promo: list[str] = []
+    try:
+        from manhwa2vid.models import SceneCard
+
+        raw = json.loads(paths["scene_json"].read_text(encoding="utf-8"))
+        non_story = {
+            pid
+            for c in (SceneCard.model_validate(x) for x in raw)
+            if not c.is_story
+            for pid in (c.panel_ids or [])
+        }
+        shown = {e.panel_id for e in timeline.entries}
+        promo = sorted(shown & non_story)
+    except (OSError, ValueError, KeyError):
+        promo = []
+    report.add(
+        "no-promotional-panels",
+        not promo,
+        (
+            f"{len(promo)} panel(s) the scene pass marked non-story reach the screen: "
+            f"{promo[:6]} — credit pages, anti-piracy notices and scanlation donation "
+            f"links must never be published"
+            if promo else ""
+        ),
+        panels=promo[:20],
+    )
+
     # Where the video SKIPS the story, which is what a viewer actually notices.
     # `panel-utilisation` asks what share of the art reached the screen — the wrong
     # question at length, because a 20-chapter range has ~1640 panels and the word
